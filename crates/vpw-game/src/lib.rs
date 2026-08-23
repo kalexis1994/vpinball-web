@@ -579,6 +579,25 @@ impl Game {
         }
     }
 
+    /// Holds the shooter rod where the player is holding it, 0 to 1.
+    ///
+    /// The counterpart of the plunger *key*, and the honest one for a finger on
+    /// a screen: a key has no position to offer so it draws the rod back for as
+    /// long as it is held, while a finger says exactly how far back the player
+    /// means to pull. See [`vpw_physics::plunger::Plunger::hold_at`].
+    pub fn hold_plunger(&mut self, travel: f32) {
+        if let Some(i) = self.controls.plunger() {
+            self.engine.borrow_mut().hold_plunger(i, travel);
+        }
+    }
+
+    /// Lets go of a rod that was being held. The shot comes from where it is.
+    pub fn let_go_of_plunger(&mut self) {
+        if let Some(i) = self.controls.plunger() {
+            self.engine.borrow_mut().let_go_of_plunger(i);
+        }
+    }
+
     /// Every timer the script has armed, with its interval in milliseconds.
     ///
     /// A table that has quietly left a hundred parts polling every tick looks

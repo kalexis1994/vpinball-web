@@ -57,6 +57,22 @@ export function initWasm(): Promise<Wasm> {
 }
 
 /**
+ * Holds the shooter rod where a finger is holding it, from 0 at rest to 1 drawn
+ * all the way back.
+ *
+ * Synchronous, and for the same reason as {@link plungerPull}: it is called
+ * from a pointer-move handler, which can fire many times a frame.
+ */
+export function holdPlunger(travel: number): void {
+  live?.holdPlunger(travel);
+}
+
+/** Lets go of a rod that was being held. The shot comes from where it is. */
+export function releasePlunger(): void {
+  live?.releasePlunger();
+}
+
+/**
  * How far the shooter rod is drawn back, from 0 to 1, or `null` if there is
  * nothing to ask.
  *

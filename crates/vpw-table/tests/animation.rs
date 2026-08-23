@@ -136,6 +136,7 @@ fn plunger_parts() -> (Engine, AnimatedPart, AnimatedPart) {
         frame_start: center_y,
         rest_pos: 0.5,
         speed_pull: 0.5,
+        mech_strength: 85.0,
         speed_fire: 80.0,
         scatter_velocity: 0.0,
         momentum_xfer: 1.0,

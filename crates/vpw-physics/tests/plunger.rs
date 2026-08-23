@@ -30,6 +30,8 @@ fn params() -> PlungerParams {
         rest_pos: 0.17,
         speed_pull: 10.0,
         speed_fire: 110.0,
+        // The original's default.
+        mech_strength: 85.0,
         scatter_velocity: 0.0,
         momentum_xfer: 1.0,
         auto_plunger: false,
@@ -469,4 +471,134 @@ fn firing_forward_never_reads_as_less_than_parked() {
             "travel left the 0..1 range while firing: {t}"
         );
     }
+}
+
+// ------------------------------------------------- pulled by a finger ---
+//
+// The plunger key cannot say *how far*: a key is down or it is not, so held
+// down it draws the rod back on its own. A finger on a screen can, and that is
+// what a plunger actually is — you pull it as far as you mean to. These cover
+// that path, which is the original's mechanical-plunger one.
+
+/// Runs the rod for `ms` milliseconds with nothing else going on.
+fn settle(p: &mut Plunger, ms: u32) {
+    for _ in 0..ms {
+        p.update_velocities();
+        p.update_displacements(0.001);
+    }
+}
+
+#[test]
+fn holding_it_part_way_takes_it_part_way() {
+    let mut p = plunger();
+    p.hold_at(0.5);
+    settle(&mut p, 500);
+    assert!(
+        (p.travel() - 0.5).abs() < 0.02,
+        "held at the halfway point it should get there: {}",
+        p.travel()
+    );
+}
+
+#[test]
+fn the_rod_does_not_jump_to_the_finger() {
+    // The whole reason the original attaches the two with a spring instead of
+    // assigning the position: a rod that teleports moves at infinite speed
+    // between two frames, and nothing the collision code does can see it pass.
+    let mut p = plunger();
+    let before = p.travel();
+    p.hold_at(1.0);
+    p.update_velocities();
+    p.update_displacements(0.001);
+    assert!(
+        p.travel() - before < 0.2,
+        "one millisecond took it from {before} to {}",
+        p.travel()
+    );
+}
+
+#[test]
+fn a_short_pull_of_the_finger_is_a_softer_shot() {
+    // The point of the control. Pull it a little, it goes a little.
+    let speed_after = |travel: f32| {
+        let mut p = plunger();
+        p.hold_at(travel);
+        settle(&mut p, 600);
+        p.let_go();
+        p.update_velocities();
+        p.speed.abs()
+    };
+    let (soft, hard) = (speed_after(0.25), speed_after(1.0));
+    assert!(
+        hard > soft * 1.5,
+        "a full pull should be much harder than a quarter one: {soft} vs {hard}"
+    );
+}
+
+#[test]
+fn letting_go_from_rest_does_almost_nothing_either() {
+    // Touching the control and letting go without dragging is not a shot.
+    let mut p = plunger();
+    p.hold_at(0.0);
+    settle(&mut p, 100);
+    p.let_go();
+    p.update_velocities();
+    assert!(
+        p.speed.abs() < 20.0,
+        "a touch with no pull should not launch anything: {}",
+        p.speed
+    );
+}
+
+#[test]
+fn the_key_still_works_the_way_a_key_has_to() {
+    // Adding the finger must not have taken the keyboard away: held down, the
+    // key still draws the rod back on its own.
+    let mut p = plunger();
+    p.hold_at(0.6);
+    settle(&mut p, 200);
+    p.pull();
+    settle(&mut p, 1000);
+    assert!(
+        p.travel() > 0.99,
+        "the key should still draw it all the way back: {}",
+        p.travel()
+    );
+}
+
+#[test]
+fn it_follows_the_finger_quickly_and_settles() {
+    // How the control feels, pinned. Tracking a finger has to be fast enough
+    // to look attached to it — about fifty milliseconds for the length of the
+    // frame — and the overshoot afterwards is the rod's own weight against the
+    // spring, which the original models and which is worth keeping. What is
+    // not worth keeping is an unbounded one, so it is bounded here.
+    let mut p = plunger();
+    p.hold_at(0.5);
+
+    let mut peak = 0.0f32;
+    let mut arrived = None;
+    for ms in 0..600 {
+        p.update_velocities();
+        p.update_displacements(0.001);
+        peak = peak.max(p.travel());
+        if arrived.is_none() && p.travel() >= 0.5 {
+            arrived = Some(ms);
+        }
+    }
+
+    let arrived = arrived.expect("it never reached the finger");
+    assert!(
+        arrived < 100,
+        "it took {arrived} ms to reach the finger, which reads as lag"
+    );
+    assert!(
+        peak < 0.62,
+        "it overshot to {peak}, which reads as the control being loose"
+    );
+    assert!(
+        (p.travel() - 0.5).abs() < 0.02,
+        "it settled at {} instead of where the finger is",
+        p.travel()
+    );
 }

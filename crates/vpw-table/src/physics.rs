@@ -896,6 +896,7 @@ fn plunger(p: &vpin::vpx::gameitem::plunger::Plunger, vpx: &VPX, out: &mut Vec<S
         rest_pos: p.park_position,
         speed_pull: p.speed_pull,
         speed_fire: p.speed_fire,
+        mech_strength: p.mech_strength,
         scatter_velocity: p.scatter_velocity,
         momentum_xfer: p.momentum_xfer,
         auto_plunger: p.auto_plunger,

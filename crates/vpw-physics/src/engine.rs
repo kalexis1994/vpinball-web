@@ -539,6 +539,21 @@ impl Engine {
         }
     }
 
+    /// Holds it where the player is holding it, from 0 at rest to 1 drawn all
+    /// the way back. See [`crate::plunger::Plunger::hold_at`].
+    pub fn hold_plunger(&mut self, index: usize, travel: f32) {
+        if let Some(Shape::Plunger(p)) = self.shapes.get_mut(index) {
+            p.hold_at(travel);
+        }
+    }
+
+    /// Lets go of one that was being held, firing from where it is.
+    pub fn let_go_of_plunger(&mut self, index: usize) {
+        if let Some(Shape::Plunger(p)) = self.shapes.get_mut(index) {
+            p.let_go();
+        }
+    }
+
     /// Lets it go.
     pub fn release_plunger(&mut self, index: usize) {
         if let Some(Shape::Plunger(p)) = self.shapes.get_mut(index) {

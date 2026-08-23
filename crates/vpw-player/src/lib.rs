@@ -734,6 +734,34 @@ pub struct LoopStats {
     pub handler_calls: f64,
 }
 
+/// Holds the shooter rod where a finger is holding it, from 0 to 1.
+///
+/// What a real plunger is: how far it is pulled is the shot. The plunger *key*
+/// is a different control and still behaves like a key — held down, it draws
+/// the rod back on its own, because a key has no position to give.
+#[wasm_bindgen(js_name = holdPlunger)]
+pub fn hold_plunger(travel: f32) {
+    PLAYER.with(|p| {
+        if let Some(player) = p.borrow().as_ref()
+            && let Some(table) = player.borrow_mut().table.as_mut()
+        {
+            table.hold_plunger(travel);
+        }
+    });
+}
+
+/// Lets go of a rod that was being held. The shot comes from where it is.
+#[wasm_bindgen(js_name = releasePlunger)]
+pub fn release_plunger() {
+    PLAYER.with(|p| {
+        if let Some(player) = p.borrow().as_ref()
+            && let Some(table) = player.borrow_mut().table.as_mut()
+        {
+            table.let_go_of_plunger();
+        }
+    });
+}
+
 /// How far the shooter rod is drawn back, from 0 to 1.
 ///
 /// `None` before a table is loaded, or on a table with no plunger. It is read

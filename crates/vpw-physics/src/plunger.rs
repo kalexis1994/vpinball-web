@@ -78,6 +78,9 @@ pub struct Plunger {
 
     /// Pull force while the button is held down.
     pull_force: f32,
+    /// Where the player is holding the rod, as a relative position, if they
+    /// are holding it anywhere. See [`Plunger::hold_at`].
+    target: Option<f32>,
     /// Fixed velocity during fire mode, and how much of it is left.
     fire_speed: f32,
     fire_bounce: f32,
@@ -90,6 +93,9 @@ pub struct Plunger {
     /// Properties of the table.
     pub speed_pull: f32,
     pub speed_fire: f32,
+    /// How hard the rod is pulled towards a position the player is holding it
+    /// at. See [`Plunger::hold_at`]. The original's default is 85.
+    pub mech_strength: f32,
     pub scatter_velocity: f32,
     pub momentum_xfer: f32,
     pub auto_plunger: bool,
@@ -110,6 +116,8 @@ impl Plunger {
             frame_start: d.frame_start,
             frame_len,
             rest_pos: d.rest_pos,
+            target: None,
+            mech_strength: d.mech_strength,
             pos: d.frame_end + d.rest_pos * frame_len,
             speed: 0.0,
             pull_force: 0.0,
@@ -153,9 +161,47 @@ impl Plunger {
     }
 
     /// Starts pulling backwards (`PlungerMoverObject::PullBack`).
+    ///
+    /// This is the **key** on a keyboard: hold it and the rod draws itself
+    /// back, because a key has no position to offer. A finger on a screen does
+    /// have one; see [`Plunger::hold_at`].
     pub fn pull(&mut self) {
         self.speed = 0.0;
+        self.target = None;
         self.pull_force = self.speed_pull;
+    }
+
+    /// Holds the rod at a position, from 0 at rest to 1 fully drawn back.
+    ///
+    /// This is what a real plunger is: you pull it as far as you mean to pull
+    /// it, and how far that was is the shot. The original has exactly this, for
+    /// people with a real plunger wired to their cabinet — the *mechanical*
+    /// plunger, `hitplunger.cpp:436` — and it is the same problem as a finger
+    /// dragging down a screen, so it is solved the same way.
+    ///
+    /// The rod is **not** moved to the position given. The original explains
+    /// why better than a paraphrase would:
+    ///
+    /// > If we did that, we'd break the simulation by making the software
+    /// > plunger move at infinite speed. This wouldn't rip the fabric of
+    /// > space-time or anything that dire, but it *would* prevent the collision
+    /// > detection code from working properly.
+    ///
+    /// So the rod is attached to the finger by a spring and left to catch up.
+    /// A ball resting against the tip is then pushed rather than passed
+    /// through, and a player who yanks the rod back and slams it forward gets
+    /// a shot out of it, both of which are things a real plunger does.
+    pub fn hold_at(&mut self, travel: f32) {
+        self.pull_force = 0.0;
+        self.fire_timer = 0;
+        let travel = travel.clamp(0.0, 1.0);
+        self.target = Some(self.rest_pos + travel * (1.0 - self.rest_pos));
+    }
+
+    /// Lets go of a rod that was being held, and fires from where it is.
+    pub fn let_go(&mut self) {
+        self.target = None;
+        self.release();
     }
 
     /// Lets go and fires (`PlungerMoverObject::Fire`, `hitplunger.cpp:239`).
@@ -213,6 +259,31 @@ impl Plunger {
                 self.speed = 0.0;
                 self.pos = min_pos;
             }
+        } else if let Some(target) = self.target {
+            // Chasing the position the player is holding it at, as a spring of
+            // constant `mech_strength` between the two, with friction.
+            // `hitplunger.cpp:455`.
+            //
+            // The constants are the original's, including the `13`, which it
+            // describes as empirically chosen to get the speed into the right
+            // range, and the `dt` of 0.1, which is one millisecond expressed in
+            // the units the rest of those numbers were tuned in.
+            //
+            // Those units are the reason for the last factor. The original
+            // advances the rod by `dtime * speed` with a `dtime` of 0.1 for one
+            // millisecond — its time unit is ten milliseconds — and this port
+            // measures time in seconds. The same movement therefore needs a
+            // speed a hundred times larger here, and so does the acceleration
+            // that builds it. Leaving it out makes the rod follow the finger a
+            // hundred times too slowly, which looks like the control being
+            // ignored.
+            const FRICTION: f32 = 0.95;
+            const DT: f32 = 0.1;
+            const PER_SECOND: f32 = 100.0;
+            let dx = target - self.relative_position();
+            self.speed *= FRICTION;
+            self.speed +=
+                PER_SECOND * DT * self.mech_strength * dx * self.frame_len / (PLUNGER_MASS * 13.0);
         }
 
         // What the ball gave back reaches the rod only on a table with a
@@ -486,6 +557,9 @@ pub struct PlungerParams {
     pub rest_pos: f32,
     pub speed_pull: f32,
     pub speed_fire: f32,
+    /// How hard the rod is pulled towards a position the player is holding it
+    /// at. See [`Plunger::hold_at`]. The original's default is 85.
+    pub mech_strength: f32,
     pub scatter_velocity: f32,
     pub momentum_xfer: f32,
     pub auto_plunger: bool,

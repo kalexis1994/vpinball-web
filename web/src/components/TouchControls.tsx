@@ -20,12 +20,19 @@
 // Capturing the pointer sends every move and the release to the element that
 // was first touched, whatever is under the finger by then.
 
-import { useCallback, useEffect, useState } from 'react';
-import { plungerPull, pressKey, releaseAllKeys } from '../lib/player';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  holdPlunger,
+  plungerPull,
+  pressKey,
+  releaseAllKeys,
+  releasePlunger,
+} from '../lib/player';
 
-/** How far the thumb slides, in pixels, when the rod is drawn all the way
- * back. The rod's own travel is the table's business; this is only how much of
- * the screen is spent showing it. */
+/** How far the finger drags, in pixels, to draw the rod all the way back.
+ *
+ * Also how far the thumb slides on screen, so the two agree: a drag of this
+ * much is a full pull and a full pull looks like this much. */
 const PLUNGER_TRAVEL = 96;
 
 interface Props {
@@ -95,19 +102,20 @@ function FlipperButton({ side, code }: { side: 'left' | 'right'; code: string })
 }
 
 /**
- * The plunger: press and hold, then let go.
+ * The plunger: pull it back as far as you mean to, and let go.
  *
- * What decides the shot is **how long the button is held**, not how far a
- * finger travels: the physics draws the rod back on its own for as long as the
- * key is down, exactly as it does for the space bar. So the rod and its spring
- * are drawn from the simulation's own position rather than from the drag, and
- * what the player sees is what the table is about to do with it. Animating
- * from the finger, which is what this did, meant the picture and the shot could
- * disagree by any amount — hold still and the spring said nothing was
- * happening while the rod wound itself all the way back.
+ * Which is what a plunger *is*. The space bar cannot work that way — a key has
+ * no position to give, so held down it draws the rod back on its own — but a
+ * finger on a screen has one, and using it is both more faithful and the thing
+ * anybody who has stood at a machine expects. The original has the same control
+ * for people with a real plunger wired to their cabinet, and this is wired to
+ * the same place: see `Plunger::hold_at`.
  *
- * The thumb rides the same number, so it still moves under the finger. It moves
- * because the plunger is moving, which is the point.
+ * The rod does not jump to the finger. It is pulled towards it by a spring, so
+ * a ball resting against the tip gets pushed instead of passed through, and
+ * yanking the rod back and slamming it forward is a shot. The picture is drawn
+ * from where the rod actually is, so what the player sees is what the table is
+ * about to do with it.
  */
 function Plunger({ onNewBall }: { onNewBall?: () => void }) {
   // 0 at rest, 1 fully drawn back. Read from the table every frame.
@@ -134,15 +142,26 @@ function Plunger({ onNewBall }: { onNewBall?: () => void }) {
     return () => cancelAnimationFrame(frame);
   }, []);
 
+  const origin = useRef(0);
+
   const down = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     e.currentTarget.setPointerCapture(e.pointerId);
     e.preventDefault();
-    void pressKey('Space', true);
+    origin.current = e.clientY;
+    holdPlunger(0);
+  }, []);
+
+  const move = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (!e.currentTarget.hasPointerCapture(e.pointerId)) return;
+    // Downwards is backwards: the shooter is at the bottom right of the glass
+    // and pulling it is pulling it towards you.
+    const dragged = (e.clientY - origin.current) / PLUNGER_TRAVEL;
+    holdPlunger(Math.max(0, Math.min(1, dragged)));
   }, []);
 
   const up = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     e.preventDefault();
-    void pressKey('Space', false);
+    releasePlunger();
   }, []);
 
   return (
@@ -150,6 +169,7 @@ function Plunger({ onNewBall }: { onNewBall?: () => void }) {
       className="touch-plunger"
       aria-label="Plunger: pull down and release"
       onPointerDown={down}
+      onPointerMove={move}
       onPointerUp={up}
       onPointerCancel={up}
       onContextMenu={(e) => e.preventDefault()}
