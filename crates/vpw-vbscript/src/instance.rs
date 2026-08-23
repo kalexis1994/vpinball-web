@@ -117,7 +117,11 @@ impl std::hash::Hasher for NameHasher {
     fn write(&mut self, bytes: &[u8]) {
         // 1469598103934665603 and 1099511628211 are FNV-1a's 64-bit offset
         // basis and prime.
-        let mut hash = if self.0 == 0 { 0xcbf2_9ce4_8422_2325 } else { self.0 };
+        let mut hash = if self.0 == 0 {
+            0xcbf2_9ce4_8422_2325
+        } else {
+            self.0
+        };
         for &byte in bytes {
             hash ^= u64::from(byte);
             hash = hash.wrapping_mul(0x100_0000_01b3);

@@ -888,7 +888,9 @@ impl Game {
                     // its first due time an interval from now rather than
                     // firing it straight away; this is the only code that knows
                     // what "now" is, so it is done here.
-                    i.timer.due_ms.set(now + i.timer.interval.get().max(STEP_MS));
+                    i.timer
+                        .due_ms
+                        .set(now + i.timer.interval.get().max(STEP_MS));
                     return false;
                 }
                 at <= now

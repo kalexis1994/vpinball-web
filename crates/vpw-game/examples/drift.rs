@@ -25,7 +25,9 @@ const WINDOW: u32 = 5_000;
 
 fn main() {
     let mut args = std::env::args().skip(1);
-    let path = args.next().expect("usage: drift <table.vpx> <scripts> <roms> [minutes]");
+    let path = args
+        .next()
+        .expect("usage: drift <table.vpx> <scripts> <roms> [minutes]");
     let scripts = args.next().expect("a scripts directory");
     let roms = args.next().expect("a roms directory");
     let minutes: f64 = args.next().and_then(|s| s.parse().ok()).unwrap_or(10.0);
@@ -67,7 +69,16 @@ fn main() {
     let windows = (minutes * 60.0 * 1000.0 / WINDOW as f64) as u32;
     println!(
         "{:>5}  {:>9}  {:>7}  {:>7}  {:>7}  {:>7}  {:>7}  {:>9}  {:>7}  {:>8}",
-        "min", "ms/win", "xreal", "physics", "board", "events", "timers", "stmts/k", "exprs/k", "control"
+        "min",
+        "ms/win",
+        "xreal",
+        "physics",
+        "board",
+        "events",
+        "timers",
+        "stmts/k",
+        "exprs/k",
+        "control"
     );
 
     let mut plunged = false;
@@ -83,8 +94,14 @@ fn main() {
             // and not merely left running.
             if plunged {
                 match t % 500 {
-                    0 => { game.key("LeftShift", true); game.key("RightShift", true); }
-                    60 => { game.key("LeftShift", false); game.key("RightShift", false); }
+                    0 => {
+                        game.key("LeftShift", true);
+                        game.key("RightShift", true);
+                    }
+                    60 => {
+                        game.key("LeftShift", false);
+                        game.key("RightShift", false);
+                    }
                     _ => {}
                 }
             }
@@ -148,4 +165,3 @@ fn main() {
         let _ = accounted;
     }
 }
-
