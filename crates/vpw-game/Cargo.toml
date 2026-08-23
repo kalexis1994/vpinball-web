@@ -1,0 +1,22 @@
+[package]
+name = "vpw-game"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+vpw-audio = { version = "0.1.0", path = "../vpw-audio" }
+vpw-math = { version = "0.1.0", path = "../vpw-math" }
+vpw-physics = { version = "0.1.0", path = "../vpw-physics" }
+vpw-table = { version = "0.1.0", path = "../vpw-table" }
+vpw-vbscript = { version = "0.1.0", path = "../vpw-vbscript" }
+vpin = "0.27.0"
+log = "0.4"
+vpw-s11 = { version = "0.1.0", path = "../vpw-s11" }
+# For the DEFLATE inside a ROM zip. Pure Rust, so it builds for wasm, and
+# decompression is exactly the kind of thing not to hand-roll.
+miniz_oxide = "0.8"
+
+[dev-dependencies]
+zip = "6"
+pollster = "0.4"
+vpw-render = { version = "0.1.0", path = "../vpw-render" }

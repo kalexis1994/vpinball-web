@@ -1,0 +1,15 @@
+[package]
+name = "vpw-s11"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+vpw-audio = { version = "0.1.0", path = "../vpw-audio" }
+vpw-m6800 = { version = "0.1.0", path = "../vpw-m6800" }
+vpw-m6809 = { version = "0.1.0", path = "../vpw-m6809" }
+vpw-pia6821 = { version = "0.1.0", path = "../vpw-pia6821" }
+
+[dev-dependencies]
+zip = "8.6.0"

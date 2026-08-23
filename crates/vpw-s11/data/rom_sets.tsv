@@ -1,0 +1,300 @@
+# set	generacion	display	carga	imagen1	imagen2
+# Extraido de s11games.c y degames.c de PinMAME. Las tres familias
+# comparten el mismo mapa de memoria (s11.c tiene uno solo).
+hs_l4	S11X	s11a	8x4000+32-8000	hs_u26.l4	hs_u27.l4
+hs_l3	S11X	s11a	8x4000+32-8000	u26-l3.rom	hs_u27.l4
+hs_l4c	S11X	s11a	8x4000+32-8000	high speed u26 game rom rev l-4 patch f43c.rom	high speed u27 game rom rev l-4 patch 6b05.rom
+hs_l4c	S11X	s11a	8x4000+32-8000	high speed u26 game rom rev l-4 patch f43c.rom	high speed u27 game rom rev l-4 patch f43c.rom
+grand_l4	S11X	s11a	8x4000+32-8000	lzrd_u26.l3	lzrd_u27.l4
+grand_l3	S11X	s11a	8x4000+32-8000	lzrd_u26.l3	lzrd_u27.l3
+grand_l1	S11X	s11a	8x4000+32-8000	grand lizard u26 l1.bin	grand lizard u27 l1.bin
+rdkng_l4	S11X	s11a	16400+32-8000	road_u26.l4	road_u27.l4
+rdkng_l1	S11X	s11a	16400+32-8000	road_u26.l1	road_u27.l1
+rdkng_l2	S11X	s11a	16400+32-8000	road_u26.l1	road_u27.l2
+rdkng_l3	S11X	s11a	16400+32-8000	road_u26.l3	road_u27.l3
+pb_l5	S11X	s11a	16400+32-8000	pbot_u26.l5	pbot_u27.l5
+pb_l5h	S11X	s11a	16400+32-8000	pbot_u26_svm.l5	pbot_u27_svm.l5
+pb_l3	S11X	s11a	16400+32-8000	u26-l1.rom	u27-l3.rom
+pb_l2	S11X	s11a	16400+32-8000	u26-l1.rom	u27-l2.rom
+pb_l1	S11X	s11a	16400+32-8000	u26-l1.rom	u27-l1.rom
+pb_p4	S11X	s11a	16400+32-8000	u26-l1.rom	u27_p4.bin
+pb_j1	S11X	s11a	16400+32-8000	pembot_u26.j1	pembot_u27.j1
+pb_j2	S11X	s11a	16400+32-8000	pembot_j2_u26.bin	pembot_j2_u27.bin
+pb_j3	S11X	s11a	16400+32-8000	pembot_j3_u26.bin	pembot_j3_u27.bin
+pb_j5	S11X	s11a	16400+32-8000	pembot_j5_u26.bin	pembot_j5_u27.bin
+f14_p3	S11A	s11a	16400+32-8000	f14_l3.u26	f14_l3.u27
+f14_p4	S11A	s11a	16400+32-8000	u26_l4.128	u27_l4.256
+f14_l1	S11A	s11a	16400+32-8000	f14_u26.l1	f14_u27.l1
+f14_p5	S11A	s11a	16400+32-8000	f14_u26.p5	f14_u27.p5
+fire_l3	S11A	s11a	16400+32-8000	fire_u26.l3	fire_u27.l3
+fire_l2	S11A	s11a	16400+32-8000	fire_u26.l2	fire_u27.l2
+bguns_l8	S11A	s11a	16400+32-8000	guns_u26.l8	guns_u27.l8
+bguns_l7	S11A	s11a	16400+32-8000	guns_u26.l8	guns_u27.l7
+bguns_la	S11A	s11a	16400+32-8000	u26-l-a.rom	u27-l-a.rom
+bguns_lac	S11A	s11a	16400+32-8000	u26-l-a.rom	big guns u27 game rom rev l-a patch 7472.rom
+bguns_p1	S11A	s11a	16400+32-8000	u26-p-1.rom	u27-p-1.rom
+spstn_l5	S11B	s11a	16400+32-8000	sstn_u26.l5	sstn_u27.l5
+cycln_l5	S11B	s11a	16400+32-8000	cycl_u26.l5	cycl_u27.l5
+cycln_l4	S11B	s11a	16400+32-8000	cycl_u26.l4	cycl_u27.l4
+cycln_l1	S11B	s11a	16400+32-8000	cycl_u26.l1	cycl_u27.l1
+bnzai_l3	S11B	s11a	16400+32-8000	banz_u26.l3	banz_u27.l3
+bnzai_t3	S11B	s11a	16400+32-8000	banz_u26.l3t	banz_u27.l3
+bnzai_g3	S11B	s11a	16400+32-8000	banz_u26.l3g	banz_u27.l3
+bnzai_l1	S11B	s11a	16400+32-8000	u26-l1.rom	u27-l1.rom
+bnzai_pa	S11B	s11a	16400+32-8000	u26-pa.rom	u27-pa.rom
+swrds_l2	S11B	s11a	16400+32-8000	swrd_u26.l2	swrd_u27.l2
+swrds_lg2	S11B	s11a	16400+32-8000	swrd_u26.l1	swrd_u27g.l2
+swrds_l1	S11B	s11a	16400+32-8000	swrd_u26.l1	swrd_u27.l1
+swrds_rr1	S11B	s11a	16400+32-8000	swrd_u26wsound.rrv1	swrd_u27.rrv1
+swrds_rr1b	S11B	s11a	16400+32-8000	swrd_u26.rrv1	swrd_u27.rrv1
+taxi_l4	S11B	s11b	16400+32-8000	taxi_u26.l4	taxi_u27.l4
+taxi_l5c	S11B	s11b	16400+32-8000	taxi_u26.l4	taxi_u27.l5c
+taxi_l5cm	S11B	s11b	16400+32-8000	taxi_u26.l4	taxi_u27.l5cm
+taxi_l3	S11B	s11b	16400+32-8000	taxi_u26.l4	taxi_u27.l3
+taxi_lu1	S11B	s11b	16400+32-8000	u26-lu1m.rom	u27-lu1m.rom
+taxi_lg1	S11B	s11b	16400+32-8000	u26-lu1m.rom	u27-lg1m.rom
+taxi_p5	S11B	s11b	16400+32-8000	taxi_u26.p5	taxi_u27.p5
+jokrz_l6	S11B2	s11b	16400+32-8000	jokeru26.l6	jokeru27.l6
+jokrz_l3	S11B2	s11b	16400+32-8000	u26-l3.rom	u27-l3.rom
+jokrz_g4	S11B2	s11b	16400+32-8000	u26-l3.rom	jokerz_u27.g4
+esha_la3	S11B	s11b	16400+32-8000	eshk_u26.l3	eshk_u27.l3
+esha_l4c	S11B	s11b	16400+32-8000	eshk_u26.l4c	eshk_u27.l4c
+esha_ma3	S11B	s11b	16400+32-8000	eshk_u26.ma3	eshk_u27.ma3
+esha_lg1	S11B	s11b	16400+32-8000	u26-lg1.rom	u27-lg1.rom
+esha_lg2	S11B	s11b	16400+32-8000	u26-lg2.rom	u27-lg1.rom
+esha_la1	S11B	s11b	16400+32-8000	u26-la1.rom	u27-la1.rom
+esha_pa4	S11B	s11b	16400+32-8000	eshk_u26.pa4	eshk_u27.pa4
+esha_pa1	S11B	s11b	16400+32-8000	u26-pa1.rom	u27-pa1.rom
+bk2k_l4	S11B	s11b	16400+32-8000	bk2k_u26.l4	bk2k_u27.l4
+bk2k_lg1	S11B	s11b	16400+32-8000	u26-pu1.rom	bk2k_u27.lg1
+bk2k_lg3	S11B	s11b	16400+32-8000	u26-lg3.rom	u27-lg3.rom
+bk2k_pu1	S11B	s11b	16400+32-8000	u26-pu1.rom	u27-pu1.rom
+bk2k_la2	S11B	s11b	16400+32-8000	u26-pu1.rom	bk2k_u27.la2
+bk2k_pa7	S11B	s11b	16400+32-8000	bk2k_u26.pa7	bk2k_u27.pa7
+bk2k_pa5	S11B	s11b	16400+32-8000	bk2k_u26.pa5	bk2k_u27.pa5
+bk2k_pf1	S11B	s11b	16400+32-8000	bk2k_u26.pf7	bk2k_u27.pf1
+polic_l4	S11B	s11b	16400+32-8000	pfrc_u26.l4	pfrc_u27.l4
+polic_g4	S11B	s11b	16400+32-8000	pfrc_u26.l4	pfrc_u27.lg4
+polic_l3	S11B	s11b	16400+32-8000	pfrc_u26.l4	pfrc_u27.lx3
+polic_l2	S11B	s11b	16400+32-8000	pfrc_u26.l2	pfrc_u27.l2
+polic_lx5	S11B	s11b	16400+32-8000	pfrc_u26.lx5a	pfrc_u27.lx5a
+polic_lx5pi	S11B	s11b	16400+32-8000	pfrc_u26.lx5pi	pfrc_u27.lx5pi
+tsptr_l3	S11B	s11b	16400+32-8000	tran_u26.l3	tran_u27.l3
+tsptr_l1	S11B	s11b	16400+32-8000	transporter-la1-u26-checksumb412.bin	transporter-la1-u27-checksum01cf.bin
+tsptr_l3fj	S11B	s11b	16400+32-8000	tran_u26.l3	tran_u27.l3fixedjackpot
+tsptr_lx4	S11B	s11b	16400+32-8000	tran_u26_lx4.l3	tran_u27_lx4.l3
+tsptr_lx4b	S11B	s11b	16400+32-8000	tran_u26_lx4_clean.l3	tran_u27_lx4_clean.l3
+bcats_l5	S11B	s11b	16400+32-8000	cats_u26.l5	cats_u27.l5
+bcats_f1	S11B	s11b	16400+32-8000	cats_u26.lf1	cats_u27.lf1
+bcats_l2	S11B	s11b	16400+32-8000	bcgu26.la2	bcgu27.la2
+bcats_g4	S11B	s11b	16400+32-8000	cats_u26.l5	cats_u27.lg4
+bcats_tcm	S11B	s11b	16400+32-8000	cats_u26.tcm	cats_u27.tcm
+bcats_tcm12	S11B	s11b	16400+32-8000	cats_u26.tcm12	cats_u27.tcm12
+bcats_tcm13	S11B	s11b	16400+32-8000	cats_u26.tcm13	cats_u27.tcm13
+mousn_l4	S11B	s11b	16400+32-8000	mous_u26.l4	mous_u27.l4
+mousn_l4c	S11B	s11b	16400+32-8000	mousin around u26 game rom rev la-4 patch 0a45.rom	mousin around u27 game rom rev la-4 patch 0a45.rom
+mousn_l4c	S11B	s11b	16400+32-8000	mousin around u26 game rom rev la-4 patch f51e.rom	mousin around u27 game rom rev la-4 patch f51e.rom
+mousn_l4c	S11B	s11b	16400+32-8000	mousin around u26 game rom rev la-4 patch d87f.rom	mousin around u27 game rom rev la-4 patch d87f.rom
+mousn_l1	S11B	s11b	16400+32-8000	u26-la1.rom	u27-la1.rom
+mousn_lu	S11B	s11b	16400+32-8000	u26-la1.rom	u27-lu1.rom
+whirl_l3	S11B	s11b	16400+32-8000	whir_u26.l3	whir_u27.l3
+whirl_l2	S11B	s11b	16400+32-8000	whir_u26.l3	wwdgu27.l2
+whirl_g3	S11B	s11b	16400+32-8000	whir_u26.l3	whir_u27.lg3
+gs_la3	S11C	s11b	16400+32-8000	gshw_u26.l3	gshw_u27.l3
+gs_lu4	S11C	s11b	16400+32-8000	gshw_u26.l3	u27-lu4.rom
+gs_lu3	S11C	s11b	16400+32-8000	gameshow_u26-lu3.rom	gameshow_u27-lu3.rom
+gs_lg6	S11C	s11b	16400+32-8000	gshw_u26.l3	u27-lg6.bin
+rollr_l2	S11C	s11b	16400+32-8000	rolr_u26.l2	rolr_u27.l2
+rollr_l2c	S11C	s11b	16400+32-8000	rollergames u26 game rom rev la-2 patch a06e.rom	rollergames u27 game rom rev la-2 patch a06e.rom
+rollr_ta2	S11C	s11b	16400+32-8000	rollergames-mod-ta2.u26	rollergames-mod-ta2.u27
+rollr_ex	S11C	s11b	16400+32-8000	rolr_u26.ea3	rolr_u27.ea3
+rollr_e1	S11C	s11b	16400+32-8000	rolr_u26.pe1	rolr_u27.pe1
+rollr_p2	S11C	s11b	16400+32-8000	rolr_u26.pa2	rolr_u27.pa2
+rollr_l3	S11C	s11b	16400+32-8000	rolr_u26.lu3	rolr_u27.l2
+rollr_g3	S11C	s11b	16400+32-8000	rolr_u26.lg3	rolr_u27.l2
+rollr_d2	S11C	s11b	16400+32-8000	rolr_u26.ad2	rolr_u27.ad2
+rollr_f2	S11C	s11b	16400+32-8000	rolr_u26.lf2	rolr_u27.l2
+rollr_f3	S11C	s11b	16400+32-8000	rolr_u26.lf3	rolr_u27.l2
+pool_l7	S11C	s11b	16400+32-8000	pool_u26.l7	pool_u27.l7
+pool_l5	S11C	s11b	16400+32-8000	pool_u26.l5	pool_u27.l5
+pool_l6	S11C	s11b	16400+32-8000	pool_u26.la6	pool_u27.la6
+pool_le2	S11C	s11b	16400+32-8000	pool_u26.le2	pool_u27.le2
+pool_p7	S11C	s11b	16400+32-8000	pool_u26.pa7	pool_u27.pa7
+pool_l7c	S11C	s11b	16400+32-8000	pool sharks u26 game rom rev la-7 patch fa03.rom	pool sharks u27 game rom rev la-7 patch fa03.rom
+diner_l4	S11C	s11b	16400+32-8000	dinr_u26.l4	dinr_u27.l4
+diner_l3	S11C	s11b	16400+32-8000	dinr_u26.l2	u27-la3.rom
+diner_f2	S11C	s11b	16400+32-8000	dinr_u26.l2	dinr_u27.lf2
+diner_l2	S11C	s11b	16400+32-8000	dinr_u26.l2	dinr_u27.lu2
+diner_l1	S11C	s11b	16400+32-8000	u26-lu1.rom	u27-lu1.rom
+diner_p0	S11C	s11b	16400+32-8000	dinr_u26.pa0	dinr_u27.pa0
+diner_l4fr	S11C	s11b	16400+32-8000	dinr_u26.l4fr	dinr_u27.l4
+radcl_l1	S11C	s11b	16400+32-8000	rad_u26.l1	rad_u27.l1
+radcl_g1	S11C	s11b	16400+32-8000	rad_u26.l1	u27-lg1.rom
+radcl_p3	S11C	s11b	16400+32-8000	rad_u26.p1	u27-p1.rom
+radcl_l1c	S11C	s11b	16400+32-8000	radical u26 game rom rev la-1 patch 8351.rom	radical u27 game rom rev la-1 patch 8351.rom
+radcl_l1c	S11C	s11b	16400+32-8000	radical u26 game rom rev la-1 patch aa9e.rom	radical u27 game rom rev la-1 patch aa9e.rom
+strax_p7	S11B	s11b	16400+32-8000	strx_u26.p7	strx_u27.p7
+rvrbt_l3	S11C	s11b	16400+32-8000	gamb_u26.l3	gamb_u27.l3
+rvrbt_p7	S11C	s11b	16400+32-8000	gamb_u26.pa7	gamb_u27.pa7
+bbnny_l2	S11C	s11b	16400+32-8000	bugs_u26.l2	bugs_u27.l2
+bbnny_lu	S11C	s11b	16400+32-8000	bugs_u26.l2	u27-lu2.rom
+bbnny_lg	S11C	s11b	16400+32-8000	bugs_u26.l2	bugs_bunny_u27_lg-2_nova_apparate.bin
+tmac_a24	DE	dmd	16400+32-8000	tmach2-4.b5	tmach2-4.c5
+tmac_a18	DE	dmd	16400+32-8000	tmach1-8.b5	tmach1-8.c5
+tmac_g18	DE	dmd	16400+32-8000	tmachg18.b5	tmachg18.c5
+mnfb_c27	DE	dmd	16400+32-8000	mnfb2-7.b5	mnfb2-7.c5
+poto_a32	DE	dmd	16400+32-8000	potob5.3-2	potoc5.3-2
+poto_a31	DE	dmd	16400+32-8000	potob5.3-1	potoc5.3-1
+poto_a29	DE	dmd	16400+32-8000	potob5.2-9	potoc5.2-9
+kiko_a10	DE	dmd	16400+32-8000	kkcpu_b5.bin	kkcpu_c5.bin
+bttf_a28	DE	dmd	16400+32-8000	bttfb5.2-8	bttfc5.2-8
+bttf_a21	DE	dmd	16400+32-8000	bktofutr.b5	bktofutr.c5
+bttf_a27	DE	dmd	16400+32-8000	bttfb5.2-7	bttfc5.2-7
+bttf_g27	DE	dmd	16400+32-8000	bttfb5g.2-7	bttfc5g.2-7
+simp_a27	DE	dmd	16400+32-8000	simpb5.2-7	simpc5.2-7
+simp_a20	DE	dmd	16400+32-8000	simpa2-0.b5	simpa2-0.c5
+ckpt_a17	DE	dmd	16400+32-8000	chkpntb5.107	chkpntc5.107
+tmnt_104	DE	dmd	16400+32-8000	tmntb5a.104	tmntc5a.104
+tmnt_104g	DE	dmd	16400+32-8000	tmntb5a.104	tmntc5g.104
+tmnt_103	DE	dmd	16400+32-8000	tmntb5.103	tmntc5.103
+tmnt_101	DE	dmd	16400+32-8000	tmntb5a.101	tmntc5a.101
+tmnt_a07	DE	dmd	16400+32-8000	tmntb5a.007	tmntc5a.007
+tmnt_200	DE	dmd	16400+32-8000	tmntb5a.200	tmntc5a.200
+btmn_103	DE	dmd	16400+32-8000	batcpub5.103	batcpuc5.103
+btmn_f13	DE	dmd	16400+32-8000	batcpub5.103	batccpuf.103
+btmn_g13	DE	dmd	16400+32-8000	batcpub5.103	batccpug.103
+btmn_106	DE	dmd	16400+32-8000	b5_a106.128	c5_a106.256
+ssvc_a26	DE	dmd	32-0000+32-8000	ssvc2-6.b5	ssvc2-6.c5
+ssvc_b26	DE	dmd	32-0000+32-8000	ssvc2-6.b5	ssvc2-6.c5
+ssvc_a42	DE	dmd	32-0000+32-8000	ss-b5.256	ss-c5.256
+ssvc_e40	DE	dmd	32-0000+32-8000	ssvce4-0.b5	ssvce4-0.c5
+torp_e21	DE	dmd	32-0000+32-8000	torpe2-1.b5	torpe2-1.c5
+torp_a16	DE	dmd	32-0000+32-8000	b5.256	c5.256
+play_a24	DE	dmd	32-0000+32-8000	play2-4.b5	play2-4.c5
+robo_a34	DE	dmd	32-0000+32-8000	robob5.a34	roboc5.a34
+robo_a29	DE	dmd	32-0000+32-8000	robob5.a29	roboc5.a29
+robo_a30	DE	dmd	32-0000+32-8000	b5.256	c5.256
+bttf_a20	DE	dmd	32-0000+32-8000	bttfb5.2-0	bttfc5.2-0
+btmn_101	DE	dmd	32-0000+32-8000	batcpub5.101	batcpuc5.101
+lwar_a83	DE	dmd	32-8000	lwar8-3.c5	
+lwar_e90	DE	dmd	32-8000	lwar9-0.e5	
+lwar_a81	DE	dmd	32-8000	c100_g8.256	
+trek_201	DE	dmd	64-0000	trekcpuu.201	
+trek_200	DE	dmd	64-0000	trekcpuu.200	
+trek_120	DE	dmd	64-0000	trekcpu.120	
+trek_117	DE	dmd	64-0000	trekcpu.117	
+trek_110	DE	dmd	64-0000	trekcpu.110	
+trek_11a	DE	dmd	64-0000	trekcpu.110	
+trek_300	DE	dmd	64-0000	trekcpuu.300	
+hook_408	DE	dmd	64-0000	hokcpua.408	
+hook_500	DE	dmd	64-0000	hokcpua.500	
+hook_501	DE	dmd	64-0000	hokcpua.501	
+hook_401p	DE	dmd	64-0000	hokcpua.401	
+hook_401	DE	dmd	64-0000	hokcpua.401	
+hook_f401	DE	dmd	64-0000	hokcpua.401	
+hook_400	DE	dmd	64-0000	hokcpua.401	
+hook_404	DE	dmd	64-0000	hokcpua.404	
+hook_e406	DE	dmd	64-0000	hokcpue.406	
+lw3_208	DE	dmd	64-0000	lw3cpuu.208	
+lw3_208p	DE	dmd	64-0000	lw3cpuu.208	
+lw3_207	DE	dmd	64-0000	lw3gc5.207	
+lw3_205	DE	dmd	64-0000	lw3gc5.205	
+lw3_e204	DE	dmd	64-0000	lw3cpue.204	
+lw3_203	DE	dmd	64-0000	lw3cpuu.203	
+lw3_200	DE	dmd	64-0000	lw3cpu.200	
+lw3_300	DE	dmd	64-0000	lw3cpuu.300	
+lw3_301	DE	dmd	64-0000	lw3cpuu.301	
+aar_101	DE	dmd	64-0000	as512cpu.bin	
+mj_130	DE	dmd	64-0000	mjcpuc5.bin	
+stwr_104	DE	dmd	64-0000	starcpua.104	
+stwr_106	DE	dmd	64-0000	starcpua.106	
+stwr_107s	DE	dmd	64-0000	starcpua.107	
+stwr_107	DE	dmd	64-0000	starcpua.107	
+stwr_103	DE	dmd	64-0000	starcpua.103	
+stwr_a14	DE	dmd	64-0000	starcpua.103	
+stwr_a046	DE	dmd	64-0000	starcpua.103	
+stwr_102	DE	dmd	64-0000	starcpua.102	
+stwr_e12	DE	dmd	64-0000	starcpue.102	
+stwr_101	DE	dmd	64-0000	starcpu.101	
+stwr_g11	DE	dmd	64-0000	starcpug.101	
+rab_320	DE	dmd	64-0000	rabcpua.320	
+rab_130	DE	dmd	64-0000	rabcpua.130	
+rab_110be	DE	dmd	64-0000	rocky-bull_1.10_belgium-c5.bin	
+rab_103it	DE	dmd	64-0000	rabcpu.103	
+rab_103	DE	dmd	64-0000	rabcpu.103	
+jupk_513	DE	dmd	64-0000	jpcpua.513	
+jupk_600	DE	dmd	64-0000	jpcpua.600	
+jupk_501	DE	dmd	64-0000	jpcpua.501	
+jupk_g51	DE	dmd	64-0000	jpcpua.501	
+jupk_305	DE	dmd	64-0000	jpcpua3.05.bin	
+jupk_307	DE	dmd	64-0000	jpcpua.307	
+lah_112	DE	dmd	64-0000	lahcpua.112	
+lah_f104	DE	dmd	64-0000	lahcpua.104	
+lah_l104	DE	dmd	64-0000	lahcpua.104	
+lah_c106	DE	dmd	64-0000	lahcpuc.106	
+lah_107	DE	dmd	64-0000	lahcpua.107	
+lah_l108	DE	dmd	64-0000	lahcpua.108	
+lah_l108_105	DE	dmd	64-0000	lahcpua.108	
+lah_110	DE	dmd	64-0000	lahcpua.110	
+lah_113	DE	dmd	64-0000	lahcpua.113	
+tftc_303	DE	dmd	64-0000	tftccpua.303	
+tftc_400	DE	dmd	64-0000	tftccpua.400	
+tftc_302	DE	dmd	64-0000	tftccpua.302	
+tftc_300	DE	dmd	64-0000	tftccpua.300	
+tftc_200	DE	dmd	64-0000	tftcgc5.a20	
+tftc_104	DE	dmd	64-0000	tftccpua.104	
+tomy_400	DE	dmd	64-0000	tomcpua.400	
+tomy_500	DE	dmd	64-0000	tomcpua.500	
+tomy_301g	DE	dmd	64-0000	tom_3.00_german_cpu_c5.bin	
+tomy_201d	DE	dmd	64-0000	tommy_2.01_dutch_cpu.bin	
+tomy_h30	DE	dmd	64-0000	tomcpuh.300	
+tomy_102	DE	dmd	64-0000	tomcpua.102	
+tomy_102be	DE	dmd	64-0000	tomcpub.102	
+wwfr_106	DE	dmd	64-0000	wwfcpua.106	
+wwfr_103f	DE	dmd	64-0000	wwfcpuf.103	
+wwfr_103	DE	dmd	64-0000	wfcpuc5.512	
+gnr_300	DE	dmd	64-0000	gnrcpua.300	
+gnr_300f	DE	dmd	64-0000	gnrcpuf.300	
+gnr_300d	DE	dmd	64-0000	gnrcpud.300	
+mav_402	DE	dmd	64-0000	mavcpua.404	
+mav_401	DE	dmd	64-0000	mavcpua.404	
+mav_404g	DE	dmd	64-0000	mav_c5_404.bin	
+mav_400	DE	dmd	64-0000	mavgc5.400	
+mav_200	DE	dmd	64-0000	mavcpua.200	
+mav_100	DE	dmd	64-0000	mavcpu.100	
+frankst	DE	dmd	64-0000	franka.103	
+frankstg	DE	dmd	64-0000	franka.103	
+franksti	DE	dmd	64-0000	franka.103	
+baywatch	DE	dmd	64-0000	baycpua.400	
+bay_401	DE	dmd	64-0000	baycpua.401	
+bay_402	DE	dmd	64-0000	baycpua.402	
+bay_d400	DE	dmd	64-0000	baycpud.400	
+bay_e400	DE	dmd	64-0000	baycpue.400	
+bay_d300	DE	dmd	64-0000	baycpud.300	
+bay_g300	DE	dmd	64-0000	baywatch_cpug_c5_3.00.bin	
+bay_f201	DE	dmd	64-0000	baycpuf.201	
+batmanf	DE	dmd	64-0000	batnova.401	
+batmanf3	DE	dmd	64-0000	batcpua.302	
+batmanf2	DE	dmd	64-0000	batcpua.202	
+batmanf1	DE	dmd	64-0000	batcpua.102	
+bmf_uk	DE	dmd	64-0000	batnove.401	
+bmf_cn	DE	dmd	64-0000	batnovc.401	
+bmf_no	DE	dmd	64-0000	batnovn.401	
+bmf_sv	DE	dmd	64-0000	batnovt.401	
+bmf_at	DE	dmd	64-0000	batnovh.401	
+bmf_ch	DE	dmd	64-0000	batnovs.401	
+bmf_de	DE	dmd	64-0000	batnovg.401	
+bmf_be	DE	dmd	64-0000	batnovb.401	
+bmf_fr	DE	dmd	64-0000	batnovf.401	
+bmf_nl	DE	dmd	64-0000	batnovd.401	
+bmf_nl302	DE	dmd	64-0000	batman_3.02_dutch.bin	
+bmf_it	DE	dmd	64-0000	batnovi.401	
+bmf_it2	DE	dmd	64-0000	bmcpu_italy.c5	
+bmf_it3	DE	dmd	64-0000	bmcpu_italy.c5	
+bmf_sp	DE	dmd	64-0000	batnova.401	
+bmf_jp	DE	dmd	64-0000	batnovj.401	
+bmf_time	DE	dmd	64-0000	batnova.401	
+batmanf5	DE	dmd	64-0000	bmf-cpu.500	
+batmanf501	DE	dmd	64-0000	bmf-cpu.501	
+detest	DE	dmd	64-0000	de_test.512	
+deleontest4	DE	dmd	64-0000	deleon4.512	

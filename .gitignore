@@ -1,0 +1,9 @@
+/target
+/web/src/wasm
+/web/dist
+/web/public
+node_modules
+*.tsbuildinfo
+*.vpx
+web/.env.local
+web/debug-assets/

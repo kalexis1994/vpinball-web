@@ -1,0 +1,28 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/vpinball/vpinball"
+
+[workspace.dependencies]
+vpw-math     = { path = "crates/vpw-math" }
+vpw-physics  = { path = "crates/vpw-physics" }
+vpw-render   = { path = "crates/vpw-render" }
+vpw-vbscript = { path = "crates/vpw-vbscript" }
+
+# Release profile for wasm: binary size and speed come first.
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+
+# The physics loop is unusable unoptimised, even in dev.
+[profile.dev.package."*"]
+opt-level = 3
+[profile.dev]
+opt-level = 1

@@ -1,0 +1,137 @@
+# Builds the player and publishes it to GitHub Pages.
+#
+# Three jobs, and the order between them is the point: nothing is published
+# until the tests have passed. A pinball table that draws beautifully and gets
+# the physics wrong is worse than one that does not load, because only the
+# second kind tells you.
+#
+# The site it deploys ships **no tables and no ROMs**. A `.vpx` is a hundred
+# megabytes and somebody else's work, and a ROM is copyrighted firmware; both
+# are things a player brings. What is deployed is the machine that runs them.
+
+name: pages
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+# What the deploy job needs to hand an artifact to Pages.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deploy at a time, and a newer commit wins. `cancel-in-progress` is safe
+# here because a half-finished deploy is not left behind: Pages swaps the whole
+# site at once or not at all.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # A build that warns is a build that will warn again tomorrow.
+  RUSTFLAGS: -D warnings
+
+jobs:
+  check:
+    name: tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The toolchain, the wasm target and the components all come from
+      # `rust-toolchain.toml`, so there is one place that says which they are.
+      - name: Install the toolchain
+        run: rustup show
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Formatting
+        run: cargo fmt --all --check
+
+      - name: Lints
+        run: cargo clippy --workspace --all-targets
+
+      # The tests that need a real table or a real ROM skip themselves and say
+      # so: neither is in the repository, and neither can be. The rest — the
+      # physics, the CPUs, the sound chips, the interpreter — do not need one.
+      - name: Tests
+        run: cargo test --release --workspace
+
+  build:
+    name: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the toolchain
+        run: rustup show
+
+      - uses: Swatinem/rust-cache@v2
+
+      # It has to be the **same version** as the `wasm-bindgen` crate the player
+      # links against: the CLI writes the JS glue for the ABI the crate emits,
+      # and a mismatch is a runtime error about an undefined import rather than
+      # anything that looks like a version problem.
+      - name: Work out which wasm-bindgen is needed
+        id: wb
+        run: |
+          version=$(cargo metadata --format-version 1 --locked \
+            | python3 -c "import json,sys; print(next(p['version'] for p in json.load(sys.stdin)['packages'] if p['name']=='wasm-bindgen'))")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "wasm-bindgen $version"
+
+      - name: Cache wasm-bindgen
+        id: wb-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/wasm-bindgen
+          key: wasm-bindgen-${{ runner.os }}-${{ steps.wb.outputs.version }}
+
+      - name: Install wasm-bindgen
+        if: steps.wb-cache.outputs.cache-hit != 'true'
+        run: cargo install wasm-bindgen-cli --version ${{ steps.wb.outputs.version }} --locked
+
+      - name: Build the player
+        run: ./build.sh release
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install the front end
+        run: npm ci
+        working-directory: web
+
+      # A project site lives at `/<repo>/`, so every asset URL has to carry that
+      # prefix. `github.event.repository.name` rather than a literal, so a fork
+      # under another name deploys to its own path without editing this file.
+      - name: Build the page
+        run: npm run build
+        working-directory: web
+        env:
+          VPW_BASE: /${{ github.event.repository.name }}/
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: web/dist
+
+  deploy:
+    name: deploy
+    # Only from the default branch, and only once the tests have passed. A pull
+    # request gets the build — which is where a broken build shows up — and
+    # stops there.
+    if: github.ref == 'refs/heads/master' && github.event_name != 'pull_request'
+    needs: [check, build]
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

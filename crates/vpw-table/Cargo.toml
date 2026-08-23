@@ -1,0 +1,15 @@
+[package]
+name = "vpw-table"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+vpin = "0.27.0"
+log = "0.4"
+vpw-math = { version = "0.1.0", path = "../vpw-math" }
+vpw-physics = { version = "0.1.0", path = "../vpw-physics" }
+
+[dev-dependencies]
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }

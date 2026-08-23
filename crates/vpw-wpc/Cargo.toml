@@ -1,0 +1,12 @@
+[package]
+name = "vpw-wpc"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+vpw-m6809 = { version = "0.1.0", path = "../vpw-m6809" }
+
+[dev-dependencies]
+zip = "8.6.0"

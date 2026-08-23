@@ -1,0 +1,11 @@
+[toolchain]
+# Pinned, not "stable".
+#
+# The workspace is built with warnings denied, and a floating channel plus
+# denied warnings is a build that breaks on somebody else's release schedule:
+# a new Rust brings new lints, and code nobody touched stops compiling. Pinning
+# means new lints arrive when a person decides to bump this line, which is when
+# there is somebody around to deal with them.
+channel = "1.98.0"
+targets = ["wasm32-unknown-unknown"]
+components = ["rustfmt", "clippy"]

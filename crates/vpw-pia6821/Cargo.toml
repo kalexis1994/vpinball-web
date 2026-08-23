@@ -1,0 +1,11 @@
+[package]
+name = "vpw-pia6821"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+
+[dev-dependencies]
+vpw-m6800 = { path = "../vpw-m6800" }

@@ -1,0 +1,27 @@
+[package]
+name = "vpw-render"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bytemuck = { version = "1.25.2", features = ["derive"] }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "bmp"] }
+log = "0.4"
+vpw-math = { version = "0.1.0", path = "../vpw-math" }
+vpw-table = { version = "0.1.0", path = "../vpw-table" }
+# `webgl` is what puts the GL backend in the wasm build. Without it the browser
+# build is WebGPU and nothing else, and a browser that does not have WebGPU
+# fails at `request_adapter` with a blank canvas and no explanation. With it,
+# `Backends::all()` tries WebGPU first and falls back to WebGL2 — which is the
+# difference between running on iOS 26 and running on iOS.
+#
+# It is not free: the wasm goes from 3.2 MB to 6.5 MB, which over the wire with
+# brotli is 0.9 MB against 1.6 MB. Worth it here because a table is a hundred
+# megabytes on its own, so the player is a rounding error next to the thing it
+# exists to load — but worth knowing before adding anything else this size.
+wgpu = { version = "30.0.0", features = ["webgl"] }
+
+[dev-dependencies]
+image = { version = "0.25", default-features = false, features = ["webp", "png"] }
+pollster = "0.4"
+vpin = "0.27.0"

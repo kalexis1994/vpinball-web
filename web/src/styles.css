@@ -1,0 +1,964 @@
+:root {
+  color-scheme: dark;
+
+  --bg: #07070c;
+  --surface: #12121b;
+  --surface-hi: #1b1b28;
+  --line: #2a2a3c;
+  --text: #e4e4ec;
+  --text-dim: #9494a8;
+  --accent: #ff8a3d;
+  --accent-ink: #1a0d02;
+  --ok: #4ade80;
+  --warn: #fbbf24;
+  --error: #f87171;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: var(--bg);
+  color: var(--text);
+  font: 15px/1.55 system-ui, -apple-system, Segoe UI, sans-serif;
+}
+
+.mono, code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.9em;
+  color: #9ec1ff;
+}
+
+/* --- Layout ---------------------------------------------------------------- */
+
+.shell {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 2rem 1.25rem 4rem;
+}
+
+
+.subtitle { margin: 0.15rem 0 0; color: var(--text-dim); font-size: 0.9rem; }
+
+/* --- Buttons --------------------------------------------------------------- */
+
+.btn {
+  border: 1px solid var(--line);
+  background: var(--surface-hi);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 0.5rem 0.9rem;
+  font: inherit;
+  font-size: 0.9rem;
+  cursor: pointer;
+  transition: background 120ms, border-color 120ms;
+}
+.btn:hover:not(:disabled) { background: #242434; }
+.btn:disabled { opacity: 0.5; cursor: default; }
+
+.btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+  font-weight: 600;
+}
+.btn-primary:hover:not(:disabled) { background: #ffa163; border-color: #ffa163; }
+
+.btn-ghost { background: transparent; color: var(--text-dim); }
+.btn-ghost:hover:not(:disabled) { background: var(--surface-hi); color: var(--text); }
+
+/* --- Dropzone and grid ------------------------------------------------------ */
+
+.dropzone {
+  border: 1.5px dashed transparent;
+  border-radius: 14px;
+  padding: 0.5rem;
+  transition: border-color 120ms, background 120ms;
+}
+.dropzone-active { border-color: var(--accent); background: #ff8a3d0d; }
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 1rem;
+}
+
+.empty { text-align: center; padding: 4rem 1rem; color: var(--text-dim); }
+.empty p { margin: 0.35rem 0; }
+.empty-hint { font-size: 0.9rem; max-width: 34rem; margin-inline: auto; }
+
+/* --- Card ------------------------------------------------------------------ */
+
+.card {
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.card-thumb {
+  aspect-ratio: 4 / 3;
+  background: #0c0c14;
+  display: grid;
+  place-items: center;
+  border-bottom: 1px solid var(--line);
+}
+.card-thumb img { width: 100%; height: 100%; object-fit: cover; }
+.card-thumb-empty { font-size: 2.5rem; filter: grayscale(1); opacity: 0.35; }
+
+.card-body { padding: 0.85rem 0.9rem 0.6rem; flex: 1; }
+.card-body h3 {
+  margin: 0;
+  font-size: 1rem;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+.card-meta { margin: 0.25rem 0 0.6rem; color: var(--text-dim); font-size: 0.82rem; }
+.card-stats { margin: 0.6rem 0 0; color: var(--text-dim); font-size: 0.78rem; }
+
+.card-badges { display: flex; flex-wrap: wrap; gap: 0.35rem; }
+
+.card-actions {
+  display: flex;
+  gap: 0.5rem;
+  padding: 0.6rem 0.9rem 0.9rem;
+}
+.card-actions .btn-primary { flex: 1; }
+
+/* --- Badges ---------------------------------------------------------------- */
+
+.badge {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.3rem;
+  padding: 0.2rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  border: 1px solid var(--line);
+  background: var(--surface-hi);
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.badge strong { color: var(--text); font-weight: 600; }
+.badge em { font-style: normal; opacity: 0.7; }
+
+.badge-ok { color: var(--ok); border-color: #4ade8033; background: #4ade801a; }
+.badge-warn { color: var(--warn); border-color: #fbbf2433; background: #fbbf241a; }
+.badge-rom { color: var(--accent); border-color: #ff8a3d40; background: #ff8a3d1a; }
+.badge-rom strong { color: var(--accent); }
+.badge-dim { opacity: 0.7; }
+
+/* --- Notices --------------------------------------------------------------- */
+
+.notice {
+  position: relative;
+  margin: 0 0 1rem;
+  padding: 0.7rem 2rem 0.7rem 0.9rem;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  font-size: 0.88rem;
+}
+.notice p { margin: 0.15rem 0; }
+.notice-busy { border-color: #ff8a3d40; background: #ff8a3d12; }
+.notice-error { border-color: #f8717140; background: #f871711a; color: #ffc9c9; }
+
+.notice-close {
+  position: absolute;
+  top: 0.35rem;
+  right: 0.5rem;
+  background: none;
+  border: 0;
+  color: inherit;
+  font-size: 1.1rem;
+  cursor: pointer;
+  opacity: 0.6;
+}
+.notice-close:hover { opacity: 1; }
+
+.footnote {
+  margin: 1.25rem 0 0;
+  color: var(--text-dim);
+  font-size: 0.82rem;
+  max-width: 60ch;
+}
+
+/* --- Player ---------------------------------------------------------------- */
+
+.player { position: fixed; inset: 0; background: #000; }
+.player canvas { width: 100%; height: 100%; display: block; touch-action: none; }
+
+.player-hud {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  background: linear-gradient(#000000cc, transparent);
+}
+
+.player-status {
+  position: absolute;
+  left: 1rem;
+  right: 1rem;
+  bottom: 1rem;
+  max-width: 46rem;
+  margin-inline: auto;
+}
+
+/* Player HUD: scene counts and fps. */
+.player-fps {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.75;
+}
+
+.stats dl {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.2rem 1rem;
+  margin: 0;
+  font-size: 0.85rem;
+}
+
+.stats dt {
+  opacity: 0.6;
+}
+
+.stats dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.stats .hint {
+  margin: 0.6rem 0 0;
+  font-size: 0.8rem;
+  opacity: 0.55;
+}
+
+/* Tilt warning in the top bar. */
+.player-tilt {
+  color: #ff6b6b;
+  letter-spacing: 0.08em;
+}
+
+/* How close the plumb is to the ring. */
+
+
+
+
+/* The key map. */
+
+
+
+/* A way out of the game that is a shape rather than a word. */
+.touch-exit {
+  width: 2.75rem;
+  height: 2.75rem;
+  padding: 0.55rem;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(8, 8, 14, 0.45);
+  color: var(--text);
+  opacity: 0.45;
+  cursor: pointer;
+  transition: opacity 120ms ease;
+}
+.touch-exit:hover, .touch-exit:active { opacity: 0.95; }
+.touch-exit svg { display: block; width: 100%; height: 100%; }
+
+/* --- Touch controls -------------------------------------------------------- */
+/*
+ * Laid out like a cabinet: flippers at the bottom corners, the plunger top
+ * right, the coin door top left. Everything is semi-transparent, because the
+ * one thing a control on a phone must not do is hide the table.
+ *
+ * The layer itself does not take pointer events — only the controls in it do —
+ * so dragging the camera still works everywhere between them.
+ */
+.touch {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 3;
+  /* A finger on a control must never scroll or zoom the page. */
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.touch button,
+.touch .touch-plunger {
+  pointer-events: auto;
+  touch-action: none;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+}
+
+.touch svg { display: block; width: 100%; height: 100%; overflow: visible; }
+
+/* --- Flipper buttons --- */
+
+.touch-flipper {
+  position: absolute;
+  bottom: max(1.25rem, env(safe-area-inset-bottom));
+  width: min(28vw, 8rem);
+  aspect-ratio: 1;
+  opacity: 0.42;
+  transition: opacity 90ms ease, transform 90ms ease;
+}
+.touch-left  { left:  max(1rem, env(safe-area-inset-left)); }
+.touch-right { right: max(1rem, env(safe-area-inset-right)); }
+
+.touch-flipper.is-held { opacity: 0.92; transform: scale(0.94); }
+
+/* An arcade pushbutton: bezel nut, housing, cap, highlight. Pressing it sinks
+   the cap and dims the highlight, which is the whole feedback — there is no
+   label, because a cabinet button does not have one either. */
+.touch-bezel   { fill: rgba(8, 8, 14, 0.45); stroke: rgba(228, 228, 236, 0.35); stroke-width: 2.5; }
+.touch-housing { fill: rgba(8, 8, 14, 0.6); stroke: rgba(228, 228, 236, 0.18); stroke-width: 2; }
+.touch-cap     { fill: rgba(255, 138, 61, 0.3); stroke: var(--accent); stroke-width: 3; }
+.touch-shine   { fill: rgba(255, 255, 255, 0.28); }
+
+.touch-cap, .touch-shine { transition: all 60ms ease-out; }
+.touch-flipper.is-held .touch-cap {
+  fill: rgba(255, 138, 61, 0.72);
+  /* The cap sinks: smaller, and its outline thins as it drops into the housing. */
+  r: 29;
+  stroke-width: 2;
+}
+.touch-flipper.is-held .touch-shine { opacity: 0.35; }
+
+/* --- Plunger --- */
+
+.touch-plunger {
+  position: absolute;
+  top: max(4.5rem, calc(env(safe-area-inset-top) + 4rem));
+  right: max(1rem, env(safe-area-inset-right));
+  width: min(15vw, 4.5rem);
+  height: min(34vh, 13rem);
+  opacity: 0.4;
+  transition: opacity 120ms ease;
+}
+.touch-plunger:active { opacity: 0.9; }
+
+.touch-lane   { fill: rgba(8, 8, 14, 0.5); stroke: rgba(228, 228, 236, 0.3); stroke-width: 2; }
+.touch-rod    { stroke: rgba(228, 228, 236, 0.85); stroke-width: 6; stroke-linecap: round; }
+.touch-spring { fill: none; stroke: var(--accent); stroke-width: 4; stroke-linejoin: round; }
+.touch-ball   { fill: rgba(228, 228, 236, 0.75); }
+
+/* The knob rides on top of the lane and is what the finger actually drags. */
+.touch-thumb {
+  position: absolute;
+  top: 4%;
+  left: 50%;
+  width: 128%;
+  margin-left: -64%;
+  aspect-ratio: 1;
+  pointer-events: none;
+}
+.touch-knob       { fill: rgba(18, 18, 27, 0.9); stroke: var(--accent); stroke-width: 2.5; }
+.touch-knob-inner { fill: rgba(255, 138, 61, 0.25); }
+.touch-knurl      { stroke: rgba(255, 138, 61, 0.7); stroke-width: 2; stroke-linecap: round; }
+.touch-pull-hint  { fill: none; stroke: var(--text); stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+
+/* --- Start --- */
+
+.touch-start {
+  position: absolute;
+  top: max(4.5rem, calc(env(safe-area-inset-top) + 4rem));
+  /* Below the coin, which sits in the same corner. */
+  margin-top: min(20vw, 5.5rem);
+  left: max(1rem, env(safe-area-inset-left));
+  width: min(18vw, 5rem);
+  aspect-ratio: 1;
+  opacity: 0.42;
+  transition: opacity 90ms ease, transform 90ms ease;
+}
+.touch-start.is-held { opacity: 0.95; transform: scale(0.94); }
+
+.touch-start-cap   { fill: rgba(74, 222, 128, 0.22); stroke: var(--ok); stroke-width: 3; }
+.touch-start-mark { fill: var(--ok); }
+.touch-start.is-held .touch-start-cap { fill: rgba(74, 222, 128, 0.62); }
+
+/* --- Coin --- */
+
+.touch-coin {
+  position: absolute;
+  top: max(4.5rem, calc(env(safe-area-inset-top) + 4rem));
+  left: max(1rem, env(safe-area-inset-left));
+  width: min(18vw, 5rem);
+  aspect-ratio: 1;
+  opacity: 0.4;
+  transition: opacity 120ms ease;
+}
+.touch-coin:active { opacity: 0.95; }
+
+.touch-slot       { fill: rgba(8, 8, 14, 0.75); stroke: rgba(228, 228, 236, 0.45); stroke-width: 2.5; }
+.touch-token-edge { fill: rgba(251, 191, 36, 0.28); stroke: var(--warn); stroke-width: 3; }
+.touch-token-face { fill: rgba(251, 191, 36, 0.16); stroke: rgba(251, 191, 36, 0.6); stroke-width: 2; }
+.touch-milling    { stroke: var(--warn); stroke-width: 2; stroke-linecap: round; opacity: 0.75; }
+.touch-token-star { fill: var(--warn); opacity: 0.85; }
+
+/* A coin takes about three quarters of a second to be credited, so the token
+   travels towards the slot to say the press landed rather than leaving the
+   player tapping again. */
+.touch-coin.is-inserted .touch-token {
+  animation: coin-in 700ms ease-in both;
+}
+@keyframes coin-in {
+  0%   { transform: none; opacity: 1; }
+  70%  { transform: translate(24px, -22px) scale(0.55); opacity: 1; }
+  100% { transform: translate(24px, -22px) scale(0.55); opacity: 0; }
+}
+
+/* Coarse pointers get the controls; a mouse and keyboard do not need them.
+   `hover: none` rather than a width query, because the question is whether
+   there is a keyboard, not how wide the screen is. */
+@media (hover: hover) and (pointer: fine) {
+  .touch { display: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .touch-cap, .touch-shine, .touch-flipper, .touch-plunger, .touch-coin { transition: none; }
+  .touch-coin.is-inserted .touch-token { animation-duration: 1ms; }
+}
+
+/* --- The menu ---------------------------------------------------------------
+ *
+ * The first screen is not a page of content, so it is not laid out like one:
+ * three targets, centred, each one big enough to hit with a thumb without
+ * looking. The cabinet it stands in for has three buttons on the front too.
+ */
+
+.home {
+  min-height: 100vh;
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2.5rem;
+  padding: 2rem clamp(1rem, 5vw, 2rem);
+  max-width: 34rem;
+  margin-inline: auto;
+}
+
+.home-head { text-align: center; }
+
+.home-title {
+  margin: 0;
+  font-size: clamp(2rem, 9vw, 3rem);
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  line-height: 1;
+  /* The accent runs across the title rather than sitting behind a button: it
+     is the one place on the screen that can carry colour without competing. */
+  background: linear-gradient(105deg, var(--text) 30%, var(--accent));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.home-sub {
+  margin: 0.6rem 0 0;
+  color: var(--text-dim);
+  font-size: 0.95rem;
+}
+
+.home-menu {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.home-item {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  width: 100%;
+  padding: 1.1rem 1.15rem;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 120ms, background 120ms, transform 120ms;
+}
+
+.home-item:hover:not(:disabled),
+.home-item:focus-visible {
+  border-color: var(--accent);
+  background: var(--surface-hi);
+}
+
+.home-item:active:not(:disabled) { transform: translateY(1px); }
+
+.home-item:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.home-item-icon {
+  flex: 0 0 auto;
+  width: 2.6rem;
+  height: 2.6rem;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  background: var(--surface-hi);
+  color: var(--accent);
+}
+
+.home-item-icon svg { width: 1.4rem; height: 1.4rem; }
+.home-item:disabled .home-item-icon { color: var(--text-dim); }
+
+.home-item-text { flex: 1; min-width: 0; }
+
+.home-item-label {
+  display: block;
+  font-size: 1.15rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.home-item-hint {
+  display: block;
+  margin-top: 0.1rem;
+  color: var(--text-dim);
+  font-size: 0.85rem;
+}
+
+.home-item-chevron {
+  flex: 0 0 auto;
+  color: var(--text-dim);
+  display: grid;
+  place-items: center;
+}
+
+.home-item-chevron svg { width: 1.1rem; height: 1.1rem; }
+
+/* --- The screens below it -------------------------------------------------- */
+
+.screen-head {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  padding-bottom: 1.25rem;
+  margin-bottom: 0.5rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.screen-head h1 {
+  flex: 1;
+  margin: 0;
+  font-size: 1.5rem;
+  letter-spacing: -0.02em;
+}
+
+.btn-back {
+  padding: 0.5rem;
+  display: grid;
+  place-items: center;
+}
+
+.search {
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.9rem;
+  min-width: 9rem;
+}
+
+.search:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+.section { margin-top: 2rem; }
+
+.section-head {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin: 0 0 0.6rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.section-head .count {
+  padding: 0.05rem 0.45rem;
+  border-radius: 99px;
+  background: var(--surface-hi);
+  color: var(--text-dim);
+  font-size: 0.75rem;
+  letter-spacing: 0;
+}
+
+.section-note {
+  margin: 0 0 0.75rem;
+  color: var(--text-dim);
+  font-size: 0.9rem;
+}
+
+.drop-hint { text-align: center; padding: 2.5rem 1rem; color: var(--text-dim); }
+.drop-hint p { margin: 0.35rem 0; }
+
+/* --- What is stored -------------------------------------------------------- */
+
+.stored, .rom-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  background: var(--line);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.stored-row, .rom-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  padding: 0.7rem 0.85rem;
+  background: var(--surface);
+}
+
+.stored-name { flex: 1; min-width: 10rem; }
+
+.stored-sub {
+  display: block;
+  margin-top: 0.1rem;
+  color: var(--text-dim);
+  font-size: 0.8rem;
+}
+
+.rom-name { flex: 0 0 auto; color: var(--accent); }
+.rom-for { color: var(--text-dim); font-size: 0.88rem; }
+
+/* --- Settings -------------------------------------------------------------- */
+
+.setting {
+  display: block;
+  padding: 1rem 1.1rem;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+.setting-label {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  font-weight: 600;
+}
+
+.setting-value { color: var(--accent); font-weight: 400; }
+
+.setting-control {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-top: 0.9rem;
+  color: var(--text-dim);
+}
+
+.setting-hint {
+  display: block;
+  margin-top: 0.75rem;
+  color: var(--text-dim);
+  font-size: 0.85rem;
+}
+
+.slider {
+  flex: 1;
+  min-width: 0;
+  height: 1.75rem;
+  margin: 0;
+  background: transparent;
+  -webkit-appearance: none;
+  appearance: none;
+  cursor: pointer;
+}
+
+.slider:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: 4px; }
+
+.slider::-webkit-slider-runnable-track {
+  height: 5px;
+  border-radius: 99px;
+  background: var(--surface-hi);
+}
+
+.slider::-moz-range-track {
+  height: 5px;
+  border-radius: 99px;
+  background: var(--surface-hi);
+}
+
+/* Big enough to land on with a thumb; the track stays thin so the value is
+   still readable at a glance. */
+.slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 1.25rem;
+  height: 1.25rem;
+  margin-top: -0.475rem;
+  border: none;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.slider::-moz-range-thumb {
+  width: 1.25rem;
+  height: 1.25rem;
+  border: none;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+/* --- The import review ------------------------------------------------------
+ *
+ * A sheet on a phone and a dialog on a desk. The list inside can be long — a
+ * pack with a dozen tables in it — so the body scrolls and the two buttons stay
+ * where they are.
+ */
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding: 0;
+  background: #040408cc;
+  backdrop-filter: blur(3px);
+}
+
+@media (min-width: 40rem) {
+  .modal-backdrop { align-items: center; padding: 2rem 1rem; }
+}
+
+.modal {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: 40rem;
+  max-height: 92vh;
+  max-height: 92dvh;
+  border: 1px solid var(--line);
+  border-radius: 16px 16px 0 0;
+  background: var(--surface);
+  overflow: hidden;
+}
+
+@media (min-width: 40rem) {
+  .modal { border-radius: 16px; max-height: 85vh; }
+}
+
+.modal:focus-visible { outline: none; }
+
+.modal-head {
+  padding: 1.15rem 1.15rem 0.9rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.modal-head h2 {
+  margin: 0;
+  font-size: 1.2rem;
+  letter-spacing: -0.015em;
+}
+
+.modal-sub {
+  margin: 0.3rem 0 0;
+  color: var(--text-dim);
+  font-size: 0.9rem;
+}
+
+.modal-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 0.5rem 1.15rem 1rem;
+}
+
+.modal-foot {
+  display: flex;
+  gap: 0.6rem;
+  padding: 0.85rem 1.15rem;
+  padding-bottom: max(0.85rem, env(safe-area-inset-bottom));
+  border-top: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.modal-foot .btn { flex: 1; justify-content: center; }
+.modal-foot .btn-primary { flex: 2; }
+
+/* --- What it lists ---------------------------------------------------------- */
+
+.review-section { margin-top: 1.1rem; }
+
+.review-section h3 {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0 0 0.35rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.review-section h3 .count {
+  padding: 0.05rem 0.4rem;
+  border-radius: 99px;
+  background: var(--surface-hi);
+  font-size: 0.72rem;
+  letter-spacing: 0;
+}
+
+/* The three that are consequences rather than inventory get a colour, so the
+   eye lands on them first — they are the reason for reading this at all. */
+.review-ok h3 { color: var(--ok); }
+.review-warn h3 { color: var(--warn); }
+.review-error h3 { color: var(--error); }
+
+.review-note {
+  margin: 0 0 0.5rem;
+  color: var(--text-dim);
+  font-size: 0.85rem;
+}
+
+.review-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  background: var(--line);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.review-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  padding: 0.55rem 0.7rem;
+  background: var(--surface-hi);
+  font-size: 0.9rem;
+}
+
+.review-name { flex: 1; min-width: 9rem; }
+
+.review-detail {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.15rem;
+  color: var(--text-dim);
+  font-size: 0.8rem;
+}
+
+.row-origin {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.1rem 0.45rem;
+  border: 1px solid var(--line);
+  border-radius: 99px;
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+
+.tag-ok { color: var(--ok); border-color: #4ade8033; background: #4ade801a; }
+.tag-warn { color: var(--warn); border-color: #fbbf2433; background: #fbbf241a; }
+.tag-error { color: var(--error); border-color: #f8717133; background: #f871711a; }
+
+/* --- the score display ---------------------------------------------------
+ *
+ * A canvas, because the pixels come from Rust: the same drawing that goes onto
+ * the machine's head in the 3D scene, handed over as an image. Nothing here
+ * knows what a segment looks like.
+ *
+ * Only shown when the head is **not** in the picture. In the front view the
+ * display is already on the machine, and a second copy floating over it would
+ * be the same score twice.
+ */
+.score {
+  position: absolute;
+  z-index: 2;
+  top: 1rem;
+  right: 1rem;
+  width: min(28vw, 22rem);
+  height: auto;
+  border: 1px solid var(--line);
+  border-radius: 0.4rem;
+  background: #06060a;
+  pointer-events: none;
+  /* The strokes are thin and the image is drawn at a fixed size; letting the
+     browser smooth it on the way up turns them to mush. */
+  image-rendering: pixelated;
+}
+
+/* --- a choice between named options -------------------------------------- */
+
+.setting-choice {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.choice {
+  flex: 1 1 auto;
+  padding: 0.5rem 0.9rem;
+  border: 1px solid var(--line);
+  border-radius: 0.4rem;
+  background: var(--surface);
+  color: var(--text-dim);
+  font: inherit;
+  cursor: pointer;
+}
+
+.choice:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.choice-on {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-ink);
+}
