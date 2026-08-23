@@ -20,10 +20,12 @@
 // Capturing the pointer sends every move and the release to the element that
 // was first touched, whatever is under the finger by then.
 
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { pressKey, releaseAllKeys } from '../lib/player';
+import { useCallback, useEffect, useState } from 'react';
+import { plungerPull, pressKey, releaseAllKeys } from '../lib/player';
 
-/** How far the plunger thumb travels, in pixels, before it stops following. */
+/** How far the thumb slides, in pixels, when the rod is drawn all the way
+ * back. The rod's own travel is the table's business; this is only how much of
+ * the screen is spent showing it. */
 const PLUNGER_TRAVEL = 96;
 
 interface Props {
@@ -93,35 +95,53 @@ function FlipperButton({ side, code }: { side: 'left' | 'right'; code: string })
 }
 
 /**
- * The plunger: pull down and let go.
+ * The plunger: press and hold, then let go.
  *
- * The physics pulls the rod back for as long as the key is held, exactly as it
- * does for the space bar, so how far the player drags is not what decides the
- * shot — how long they hold is. The thumb follows the finger anyway, because a
- * control that does not move under your thumb feels broken even when it is
- * working.
+ * What decides the shot is **how long the button is held**, not how far a
+ * finger travels: the physics draws the rod back on its own for as long as the
+ * key is down, exactly as it does for the space bar. So the rod and its spring
+ * are drawn from the simulation's own position rather than from the drag, and
+ * what the player sees is what the table is about to do with it. Animating
+ * from the finger, which is what this did, meant the picture and the shot could
+ * disagree by any amount — hold still and the spring said nothing was
+ * happening while the rod wound itself all the way back.
+ *
+ * The thumb rides the same number, so it still moves under the finger. It moves
+ * because the plunger is moving, which is the point.
  */
 function Plunger({ onNewBall }: { onNewBall?: () => void }) {
+  // 0 at rest, 1 fully drawn back. Read from the table every frame.
   const [pulled, setPulled] = useState(0);
-  const origin = useRef(0);
+
+  useEffect(() => {
+    let frame = 0;
+    let last = -1;
+    const poll = () => {
+      const p = plungerPull();
+      if (p !== null) {
+        // Rounded before comparing: the plunger settles with a tail of
+        // movements far too small to see, and re-rendering for those is sixty
+        // wasted renders a second for a picture nobody can tell apart.
+        const q = Math.round(p * 200) / 200;
+        if (q !== last) {
+          last = q;
+          setPulled(q);
+        }
+      }
+      frame = requestAnimationFrame(poll);
+    };
+    frame = requestAnimationFrame(poll);
+    return () => cancelAnimationFrame(frame);
+  }, []);
 
   const down = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     e.currentTarget.setPointerCapture(e.pointerId);
     e.preventDefault();
-    origin.current = e.clientY;
-    setPulled(0);
     void pressKey('Space', true);
-  }, []);
-
-  const move = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
-    if (!e.currentTarget.hasPointerCapture(e.pointerId)) return;
-    const dragged = e.clientY - origin.current;
-    setPulled(Math.max(0, Math.min(PLUNGER_TRAVEL, dragged)));
   }, []);
 
   const up = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     e.preventDefault();
-    setPulled(0);
     void pressKey('Space', false);
   }, []);
 
@@ -130,7 +150,6 @@ function Plunger({ onNewBall }: { onNewBall?: () => void }) {
       className="touch-plunger"
       aria-label="Plunger: pull down and release"
       onPointerDown={down}
-      onPointerMove={move}
       onPointerUp={up}
       onPointerCancel={up}
       onContextMenu={(e) => e.preventDefault()}
@@ -138,10 +157,10 @@ function Plunger({ onNewBall }: { onNewBall?: () => void }) {
       // and what the keyboard spells `Enter`.
       onDoubleClick={() => onNewBall?.()}
     >
-      <PlungerIcon pulled={pulled / PLUNGER_TRAVEL} />
+      <PlungerIcon pulled={pulled} />
       <span
         className="touch-thumb"
-        style={{ transform: `translateY(${pulled}px)` }}
+        style={{ transform: `translateY(${(pulled * PLUNGER_TRAVEL).toFixed(1)}px)` }}
         aria-hidden="true"
       >
         <ThumbIcon />

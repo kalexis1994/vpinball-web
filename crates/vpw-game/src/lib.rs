@@ -560,6 +560,25 @@ impl Game {
         self.record();
     }
 
+    /// How far the shooter rod is drawn back, from 0 to 1, if there is one.
+    ///
+    /// For a host that draws its own plunger. What decides a shot is how long
+    /// the button is held and not how far a finger travelled — the physics
+    /// draws the rod back on its own for as long as the key is down — so a
+    /// control that animates from the finger is showing the player something
+    /// that is not what the table is about to do with it.
+    ///
+    /// Zero is where the rod parks, not where the frame ends: see
+    /// [`vpw_physics::plunger::Plunger::travel`].
+    pub fn plunger_pull(&self) -> Option<f32> {
+        let i = self.controls.plunger()?;
+        let engine = self.engine.borrow();
+        match engine.shapes().get(i)? {
+            Shape::Plunger(p) => Some(p.travel()),
+            _ => None,
+        }
+    }
+
     /// Every timer the script has armed, with its interval in milliseconds.
     ///
     /// A table that has quietly left a hundred parts polling every tick looks

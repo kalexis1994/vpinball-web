@@ -734,6 +734,20 @@ pub struct LoopStats {
     pub handler_calls: f64,
 }
 
+/// How far the shooter rod is drawn back, from 0 to 1.
+///
+/// `None` before a table is loaded, or on a table with no plunger. It is read
+/// every frame by whatever is drawing the on-screen shooter, so it does the
+/// least work it can: two borrows and a subtraction.
+#[wasm_bindgen(js_name = plungerPull)]
+pub fn plunger_pull() -> Option<f32> {
+    PLAYER.with(|p| {
+        p.borrow()
+            .as_ref()
+            .and_then(|player| player.borrow().table.as_ref()?.plunger_pull())
+    })
+}
+
 /// What the UI can read at any time for the HUD.
 #[wasm_bindgen(js_name = loopStats)]
 pub fn loop_stats() -> Option<LoopStats> {

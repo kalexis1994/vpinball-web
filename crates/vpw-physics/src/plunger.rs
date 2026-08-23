@@ -132,6 +132,26 @@ impl Plunger {
         (self.pos - self.frame_end) / self.frame_len
     }
 
+    /// How far it has been drawn back from where it rests, from 0 to 1.
+    ///
+    /// Not the same number as [`Plunger::relative_position`], and the
+    /// difference is the whole reason this exists. A plunger parks part of the
+    /// way along its frame — the table says where, and F-14 parks at 0.17 —
+    /// so the raw position reads as already drawn back when nobody has touched
+    /// it. What a shooter drawn on screen has to show is the *travel*: nothing
+    /// at rest, everything at the back of the frame.
+    ///
+    /// Firing throws it forward past the park position, which comes out as 0
+    /// rather than as a negative: there is no such thing as less than not
+    /// drawn back.
+    pub fn travel(&self) -> f32 {
+        let room = 1.0 - self.rest_pos;
+        if room <= 1e-6 {
+            return 0.0;
+        }
+        ((self.relative_position() - self.rest_pos) / room).clamp(0.0, 1.0)
+    }
+
     /// Starts pulling backwards (`PlungerMoverObject::PullBack`).
     pub fn pull(&mut self) {
         self.speed = 0.0;

@@ -32,6 +32,9 @@ export interface LoadStats {
 }
 
 let wasmReady: Promise<Wasm> | null = null;
+/** The module once it has resolved, for the few reads that cannot afford to
+ * await. See {@link plungerPull}. */
+let live: Wasm | null = null;
 /** The wasm module and its script libraries: fetched once, whatever happens
  * to the canvas afterwards. See {@link startPlayer}. */
 let ready: Promise<Wasm> | null = null;
@@ -47,9 +50,23 @@ export function initWasm(): Promise<Wasm> {
     const wasm = await import('../wasm/vpw_player.js');
     const url = (await import('../wasm/vpw_player_bg.wasm?url')).default;
     await wasm.default({ module_or_path: url });
+    live = wasm;
     return wasm;
   })();
   return wasmReady;
+}
+
+/**
+ * How far the shooter rod is drawn back, from 0 to 1, or `null` if there is
+ * nothing to ask.
+ *
+ * Synchronous, unlike everything else here, because it is read once per
+ * animation frame by the on-screen plunger and a promise per frame to fetch one
+ * float is a promise per frame too many. It answers `null` until the module has
+ * resolved, which is exactly the period during which there is no table anyway.
+ */
+export function plungerPull(): number | null {
+  return live?.plungerPull() ?? null;
 }
 
 /**

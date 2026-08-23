@@ -395,3 +395,78 @@ fn a_ball_hitting_a_moving_rod_does_not_send_it_to_the_back_stop() {
         "the rod should have stayed near {REST:.1}, and it is at {rod:.1}          (the back stop is {back_stop:.1})"
     );
 }
+
+// --------------------------------------------------- what a screen shows ---
+//
+// A shooter drawn on screen is drawn from `travel`, not from `relative_position`
+// and not from how far a finger moved. These pin down the difference.
+
+#[test]
+fn a_parked_plunger_has_not_been_drawn_back_at_all() {
+    // The raw position reads 0.17 here — the park position the table asked for
+    // — and a spring drawn from that number is a spring already squashed by a
+    // sixth before anybody has touched the control.
+    let p = plunger();
+    assert!(
+        p.relative_position() > 0.1,
+        "the fixture should park part way"
+    );
+    assert!(
+        p.travel() < 1e-4,
+        "at rest it has travelled nothing: {}",
+        p.travel()
+    );
+}
+
+#[test]
+fn holding_the_button_draws_it_all_the_way_back() {
+    let mut p = plunger();
+    p.pull();
+    let mut seen: Vec<f32> = Vec::new();
+    for _ in 0..1000 {
+        p.update_velocities();
+        p.update_displacements(0.001);
+        seen.push(p.travel());
+    }
+
+    // It gets there, it never leaves the range, and it only ever goes one way
+    // while the button is held — a picture that jitters backwards is a picture
+    // that reads as a bug.
+    assert!(
+        p.travel() > 0.99,
+        "held down it should end up fully drawn: {}",
+        p.travel()
+    );
+    assert!(
+        seen.iter().all(|t| (0.0..=1.0).contains(t)),
+        "travel left the 0..1 range"
+    );
+    assert!(
+        seen.windows(2).all(|w| w[1] >= w[0] - 1e-6),
+        "it moved backwards while the button was held"
+    );
+}
+
+#[test]
+fn firing_forward_never_reads_as_less_than_parked() {
+    // Released, it overshoots the park position going forward. That is a real
+    // movement of a real rod and it is still not "drawn back by a negative
+    // amount", which is what a naive subtraction would say and what would make
+    // a spring drawn from it turn inside out.
+    let mut p = plunger();
+    p.pull();
+    for _ in 0..1000 {
+        p.update_velocities();
+        p.update_displacements(0.001);
+    }
+    p.release();
+    for _ in 0..2000 {
+        p.update_velocities();
+        p.update_displacements(0.001);
+        let t = p.travel();
+        assert!(
+            (0.0..=1.0).contains(&t),
+            "travel left the 0..1 range while firing: {t}"
+        );
+    }
+}
