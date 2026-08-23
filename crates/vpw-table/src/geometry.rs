@@ -401,6 +401,57 @@ impl Scene {
         self.meshes.retain(|m| !names.iter().any(|n| n == &m.name));
     }
 
+    /// Corners of everything standing on the playfield, for a camera to frame.
+    ///
+    /// One box around the whole table is a bad question to ask a camera looking
+    /// straight down: it claims something as tall as the tallest ramp stands in
+    /// each corner of the playfield, and what stands there is the flat sheet.
+    /// These are the boxes the meshes really occupy, so the camera can tell the
+    /// difference.
+    ///
+    /// Strays are dropped. Tables carry parts far outside the playfield — a
+    /// backglass, a DMD panel, a spare toy left at the origin — and a camera
+    /// that frames those leaves the table small in a corner. The margin is
+    /// generous enough for a wall sitting on the edge and mean enough to catch
+    /// something in the next postcode.
+    pub fn occupied(&self) -> Vec<Vec3> {
+        const SLACK: f32 = 50.0;
+        let pf = self.playfield;
+        let mut out = Vec::new();
+        for mesh in &self.meshes {
+            if !mesh.visible || matches!(mesh.kind, MeshKind::Backbox) {
+                continue;
+            }
+            let Some(b) = mesh.bounds() else { continue };
+            let inside = b.max.x >= pf.min.x - SLACK
+                && b.min.x <= pf.max.x + SLACK
+                && b.max.y >= pf.min.y - SLACK
+                && b.min.y <= pf.max.y + SLACK;
+            if !inside {
+                continue;
+            }
+            // Clamped to the playfield: a part may legitimately overhang the
+            // edge a little, and the camera's job is to frame the table, not to
+            // be dragged outward by a bracket screwed to the side of it.
+            let lo = Vec3::new(
+                b.min.x.max(pf.min.x),
+                b.min.y.max(pf.min.y),
+                b.min.z.max(0.0),
+            );
+            let hi = Vec3::new(b.max.x.min(pf.max.x), b.max.y.min(pf.max.y), b.max.z);
+            if lo.x > hi.x || lo.y > hi.y || lo.z > hi.z {
+                continue;
+            }
+            out.extend_from_slice(&[
+                Vec3::new(lo.x, lo.y, hi.z),
+                Vec3::new(hi.x, lo.y, hi.z),
+                Vec3::new(lo.x, hi.y, hi.z),
+                Vec3::new(hi.x, hi.y, hi.z),
+            ]);
+        }
+        out
+    }
+
     /// Box containing everything visible.
     pub fn bounds(&self) -> Bounds {
         self.meshes

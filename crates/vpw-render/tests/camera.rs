@@ -270,3 +270,176 @@ fn there_is_no_head_to_put_the_score_on_from_above() {
     // over the playfield, which is where the ball is.
     assert!(head_rect(View::Overhead, 16.0 / 9.0).is_none());
 }
+
+// ---------------------------------------------------------------------------
+// The overhead view as a sheet of glass
+// ---------------------------------------------------------------------------
+//
+// The brief for this view is one sentence: the screen is the acrylic over the
+// playfield. Everything below follows from taking that literally rather than
+// as a figure of speech. If the screen is the glass then every point of it
+// shows the point of the table directly underneath, the edges of the table sit
+// on the edges of the screen, and the only thing between them is the aspect
+// ratio the table happens to have.
+
+/// Where the playfield's own edges land, as a fraction of half the screen.
+/// One means touching.
+fn playfield_fill(c: &Camera, playfield: (Vec3, Vec3), aspect: f32) -> (f32, f32) {
+    let (min, max) = playfield;
+    let vp = c.view_projection(aspect);
+    let (mut x, mut y) = (0.0f32, 0.0f32);
+    for cx in [min.x, max.x] {
+        for cy in [min.y, max.y] {
+            let clip = vp * Vec3::new(cx, cy, 0.0).extend(1.0);
+            x = x.max((clip.x / clip.w).abs());
+            y = y.max((clip.y / clip.w).abs());
+        }
+    }
+    (x, y)
+}
+
+#[test]
+fn the_overhead_view_does_not_converge() {
+    // A perspective camera makes a thing nearer to it bigger. Under glass
+    // nothing does that: a post 200 units tall covers exactly its own
+    // footprint, which is why you can tell from a photograph taken through the
+    // glass where a ball will actually go.
+    let (playfield, backbox) = machine();
+    let c = Camera::for_view(View::Overhead, playfield, backbox, 0.4615);
+
+    // The same horizontal span, once on the playfield and once well above it.
+    let span = |z: f32| {
+        let a = to_screen(&c, Vec3::new(300.0, 1000.0, z), 0.4615).0;
+        let b = to_screen(&c, Vec3::new(600.0, 1000.0, z), 0.4615).0;
+        b - a
+    };
+    let (low, high) = (span(0.0), span(220.0));
+    assert!(
+        (low - high).abs() < 1e-4,
+        "the same 300 units measured {low} on the playfield and {high} at the top \
+         of a wall; an overhead view that magnifies what it is nearer to is a \
+         photograph of a table, not a sheet of glass over one"
+    );
+}
+
+#[test]
+fn the_playfield_reaches_the_edges_of_a_phone() {
+    // The point of the whole thing. A table is about twice as long as it is
+    // wide and so is a phone held upright, so the length is what runs out
+    // first and the length is what has to touch.
+    let (playfield, backbox) = machine();
+    for aspect in [0.4615, 0.5, 0.5625] {
+        let c = Camera::for_view(View::Overhead, playfield, backbox, aspect);
+        let (x, y) = playfield_fill(&c, playfield, aspect);
+        assert!(
+            y > 0.999,
+            "at {aspect} the table stops {:.1}% short of the top and bottom",
+            (1.0 - y) * 100.0
+        );
+        // And the width is the table's own shape, not slack the camera left.
+        let table = (playfield.1.x - playfield.0.x) / (playfield.1.y - playfield.0.y);
+        let expected = table / aspect;
+        assert!(
+            (x - expected).abs() < 0.01,
+            "at {aspect} the table fills {x:.3} of the width where its own \
+             proportions say {expected:.3}; the difference is wasted screen"
+        );
+    }
+}
+
+#[test]
+fn which_pair_of_edges_is_touched_is_the_table_against_the_screen() {
+    // Whichever of the two shapes is the *taller* decides. F-14 is 0.446 wide
+    // to long, so on anything wider than that — a phone upright at 0.462, a
+    // desktop at 1.78 — it is the length that runs out and the top and bottom
+    // that are touched, with the slack going to the sides. Only a screen
+    // narrower than the table itself swaps it over, and then the sides are
+    // touched instead. There is no third case and neither one crops.
+    let (playfield, backbox) = machine();
+    let table = (playfield.1.x - playfield.0.x) / (playfield.1.y - playfield.0.y);
+
+    for aspect in [0.4615, 1.0, 16.0 / 9.0] {
+        let c = Camera::for_view(View::Overhead, playfield, backbox, aspect);
+        let (x, y) = playfield_fill(&c, playfield, aspect);
+        assert!(
+            y > 0.999,
+            "at {aspect} the table stops short of the top: {y}"
+        );
+        assert!(x <= 1.0001, "at {aspect} the table runs off the sides: {x}");
+    }
+
+    // Narrower than the table. Nothing sensible is this shape, which is the
+    // reason to check it: the arithmetic has to hold at both ends or it is
+    // holding by luck in the middle.
+    let aspect = table * 0.75;
+    let c = Camera::for_view(View::Overhead, playfield, backbox, aspect);
+    let (x, y) = playfield_fill(&c, playfield, aspect);
+    assert!(x > 0.999, "the table stops short of the sides: {x}");
+    assert!(y <= 1.0001, "the table runs off the top and bottom: {y}");
+}
+
+#[test]
+fn nothing_standing_on_the_playfield_is_cropped() {
+    // "As close to the edges as possible" is only worth anything with "without
+    // cropping" attached. F-14's side walls are 220 units tall and run along
+    // the very edge of the table, which is the hardest case there is: under
+    // perspective their tops lean outward and fall off the screen.
+    let (playfield, backbox) = machine();
+    let aspect = 0.4615;
+    let c = Camera::for_view(View::Overhead, playfield, backbox, aspect);
+    for &z in &[0.0, 100.0, 220.0] {
+        for &(x, y) in &[
+            (playfield.0.x, playfield.0.y),
+            (playfield.1.x, playfield.0.y),
+            (playfield.0.x, playfield.1.y),
+            (playfield.1.x, playfield.1.y),
+        ] {
+            assert!(
+                on_screen(&c, Vec3::new(x, y, z), aspect),
+                "the corner ({x}, {y}) at height {z} is off screen"
+            );
+        }
+    }
+}
+
+#[test]
+fn the_table_is_not_stretched_to_fit() {
+    // The one thing that would make every other number here come out perfect
+    // and the picture come out wrong.
+    let (playfield, backbox) = machine();
+    for aspect in [0.4615, 0.75, 1.0, 1.7778] {
+        let c = Camera::for_view(View::Overhead, playfield, backbox, aspect);
+        // A square drawn on the playfield has to come out square on screen,
+        // once the screen's own shape is taken out.
+        let o = to_screen(&c, Vec3::new(300.0, 1000.0, 0.0), aspect);
+        let dx = to_screen(&c, Vec3::new(600.0, 1000.0, 0.0), aspect).0 - o.0;
+        let dy = to_screen(&c, Vec3::new(300.0, 1300.0, 0.0), aspect).1 - o.1;
+        // The magnitude, not the sign: looking straight down, the table's `+y`
+        // runs up the screen, so `dy` is negative and says nothing about shape.
+        let ratio = ((dx * aspect) / dy).abs();
+        assert!(
+            (ratio - 1.0).abs() < 1e-3,
+            "at {aspect} a square came out {ratio:.4} to one"
+        );
+    }
+}
+
+#[test]
+fn the_depth_planes_stay_close_enough_to_be_useful() {
+    // A long lens or an orthographic one puts the table a long way off, and the
+    // defaults of ten and twenty thousand leave everything of interest in the
+    // last thousandth of the depth buffer, where coplanar surfaces fight. The
+    // framing brackets what it is looking at; this is the check that it did.
+    let (playfield, backbox) = machine();
+    for view in [View::Front, View::Overhead] {
+        let c = Camera::for_view(view, playfield, backbox, 0.4615);
+        assert!(
+            c.far / c.near < 100.0,
+            "{view:?}: near {} to far {} is a ratio of {:.0}, which is most of \
+             the depth buffer spent on empty space",
+            c.near,
+            c.far,
+            c.far / c.near
+        );
+    }
+}

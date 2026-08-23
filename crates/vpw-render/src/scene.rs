@@ -171,6 +171,8 @@ pub struct Batch {
     pub image: String,
     /// Whether the texture really did resolve.
     pub textured: bool,
+    /// Whether this is the machine's head rather than the table.
+    pub backbox: bool,
 }
 
 /// Counts of what building the scene cost. They are there to measure, which is
@@ -210,6 +212,9 @@ struct BatchKey {
     material: String,
     image: String,
     transparent: bool,
+    /// Kept in the key so the head never merges into a batch with the table:
+    /// a view that leaves it out has to be able to leave it out on its own.
+    backbox: bool,
 }
 
 impl GpuScene {
@@ -238,6 +243,7 @@ impl GpuScene {
                 material: m.material.clone(),
                 image: m.image.clone(),
                 transparent,
+                backbox: matches!(m.kind, vpw_table::geometry::MeshKind::Backbox),
             };
             groups.entry(key).or_default().push(m);
         }
@@ -319,6 +325,7 @@ impl GpuScene {
                 material: key.material.clone(),
                 image: key.image.clone(),
                 textured: slot.textured,
+                backbox: key.backbox,
             });
         }
 

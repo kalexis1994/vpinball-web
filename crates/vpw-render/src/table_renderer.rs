@@ -33,6 +33,8 @@ pub struct TableRenderer {
     /// size for it. Applied when the scene is next built.
     pending_display: Option<crate::segments::Raster>,
     framing: Option<(vpw_table::geometry::Bounds, vpw_table::backbox::Backbox)>,
+    /// Corners of what really stands on the playfield. See `Scene::occupied`.
+    occupied: Vec<Vec3>,
 }
 
 impl TableRenderer {
@@ -65,6 +67,7 @@ impl TableRenderer {
             dynamic: None,
             lights,
             camera: Camera::default(),
+            occupied: Vec::new(),
             view: crate::camera::View::Front,
             pending_display: None,
             framing: None,
@@ -183,11 +186,12 @@ impl TableRenderer {
         };
         let head = head.bounds();
         let (w, h) = self.gpu.size();
-        self.camera = Camera::for_view(
+        self.camera = Camera::for_view_of(
             self.view,
             (table.min, table.max),
             (head.min, head.max),
             w as f32 / h as f32,
+            &self.occupied,
         );
     }
 
@@ -219,18 +223,24 @@ impl TableRenderer {
         );
 
         let pf = scene.playfield;
-        // A bit of height so that the toys and the ramps fit in. The playfield
-        // is a flat rectangle in the file and a table is not: the ramps and the
-        // toys stand on it, and a camera that frames the sheet cuts their tops
-        // off.
-        let height = (pf.max.x - pf.min.x) * 0.45;
+        // The sheet itself, flat, and separately the corners of everything
+        // standing on it.
+        //
+        // It used to be one box, the sheet raised by a guessed `0.45 * width`.
+        // Two things were wrong with that and they compounded. The guess was
+        // nearly twice F-14's real 235; and a box says the tallest thing on the
+        // table stands in all four corners of it, which is exactly the claim a
+        // camera looking straight down is most expensive to satisfy. Keeping
+        // the two apart lets the camera ask where the tall things actually are,
+        // and the answer for every table is "not at the edges".
         self.framing = Some((
             vpw_table::geometry::Bounds {
                 min: Vec3::new(pf.min.x, pf.min.y, 0.0),
-                max: Vec3::new(pf.max.x, pf.max.y, height),
+                max: Vec3::new(pf.max.x, pf.max.y, 0.0),
             },
             vpw_table::backbox::Backbox::for_playfield(pf),
         ));
+        self.occupied = scene.occupied();
         self.reframe();
         self.lights.upload(&self.gpu.device, &scene.lights);
         self.dynamic = Some(DynamicParts::upload(
@@ -354,7 +364,12 @@ impl TableRenderer {
                 self.dynamic.as_ref(),
             );
         }
-        crate::pass::draw(
+        // The head is left out of the views that do not show it. Looking
+        // straight down it is a vertical panel seen edge-on — a grey stripe
+        // across the top of the picture, standing where the glass would be —
+        // and the whole point of that view is that the screen is the glass.
+        let head = self.view.shows_backbox();
+        crate::pass::draw_full(
             &mut encoder,
             self.post.scene_view(),
             &self.post.depth,
@@ -362,6 +377,7 @@ impl TableRenderer {
             scene,
             self.dynamic.as_ref(),
             Some(&self.lights),
+            move |b| head || !b.backbox,
         );
         self.post.finish(&mut encoder, &view);
         self.gpu.queue.submit(Some(encoder.finish()));

@@ -91,11 +91,21 @@ fn main() {
                 _ => vpw_render::camera::View::Front,
             };
             let head = vpw_table::backbox::Backbox::for_playfield(scene.playfield).bounds();
-            vpw_render::Camera::for_view(
+            // The same box the player frames on, not the bare rectangle: the
+            // playfield in the file is a flat sheet and what has to fit is the
+            // sheet plus whatever stands on it. Framing the sheet here and the
+            // box there made this photograph flatter than the thing it was
+            // supposed to be a photograph of.
+            let pf = scene.playfield;
+            vpw_render::Camera::for_view_of(
                 view,
-                (scene.playfield.min, scene.playfield.max),
+                (
+                    vpw_math::Vec3::new(pf.min.x, pf.min.y, 0.0),
+                    vpw_math::Vec3::new(pf.max.x, pf.max.y, 0.0),
+                ),
                 (head.min, head.max),
                 aspect,
+                &scene.occupied(),
             )
         }
         None => {
@@ -109,12 +119,49 @@ fn main() {
     };
     let _ = &mut camera;
 
+    // Where the edges of the playfield actually land, as a fraction of the
+    // screen. This is the number the framing is judged on: with the screen as
+    // the glass over the table, anything short of the edge is a black bar and
+    // anything past it is a crop.
+    {
+        let pf = scene.playfield;
+        let vp = camera.view_projection(aspect);
+        let (mut x, mut y) = (0.0f32, 0.0f32);
+        for cx in [pf.min.x, pf.max.x] {
+            for cy in [pf.min.y, pf.max.y] {
+                let clip = vp * vpw_math::Vec3::new(cx, cy, 0.0).extend(1.0);
+                x = x.max((clip.x / clip.w).abs());
+                y = y.max((clip.y / clip.w).abs());
+            }
+        }
+        println!();
+        println!(
+            "playfield fills  {:.1}% wide, {:.1}% tall",
+            x * 100.0,
+            y * 100.0
+        );
+        let table = (pf.max.x - pf.min.x) / (pf.max.y - pf.min.y);
+        println!(
+            "table {table:.4} vs screen {aspect:.4}: {:.1}% of bar is unavoidable",
+            (1.0 - (table / aspect).min(aspect / table)) * 100.0
+        );
+    }
+
     // VPW_ONLY=name draws only the batches whose material or image contains
     // that text. Useful for working out who covers whom.
     let only = std::env::var("VPW_ONLY").ok().map(|s| s.to_lowercase());
     let except = std::env::var("VPW_EXCEPT").ok().map(|s| s.to_lowercase());
     let t3 = std::time::Instant::now();
+    // The head, on the same terms the player uses it: a view that does not
+    // show it does not draw it.
+    let head = !matches!(
+        std::env::var("VPW_VIEW").ok().as_deref(),
+        Some("overhead") | Some("cenital")
+    );
     let pixels = gpu.render_filtered(&gpu_scene, &camera, |b| {
+        if !head && b.backbox {
+            return false;
+        }
         let matches = |f: &String| {
             b.material.to_lowercase().contains(f.as_str())
                 || b.image.to_lowercase().contains(f.as_str())
