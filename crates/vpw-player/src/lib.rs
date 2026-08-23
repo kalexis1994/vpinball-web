@@ -75,6 +75,14 @@ struct CameraControls {
 
 struct Player {
     renderer: TableRenderer,
+    /// The canvas being drawn to, and the pixel ratio it was measured at.
+    ///
+    /// Owned here rather than captured by the animation-frame closure, because
+    /// it can change: leaving the game and coming back builds a new element,
+    /// and a closure holding the old one would keep measuring something that is
+    /// no longer in the document. See [`start`].
+    canvas: web_sys::HtmlCanvasElement,
+    dpr: f64,
     /// The table being played, once one is loaded.
     table: Option<Game>,
     clock: FixedStep,
@@ -94,7 +102,30 @@ struct Player {
 }
 
 impl Player {
-    fn frame(&mut self, now_ms: f64, canvas: &web_sys::HtmlCanvasElement, dpr: f64) {
+    fn frame(&mut self, now_ms: f64) {
+        let canvas = self.canvas.clone();
+        let (canvas, dpr) = (&canvas, self.dpr);
+
+        // Nothing to do while the canvas is out of the document, which is what
+        // it is the whole time the player is in the menu.
+        //
+        // Not merely a saving. The loop measures the canvas to size the
+        // backbuffer, and a detached element measures zero, so every frame
+        // spent in the menu was resizing the surface to one pixel by one and
+        // rebuilding the offscreen targets to match. And the table went on
+        // being played with nobody watching: a ball can drain while somebody
+        // reads the table list, and they come back to a game they did not lose.
+        //
+        // The clocks are held still rather than left to run, or the first frame
+        // back owes every millisecond spent in the menu and the loop tries to
+        // pay it in one go.
+        use wasm_bindgen::JsCast as _;
+        if !canvas.unchecked_ref::<web_sys::Node>().is_connected() {
+            self.last_ms = now_ms;
+            self.finished_ms = clock_ms();
+            return;
+        }
+
         // Two clocks, because they answer different questions. `now_ms` is the
         // animation frame's own timestamp: when the frame was **due**. This one
         // is when we actually got to run. The gap between them is how busy the
@@ -843,17 +874,22 @@ fn clock_ms() -> f64 {
 
 /// Starts the player on the `<canvas>` with the given id.
 ///
-/// It is **idempotent**: if there is already a player running on that canvas it
-/// does nothing. React in strict mode mounts every effect twice in development,
-/// and creating a second surface on the same canvas leaves the promise hanging
-/// forever.
+/// Calling it again is safe, and it is called again: the two cases are the
+/// same call and they are told apart by the canvas element, not by the id.
+///
+/// **The same element.** React in strict mode mounts every effect twice in
+/// development, and building a second surface on a canvas that already has one
+/// leaves the promise hanging for ever. Nothing happens.
+///
+/// **A different element.** Leaving the game for the menu unmounts the canvas
+/// and coming back builds a new one — same id, different object. A surface is
+/// bound to the element it was made from, so without noticing this the
+/// renderer carries on drawing into a canvas that is no longer in the document:
+/// the sound plays, the controls are there, and the table is a black rectangle.
+/// The renderer is pointed at the new element and everything already uploaded
+/// stays where it is, so coming back from the menu costs nothing.
 #[wasm_bindgen]
 pub async fn start(canvas_id: String) -> Result<(), JsValue> {
-    if PLAYER.with(|p| p.borrow().is_some()) {
-        log::info!("the player was already running; not starting it again");
-        return Ok(());
-    }
-
     let window = web_sys::window().ok_or_else(|| JsValue::from_str("no window object"))?;
     let document = window
         .document()
@@ -870,12 +906,49 @@ pub async fn start(canvas_id: String) -> Result<(), JsValue> {
     canvas.set_width(width);
     canvas.set_height(height);
 
+    if let Some(player) = PLAYER.with(|p| p.borrow().clone()) {
+        // `Object::is` and not a comparison of ids: the id is what they have in
+        // common, and the element is what differs.
+        let same = {
+            let running = player.borrow();
+            js_sys::Object::is(canvas.as_ref(), running.canvas.as_ref())
+        };
+        if same {
+            log::info!("the player is already on this canvas");
+            return Ok(());
+        }
+
+        {
+            let mut running = player.borrow_mut();
+            running
+                .renderer
+                .attach(wgpu::SurfaceTarget::Canvas(canvas.clone()), width, height)
+                .map_err(|e| JsValue::from_str(&e.to_string()))?;
+            running.canvas = canvas.clone();
+            running.dpr = dpr;
+            // The clock has been running while nobody was looking. Without
+            // this the first frame back owes every millisecond spent in the
+            // menu and the loop tries to pay it all at once.
+            running.last_ms = now(&window);
+            running.finished_ms = running.last_ms;
+        }
+        // Only the canvas half. The old element's listeners died with it, but
+        // the keyboard's are on `window` and are still there — connecting them
+        // again would deliver every keypress twice, and once more for every
+        // trip through the menu after that.
+        connect_pointer(&canvas, &player)?;
+        log::info!("the player moved to a new canvas ({width}x{height})");
+        return Ok(());
+    }
+
     let renderer = TableRenderer::new(wgpu::SurfaceTarget::Canvas(canvas.clone()), width, height)
         .await
         .map_err(|e| JsValue::from_str(&e.to_string()))?;
 
     let player = Rc::new(RefCell::new(Player {
         renderer,
+        canvas: canvas.clone(),
+        dpr,
         table: None,
         clock: FixedStep::default(),
         stats: FrameStats::default(),
@@ -894,13 +967,13 @@ pub async fn start(canvas_id: String) -> Result<(), JsValue> {
     // One synchronous frame before entering the loop: it avoids a blank canvas
     // until the first rAF and leaves the backbuffer at the real size the layout
     // has already resolved.
-    player.borrow_mut().frame(now(&window), &canvas, dpr);
+    player.borrow_mut().frame(now(&window));
 
     // The rAF loop: the closure reschedules itself.
     let handle: Rc<RefCell<Option<RafClosure>>> = Rc::new(RefCell::new(None));
     let scheduler = handle.clone();
     *handle.borrow_mut() = Some(Closure::wrap(Box::new(move |now_ms: f64| {
-        player.borrow_mut().frame(now_ms, &canvas, dpr);
+        player.borrow_mut().frame(now_ms);
 
         if let (Some(win), Some(cb)) = (web_sys::window(), scheduler.borrow().as_ref()) {
             let _ = win.request_animation_frame(cb.as_ref().unchecked_ref());
@@ -1009,6 +1082,23 @@ fn connect_controls(
     canvas: &web_sys::HtmlCanvasElement,
     player: &Rc<RefCell<Player>>,
 ) -> Result<(), JsValue> {
+    connect_pointer(canvas, player)?;
+    connect_keyboard(player)?;
+    Ok(())
+}
+
+/// The listeners that belong to the canvas, which is the half that has to be
+/// done again when the canvas changes.
+///
+/// Kept apart from the keyboard on purpose. These die with the element they are
+/// on, so re-attaching to a new canvas has to redo them; the keyboard's are on
+/// `window`, which outlives every canvas, and doing *those* again would leave
+/// two sets of handlers delivering every keypress to the table twice — and
+/// another set for every trip through the menu.
+fn connect_pointer(
+    canvas: &web_sys::HtmlCanvasElement,
+    player: &Rc<RefCell<Player>>,
+) -> Result<(), JsValue> {
     use web_sys::{MouseEvent, WheelEvent};
 
     let p = player.clone();
@@ -1052,8 +1142,6 @@ fn connect_controls(
     }) as Box<dyn FnMut(WheelEvent)>);
     canvas.add_event_listener_with_callback("wheel", wheel.as_ref().unchecked_ref())?;
     wheel.forget();
-
-    connect_keyboard(player)?;
     Ok(())
 }
 

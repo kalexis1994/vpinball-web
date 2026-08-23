@@ -32,6 +32,11 @@ export interface LoadStats {
 }
 
 let wasmReady: Promise<Wasm> | null = null;
+/** The wasm module and its script libraries: fetched once, whatever happens
+ * to the canvas afterwards. See {@link startPlayer}. */
+let ready: Promise<Wasm> | null = null;
+/** Resolves once the player has been started at least once. The calls below
+ * that only make sense against a running player wait on this. */
 let started: Promise<void> | null = null;
 /** Key of the loaded table, so the work is not repeated. */
 let loaded: { key: string; stats: Promise<LoadStats> } | null = null;
@@ -131,14 +136,28 @@ export async function saveMachineState(): Promise<void> {
   if (data) await writeMachineState(runningSet, data);
 }
 
-/** Starts the player on the canvas. Idempotent. */
+/**
+ * Starts the player on the canvas, or moves it there.
+ *
+ * Every call reaches `wasm.start`, which is what makes coming back from the
+ * menu work: React unmounts the canvas on the way out and builds a **new**
+ * element on the way back, and only the wasm side can see that the element
+ * changed. Memoising this away — which it used to do — left the renderer
+ * drawing into the canvas from the first visit, so the second one had sound and
+ * controls and a black rectangle where the table should be.
+ *
+ * What is memoised is the expensive half: fetching the wasm and handing over
+ * the script libraries. Those are the same whatever canvas is in front of us.
+ */
 export function startPlayer(canvasId: string): Promise<void> {
-  started ??= (async () => {
+  ready ??= (async () => {
     const wasm = await initWasm();
     await provideLibraries();
-    await wasm.start(canvasId);
+    return wasm;
   })();
-  return started;
+  const attached = ready.then((wasm) => wasm.start(canvasId));
+  started ??= attached;
+  return attached;
 }
 
 /**

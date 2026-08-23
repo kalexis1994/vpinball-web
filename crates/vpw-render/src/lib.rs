@@ -36,6 +36,14 @@ pub struct GpuContext {
     pub hdr_format: wgpu::TextureFormat,
     surface: wgpu::Surface<'static>,
     config: wgpu::SurfaceConfiguration,
+    /// Kept so another surface can be made later. See [`GpuContext::attach`].
+    ///
+    /// A surface belongs to the instance that made it, and configuring one with
+    /// a device from a different instance is not a thing wgpu supports. Letting
+    /// the instance fall out of `new` would mean the only canvas this context
+    /// can ever draw to is the one it was born with.
+    instance: wgpu::Instance,
+    adapter: wgpu::Adapter,
 }
 
 #[derive(Debug)]
@@ -174,7 +182,58 @@ impl GpuContext {
             queue,
             surface,
             config,
+            instance,
+            adapter,
         })
+    }
+
+    /// Points the context at a different canvas.
+    ///
+    /// A page that leaves the game and comes back builds a **new** canvas
+    /// element, and a surface is bound to the element it was made from — not to
+    /// its id. Without this the renderer carries on drawing, perfectly, into a
+    /// canvas that is no longer in the document: the sound plays, the controls
+    /// are there, and the table is a black rectangle. That is the bug this
+    /// exists for.
+    ///
+    /// The device, the pipelines and everything already uploaded are kept. Only
+    /// the surface is rebuilt, which is what makes coming back from the menu
+    /// cost nothing rather than costing a hundred-megabyte re-upload.
+    pub fn attach(
+        &mut self,
+        target: wgpu::SurfaceTarget<'static>,
+        width: u32,
+        height: u32,
+    ) -> Result<(), GpuInitError> {
+        let surface = self
+            .instance
+            .create_surface(target)
+            .map_err(|e| GpuInitError::Surface(e.to_string()))?;
+
+        // The format is re-read rather than assumed: it is a property of the
+        // surface, and a second canvas is not obliged to offer the same one.
+        let caps = surface.get_capabilities(&self.adapter);
+        let format = caps
+            .formats
+            .iter()
+            .copied()
+            .find(|f| f.is_srgb())
+            .unwrap_or(caps.formats[0]);
+        let view_format = format.add_srgb_suffix();
+
+        self.config.format = format;
+        self.config.view_formats = if view_format == format {
+            Vec::new()
+        } else {
+            vec![view_format]
+        };
+        self.config.alpha_mode = caps.alpha_modes[0];
+        self.config.width = width.max(1);
+        self.config.height = height.max(1);
+
+        surface.configure(&self.device, &self.config);
+        self.surface = surface;
+        Ok(())
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {

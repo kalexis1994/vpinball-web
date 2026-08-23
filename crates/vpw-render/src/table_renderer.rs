@@ -289,6 +289,31 @@ impl TableRenderer {
         self.gpu.size()
     }
 
+    /// Points the renderer at a different canvas, keeping everything else.
+    ///
+    /// See [`crate::GpuContext::attach`] for why this is needed at all. The
+    /// offscreen targets are rebuilt because they are sized to the surface, and
+    /// the camera is framed again because the new canvas may be a different
+    /// shape; the uploaded table is untouched.
+    pub fn attach(
+        &mut self,
+        target: wgpu::SurfaceTarget<'static>,
+        width: u32,
+        height: u32,
+    ) -> Result<(), crate::GpuInitError> {
+        self.gpu.attach(target, width, height)?;
+        self.post
+            .resize(&self.gpu.device, &self.gpu.queue, width, height);
+        self.pipeline.set_probes(
+            &self.gpu.device,
+            self.post.transmission_view(),
+            self.post.sampler(),
+            self.post.reflection_view(),
+        );
+        self.reframe();
+        Ok(())
+    }
+
     pub fn resize(&mut self, width: u32, height: u32) {
         if width == 0 || height == 0 || self.gpu.size() == (width, height) {
             return;
