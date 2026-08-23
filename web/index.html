@@ -2,8 +2,35 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-    <title>vpinball-web</title>
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no"
+    />
+    <title>Visual Pinball</title>
+    <meta name="description" content="Visual Pinball tables, played in the browser." />
+
+    <!--
+      The manifest and the icons are emitted by the `vpw-pwa` plugin in
+      `vite.config.ts`, which is also what knows the base path: a project site
+      on GitHub Pages lives under `/<repo>/` and every one of these URLs has to
+      carry it. `%BASE_URL%` is Vite's substitution for exactly that.
+    -->
+    <link rel="manifest" href="%BASE_URL%manifest.webmanifest" />
+    <link rel="icon" type="image/png" sizes="192x192" href="%BASE_URL%icon-192.png" />
+
+    <!--
+      iOS reads none of the manifest. It wants its own icon, its own opinion
+      about the status bar, and the old Apple-specific flag before it will let
+      the page out of Safari's chrome.
+    -->
+    <link rel="apple-touch-icon" href="%BASE_URL%apple-touch-icon.png" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="Pinball" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+
+    <!-- The colour the browser paints its own furniture, and the colour behind
+         the page while it is still starting. Both the cabinet blue. -->
+    <meta name="theme-color" content="#0b1020" />
   </head>
   <body>
     <div id="root"></div>
