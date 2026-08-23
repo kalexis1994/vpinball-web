@@ -37,6 +37,31 @@ fn table_bytes() -> Option<Vec<u8>> {
     }
 }
 
+/// One millisecond of table time, driven the way a host drives it.
+///
+/// A test is a host, and a host renders frames. Two of the script's timer
+/// events belong to a frame and not to the clock: `core.vbs` polls the ROM
+/// controller from `PinMameTimer`, whose `TimerInterval` is `-2`, and Visual
+/// Pinball fires that from `FireTimers(-2)` once a frame. A test that only
+/// calls `step` never lets the script and the board talk, so every solenoid
+/// stays where it was.
+///
+/// Sixty frames a second, so the ratio is a browser's.
+fn tick(game: &mut Game, t: usize) {
+    game.step();
+    if t % 17 == 16 {
+        game.game_sync();
+        game.new_frame();
+    }
+}
+
+/// Runs `ms` milliseconds of table time.
+fn run(game: &mut Game, ms: usize) {
+    for t in 0..ms {
+        tick(game, t);
+    }
+}
+
 /// F-14 with a coin in it and a game started.
 fn playing() -> Option<Game> {
     let bytes = table_bytes()?;
@@ -50,18 +75,12 @@ fn playing() -> Option<Game> {
         .expect("the table should load");
     game.start().expect("the script should start");
 
-    for _ in 0..4000 {
-        game.step();
-    }
+    run(&mut game, 4000);
     for (key, hold, after) in [("Digit5", 60, 2500), ("Digit1", 60, 3000)] {
         game.key(key, true);
-        for _ in 0..hold {
-            game.step();
-        }
+        run(&mut game, hold);
         game.key(key, false);
-        for _ in 0..after {
-            game.step();
-        }
+        run(&mut game, after);
     }
     Some(game)
 }
@@ -69,8 +88,8 @@ fn playing() -> Option<Game> {
 /// Runs the table and returns every distinct solenoid word it passed through.
 fn watch(game: &mut Game, steps: usize) -> Vec<u32> {
     let mut seen = vec![game.machine().solenoids_active()];
-    for _ in 0..steps {
-        game.step();
+    for t in 0..steps {
+        tick(game, t);
         let now = game.machine().solenoids_active();
         if seen.last() != Some(&now) {
             seen.push(now);
@@ -115,13 +134,9 @@ fn game_on_follows_the_game() {
 
     for (key, hold, after) in [("Digit5", 60, 2500), ("Digit1", 60, 3000)] {
         game.key(key, true);
-        for _ in 0..hold {
-            game.step();
-        }
+        run(&mut game, hold);
         game.key(key, false);
-        for _ in 0..after {
-            game.step();
-        }
+        run(&mut game, after);
     }
 
     let playing = watch(&mut game, 2000);
@@ -140,9 +155,7 @@ fn the_diverters_get_driven() {
     let Some(mut game) = playing() else { return };
     // Plunge, because the diverter is thrown for the start of a ball.
     game.key("Space", true);
-    for _ in 0..900 {
-        game.step();
-    }
+    run(&mut game, 900);
     game.key("Space", false);
 
     let states = watch(&mut game, 6000);
@@ -161,9 +174,7 @@ fn the_diverters_get_driven() {
 fn a_diverter_is_not_held_for_ever() {
     let Some(mut game) = playing() else { return };
     game.key("Space", true);
-    for _ in 0..900 {
-        game.step();
-    }
+    run(&mut game, 900);
     game.key("Space", false);
 
     let states = watch(&mut game, 8000);
@@ -190,15 +201,13 @@ fn a_diverter_is_not_held_for_ever() {
 fn the_rom_never_drives_both_sides_of_the_mux_at_once() {
     let Some(mut game) = playing() else { return };
     game.key("Space", true);
-    for _ in 0..900 {
-        game.step();
-    }
+    run(&mut game, 900);
     game.key("Space", false);
 
     let mut muxed = 0;
     let mut total = 0;
-    for _ in 0..10000 {
-        game.step();
+    for t in 0..10000 {
+        tick(&mut game, t);
         let state = game.machine().solenoids_active();
         total += 1;
         if state & (1 << 13) != 0 {
@@ -235,9 +244,7 @@ fn the_trough_still_serves_a_ball() {
         .expect("the table should load");
     game.start().expect("the script should start");
 
-    for _ in 0..4000 {
-        game.step();
-    }
+    run(&mut game, 4000);
     // Watched across the coin and the start, because serving the ball is the
     // first thing the machine does and it is over long before a ball is in play.
     let mut states = Vec::new();
@@ -295,8 +302,8 @@ fn a_flasher_comes_out_of_the_second_bank() {
         // Left running longer it eventually drains, and a drain drives the
         // trough coils for a perfectly good reason — which would make the
         // assertion below about the ball's route rather than about the mux.
-        for _ in 0..250 {
-            game.step();
+        for t in 0..250 {
+            tick(&mut game, t);
             everything |= game.machine().solenoids_active();
         }
     }

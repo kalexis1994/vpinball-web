@@ -134,11 +134,22 @@ impl Player {
             for _ in 0..ticks {
                 table.step();
             }
+            // The physics has caught up, so the script may sync with the ROM:
+            // `FireTimers(-2)` sits at exactly this point of the original's
+            // loop, right after `UpdatePhysics` (`player.cpp:1848`). This is
+            // what drives `PinMameTimer`, and it is a per-frame event — not a
+            // per-millisecond one.
+            table.game_sync();
             // Losing the ball to a tilt has to release the flippers, and the
             // `keyup` that would do it may never come.
             if table.controls.check_tilt(&mut table.engine.borrow_mut()) {
                 log::info!("tilt");
             }
+            // The new frame event, before anything is drawn and after the
+            // parts have been brought up to date — the original's order
+            // (`player.cpp:2132`). It is script work like `game_sync` above,
+            // so it is timed with the steps and not with the sync.
+            table.new_frame();
             let t1 = clock_ms();
             // And only now, once per frame, the state reaches the GPU.
             sync(table, &mut self.renderer);

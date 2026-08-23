@@ -28,13 +28,12 @@
 //! them, which is what keeps `Exit Sub` working inside a protected block.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::ast::*;
 use crate::builtins;
 use crate::error::{Control, Error, Result};
-use crate::instance::{Instance, Slot, Vars, fold, read, slot};
+use crate::instance::{Instance, MAX_NAME, NameMap, Slot, Vars, fold, fold_into, read, slot};
 use crate::object::{Host, NoHost, Object};
 use crate::ops;
 use crate::parser;
@@ -140,12 +139,19 @@ impl Object for ErrObject {
 /// A parsed and running script.
 pub struct Interpreter {
     globals: RefCell<Vars>,
-    procs: RefCell<HashMap<Box<str>, Rc<Proc>>>,
-    classes: RefCell<HashMap<Box<str>, Rc<ClassDef>>>,
+    procs: RefCell<NameMap<Rc<Proc>>>,
+    classes: RefCell<NameMap<Rc<ClassDef>>>,
     /// Names declared `Const`, which may not be assigned to.
     consts: RefCell<Vars>,
 
     frames: RefCell<Vec<Frame>>,
+    /// How much script has been run. Diagnostics only, and off the wasm build:
+    /// the question "is the interpreter slow or is the table asking for a lot"
+    /// cannot be answered without a denominator.
+    #[cfg(not(target_arch = "wasm32"))]
+    stmts: std::cell::Cell<u64>,
+    #[cfg(not(target_arch = "wasm32"))]
+    exprs: std::cell::Cell<u64>,
     /// The `With` subjects currently open, innermost last.
     with_stack: RefCell<Vec<Value>>,
     err: Rc<RefCell<ErrState>>,
@@ -171,8 +177,12 @@ impl Interpreter {
     pub fn new(host: Rc<dyn Host>) -> Self {
         Self {
             globals: RefCell::new(Vars::new()),
-            procs: RefCell::new(HashMap::new()),
-            classes: RefCell::new(HashMap::new()),
+            #[cfg(not(target_arch = "wasm32"))]
+            stmts: std::cell::Cell::new(0),
+            #[cfg(not(target_arch = "wasm32"))]
+            exprs: std::cell::Cell::new(0),
+            procs: RefCell::new(NameMap::default()),
+            classes: RefCell::new(NameMap::default()),
             consts: RefCell::new(Vars::new()),
             frames: RefCell::new(Vec::new()),
             with_stack: RefCell::new(Vec::new()),
@@ -228,7 +238,11 @@ impl Interpreter {
 
     /// Whether the script declared a procedure with this name.
     pub fn has_proc(&self, name: &str) -> bool {
-        self.procs.borrow().contains_key(fold(name).as_str())
+        let mut buf = [0u8; MAX_NAME];
+        match fold_into(name, &mut buf) {
+            Some(key) => self.procs.borrow().contains_key(key),
+            None => self.procs.borrow().contains_key(fold(name).as_str()),
+        }
     }
 
     /// Reads a script-level variable.
@@ -345,8 +359,20 @@ impl Interpreter {
         }
     }
 
+    /// Statements and expressions run since the last time this was asked.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn take_work(&self) -> (u64, u64) {
+        (self.stmts.replace(0), self.exprs.replace(0))
+    }
+
     fn lookup_proc(&self, name: &str) -> Option<Rc<Proc>> {
-        self.procs.borrow().get(fold(name).as_str()).cloned()
+        // Every call a script makes comes through here, so it folds on the
+        // stack: see [`fold_into`].
+        let mut buf = [0u8; MAX_NAME];
+        match fold_into(name, &mut buf) {
+            Some(key) => self.procs.borrow().get(key).cloned(),
+            None => self.procs.borrow().get(fold(name).as_str()).cloned(),
+        }
     }
 
     /// A method of the class whose method is running.
@@ -385,6 +411,8 @@ impl Interpreter {
     }
 
     fn run_stmt(&self, s: &Stmt) -> Result<()> {
+        #[cfg(not(target_arch = "wasm32"))]
+        self.stmts.set(self.stmts.get() + 1);
         match self.run_stmt_inner(s) {
             Ok(()) => Ok(()),
             Err(e) => {
@@ -803,6 +831,8 @@ impl Interpreter {
     // -- expressions -------------------------------------------------------
 
     pub fn eval(&self, e: &Expr) -> Result<Value> {
+        #[cfg(not(target_arch = "wasm32"))]
+        self.exprs.set(self.exprs.get() + 1);
         match e {
             Expr::Empty => Ok(Value::Empty),
             Expr::Null => Ok(Value::Null),

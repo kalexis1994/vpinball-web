@@ -34,7 +34,7 @@ pub fn slot(v: Value) -> Slot {
 /// A set of variables, looked up without regard to case.
 #[derive(Debug, Default)]
 pub struct Vars {
-    map: HashMap<Box<str>, Slot>,
+    map: NameMap<Slot>,
 }
 
 impl Vars {
@@ -43,11 +43,19 @@ impl Vars {
     }
 
     pub fn get(&self, name: &str) -> Option<&Slot> {
-        self.map.get(fold(name).as_str())
+        let mut buf = [0u8; MAX_NAME];
+        match fold_into(name, &mut buf) {
+            Some(key) => self.map.get(key),
+            None => self.map.get(fold(name).as_str()),
+        }
     }
 
     pub fn contains(&self, name: &str) -> bool {
-        self.map.contains_key(fold(name).as_str())
+        let mut buf = [0u8; MAX_NAME];
+        match fold_into(name, &mut buf) {
+            Some(key) => self.map.contains_key(key),
+            None => self.map.contains_key(fold(name).as_str()),
+        }
     }
 
     /// Declares a variable, or leaves it alone if it is already there.
@@ -85,6 +93,79 @@ impl Vars {
 /// The canonical form of a name.
 pub fn fold(name: &str) -> String {
     name.to_ascii_lowercase()
+}
+
+/// The hasher the name tables use.
+///
+/// FNV-1a, which is eight lines and no dependency. The maps it serves are all
+/// keyed by an identifier out of a table's script — `nr`, `FadingLevel`,
+/// `NFadeL` — and they are looked up more often than anything else in the
+/// interpreter: nearly nine hundred thousand expressions are evaluated for
+/// every five seconds of F-14, and most of them reach a variable by name.
+///
+/// The standard library's default is SipHash-1-3, which is chosen to make hash
+/// collisions unforgeable by an attacker who controls the keys. That is the
+/// right default for a map holding user input off a network and the wrong one
+/// here: the keys are identifiers the table's author wrote, the map lives for
+/// as long as the table is open, and the guarantee is being paid for on every
+/// variable a script mentions. FNV has no such guarantee and is several times
+/// faster on keys this short.
+#[derive(Default, Clone, Copy)]
+pub struct NameHasher(u64);
+
+impl std::hash::Hasher for NameHasher {
+    fn write(&mut self, bytes: &[u8]) {
+        // 1469598103934665603 and 1099511628211 are FNV-1a's 64-bit offset
+        // basis and prime.
+        let mut hash = if self.0 == 0 { 0xcbf2_9ce4_8422_2325 } else { self.0 };
+        for &byte in bytes {
+            hash ^= u64::from(byte);
+            hash = hash.wrapping_mul(0x100_0000_01b3);
+        }
+        self.0 = hash;
+    }
+
+    fn finish(&self) -> u64 {
+        self.0
+    }
+}
+
+/// [`NameHasher`], as a `HashMap` needs it.
+pub type Names = std::hash::BuildHasherDefault<NameHasher>;
+
+/// A map keyed by a script identifier.
+pub type NameMap<V> = HashMap<Box<str>, V, Names>;
+
+/// The longest name that folds on the stack.
+///
+/// Sixty-four bytes. VBScript's own limit for an identifier is 255, so this is
+/// not a rule about the language; it is the point past which a name is rare
+/// enough that an allocation does not matter. Nothing in `core.vbs` or in any
+/// table script tried comes near it.
+pub const MAX_NAME: usize = 64;
+
+/// [`fold`], into a caller's buffer instead of onto the heap.
+///
+/// Returns `None` for a name that will not fit or is not ASCII, so the caller
+/// can fall back to [`fold`] — never a truncated name, which would silently
+/// become a *different* variable.
+///
+/// This exists because [`Vars::get`] is the single hottest thing in the
+/// interpreter. Every variable a script mentions is looked up by name, and
+/// looking it up means folding its case first; doing that with `fold` puts a
+/// `String` on the heap and takes it off again for every `nr` and every
+/// `FadingLevel` in a table's script. F-14 calls one two-line subroutine
+/// ninety-four times every five milliseconds, so those are hundreds of
+/// thousands of allocations a second, all of them for a key that is dead as
+/// soon as the hash is computed.
+pub fn fold_into<'a>(name: &str, buf: &'a mut [u8; MAX_NAME]) -> Option<&'a str> {
+    let n = name.len();
+    if n > MAX_NAME || !name.is_ascii() {
+        return None;
+    }
+    buf[..n].copy_from_slice(name.as_bytes());
+    buf[..n].make_ascii_lowercase();
+    std::str::from_utf8(&buf[..n]).ok()
 }
 
 /// A live instance of a `Class ... End Class`.

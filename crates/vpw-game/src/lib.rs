@@ -168,6 +168,37 @@ const SLINGSHOT: &str = "Slingshot";
 const DROPPED: &str = "Dropped";
 const RAISED: &str = "Raised";
 
+/// Where a millisecond of table time actually goes.
+///
+/// Off the wasm build entirely: `Instant` is not implemented there, and a
+/// profiler that panics in the browser is worse than none. On a desktop it is
+/// four clock reads per tick, which is far below the noise it is measuring.
+///
+/// It exists because the honest answer to "why is it slow" is almost never the
+/// one you would guess. The table here swings between three and thirteen times
+/// real time with the same number of script handlers running in each window,
+/// and no amount of reading the code says which of the four phases is the one
+/// that changed.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Default, Clone, Copy, Debug)]
+pub struct Profile {
+    /// Nanoseconds in the physics engine.
+    pub physics_ns: u64,
+    /// Nanoseconds running the ROM and taking its audio.
+    pub board_ns: u64,
+    /// Nanoseconds dispatching collision events into the script.
+    pub events_ns: u64,
+    /// Nanoseconds in the script's timers.
+    pub timers_ns: u64,
+    /// How many ticks these totals cover.
+    pub ticks: u64,
+    /// How many timers the scan looked at, summed over every tick. This is the
+    /// cost of *looking*, and it is paid whether or not anything is due.
+    pub timers_scanned: u64,
+    /// How many `_Timer` handlers actually ran. The cost of *doing*.
+    pub timers_fired: u64,
+}
+
 /// A table, loaded and playable.
 pub struct Game {
     /// The simulation. Shared because the script's objects write into it.
@@ -187,6 +218,9 @@ pub struct Game {
     /// What each kicker was holding last time the record looked, so a take or
     /// a release is an edge rather than a state repeated every sample.
     held_by_kicker: RefCell<HashMap<usize, bool>>,
+    /// Where the time goes, for a host that asks. See [`Profile`].
+    #[cfg(not(target_arch = "wasm32"))]
+    profile: Profile,
 }
 
 /// The part of the game the script's objects reach.
@@ -331,6 +365,8 @@ impl Game {
             fired: Cell::new(0),
             started: false,
             held_by_kicker: RefCell::new(HashMap::new()),
+            #[cfg(not(target_arch = "wasm32"))]
+            profile: Profile::default(),
         };
         game.load_script(&vpx.gamedata.code.string)?;
         game.arm_hit_reporting();
@@ -478,7 +514,14 @@ impl Game {
 
     /// Advances one millisecond of table time.
     pub fn step(&mut self) {
+        #[cfg(not(target_arch = "wasm32"))]
+        let mut mark = std::time::Instant::now();
         self.engine.borrow_mut().step();
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.profile.physics_ns += mark.elapsed().as_nanos() as u64;
+            mark = std::time::Instant::now();
+        }
         self.clock_ms += STEP_MS;
         self.state.clock_ms.set(self.clock_ms);
 
@@ -495,10 +538,45 @@ impl Game {
             self.state.audio.borrow_mut().mixer.push_board(&board);
         }
 
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.profile.board_ns += mark.elapsed().as_nanos() as u64;
+            mark = std::time::Instant::now();
+        }
+
         self.dispatch_events();
         self.announce_targets();
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.profile.events_ns += mark.elapsed().as_nanos() as u64;
+            mark = std::time::Instant::now();
+        }
         self.run_timers();
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.profile.timers_ns += mark.elapsed().as_nanos() as u64;
+            self.profile.ticks += 1;
+        }
         self.record();
+    }
+
+    /// Every timer the script has armed, with its interval in milliseconds.
+    ///
+    /// A table that has quietly left a hundred parts polling every tick looks
+    /// exactly like a slow port from the outside, and this is the difference.
+    pub fn armed_timers(&self) -> Vec<(Rc<str>, f64)> {
+        self.state
+            .items
+            .iter()
+            .filter(|i| i.timer.enabled.get())
+            .map(|i| (i.name.clone(), i.timer.interval.get()))
+            .collect()
+    }
+
+    /// Where the time has gone since this was last called, and resets it.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn take_profile(&mut self) -> Profile {
+        std::mem::take(&mut self.profile)
     }
 
     /// Adds this millisecond to the rolling record, if one is being kept.
@@ -792,25 +870,106 @@ impl Game {
     /// frame, so an animation is faster on a faster machine.
     fn run_timers(&mut self) {
         let now = self.clock_ms;
-        let due: Vec<Rc<Item>> = self
-            .state
-            .items
+        let armed = self.state.items.armed();
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.profile.timers_scanned += armed.len() as u64;
+        }
+        let due: Vec<Rc<Item>> = armed
             .iter()
-            .filter(|i| i.timer.enabled.get())
+            // `HitTimer::Update` opens with `if (m_interval >= 0 && ...)`: a
+            // negative interval is a frame event and never runs off the clock.
+            // See [`Game::new_frame`] and [`Game::game_sync`].
+            .filter(|i| i.timer.enabled.get() && i.timer.interval.get() >= 0.0)
             .filter(|i| {
-                // A timer that was just switched on has `f64::MIN` and fires on
-                // the next tick, which is what the original does.
                 let at = i.timer.due_ms.get();
+                if at.is_nan() {
+                    // Switched on but never scheduled. The original gives it
+                    // its first due time an interval from now rather than
+                    // firing it straight away; this is the only code that knows
+                    // what "now" is, so it is done here.
+                    i.timer.due_ms.set(now + i.timer.interval.get().max(STEP_MS));
+                    return false;
+                }
                 at <= now
             })
             .cloned()
             .collect();
+        // Before any handler runs: a script that arms a timer writes through
+        // the very list being borrowed.
+        drop(armed);
 
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.profile.timers_fired += due.len() as u64;
+        }
         for item in due {
             let interval = item.timer.interval.get().max(STEP_MS);
-            item.timer.due_ms.set(now + interval);
+            let scheduled = item.timer.due_ms.get();
+            self.fire(&item.name, TIMER, None);
+            // Advance from when it was *due*, not from now. Rebasing on the
+            // current tick makes a timer that runs late drift later still, and
+            // a hundred-millisecond animation ends up taking longer than the
+            // table meant it to. `hittimer.cpp:36`.
+            //
+            // Unless the handler rescheduled the timer itself, in which case
+            // its choice stands: the original guards this with the same
+            // comparison, for the `Enabled = False : Interval = 1000 :
+            // Enabled = True` case.
+            if item.timer.due_ms.get() == scheduled {
+                let mut next = scheduled + interval;
+                while next <= now {
+                    next += interval;
+                }
+                item.timer.due_ms.set(next);
+            }
+        }
+    }
+
+    /// The two timer events that belong to a rendered frame rather than to the
+    /// clock. `Player::FireTimers`, `player.cpp:1309`.
+    fn fire_frame_timers(&mut self, interval: f64) {
+        let armed = self.state.items.armed();
+        let due: Vec<Rc<Item>> = armed
+            .iter()
+            .filter(|i| i.timer.enabled.get() && i.timer.interval.get() == interval)
+            .cloned()
+            .collect();
+        drop(armed);
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.profile.timers_fired += due.len() as u64;
+        }
+        for item in due {
             self.fire(&item.name, TIMER, None);
         }
+    }
+
+    /// A new frame is about to be drawn: `TimerInterval = -1`.
+    ///
+    /// `HitTimer::OnNewFrame`, reached from `Player::PrepareFrame` after the
+    /// parts have been animated and before anything is drawn
+    /// (`player.cpp:2132`).
+    pub fn new_frame(&mut self) {
+        self.fire_frame_timers(-1.0);
+    }
+
+    /// The physics has caught up with the wall clock: `TimerInterval = -2`.
+    ///
+    /// `HitTimer::OnGameSync`, reached from the main loop immediately after
+    /// `UpdatePhysics` and commented there as "trigger script sync event (to
+    /// sync solenoids back)" (`player.cpp:1848`).
+    ///
+    /// This is the one that matters for a ROM table. `core.vbs` arms
+    /// `PinMameTimer` at `-2` and polls the controller from it — lamps,
+    /// solenoids, switches, the score display, all of it — so how often this is
+    /// called *is* how often the machine and the table talk to each other.
+    /// Calling it every millisecond, as this port did until the interval was
+    /// read properly, does that sixteen times more often than Visual Pinball
+    /// does, for sixteen times the cost and no more fidelity: the board it is
+    /// polling has not changed in between.
+    pub fn game_sync(&mut self) {
+        self.fire_frame_timers(-2.0);
     }
 
     /// A key went down or came up. Also hands it to the script, which is what
@@ -890,6 +1049,18 @@ impl Game {
     /// Anything the script put in front of the player with `MsgBox`.
     pub fn take_messages(&self) -> Vec<String> {
         std::mem::take(&mut self.state.messages.borrow_mut())
+    }
+
+    /// How many sounds and messages are waiting to be taken.
+    ///
+    /// Both queues only empty when a host asks for them. A host that never
+    /// does keeps every sound name the script ever uttered, which is a slow
+    /// leak and invisible without a way to look at it.
+    pub fn pending(&self) -> (usize, usize) {
+        (
+            self.state.sounds.borrow().len(),
+            self.state.messages.borrow().len(),
+        )
     }
 
     /// The script, for a host that wants to call a handler itself.

@@ -133,9 +133,7 @@ fn the_table_starts_its_own_rom() {
     assert_eq!(game.machine().game_name(), Some(SET));
 
     // Five seconds of table time, which is also five seconds of board time.
-    for _ in 0..5000 {
-        game.step();
-    }
+    run(&mut game, 5000);
 
     // The script polls the board from a timer, so by now it has seen lamps
     // change and pushed them onto the table. What is being tested is the round
@@ -153,16 +151,38 @@ fn the_table_starts_its_own_rom() {
     );
 }
 
+/// One millisecond of table time, driven the way a host drives it.
+///
+/// A test is a host, and a host does two things the physics loop does not: it
+/// renders frames, and two of the script's timer events belong to a frame
+/// rather than to the clock. `PinMameTimer` — the one `core.vbs` polls the ROM
+/// from — is `TimerInterval = -2`, which Visual Pinball fires once per frame
+/// from `FireTimers(-2)` and not once per millisecond. A test that only calls
+/// `step` runs a table whose script never talks to the board, which looks
+/// exactly like a broken controller and is really a host that forgot to draw.
+///
+/// Sixty frames a second, so the ratio is a browser's.
+fn tick(game: &mut Game, t: u32) {
+    game.step();
+    if t % 17 == 16 {
+        game.game_sync();
+        game.new_frame();
+    }
+}
+
+/// Runs `ms` milliseconds of table time.
+fn run(game: &mut Game, ms: u32) {
+    for t in 0..ms {
+        tick(game, t);
+    }
+}
+
 /// Presses a key for `down_ms` and then lets the table run for `after_ms`.
 fn press(game: &mut Game, code: &str, down_ms: u32, after_ms: u32) {
     game.key(code, true);
-    for _ in 0..down_ms {
-        game.step();
-    }
+    run(game, down_ms);
     game.key(code, false);
-    for _ in 0..after_ms {
-        game.step();
-    }
+    run(game, after_ms);
 }
 
 #[test]
@@ -172,9 +192,7 @@ fn a_coin_buys_a_game_and_the_machine_serves_a_ball() {
     };
 
     // Settle into attract mode.
-    for _ in 0..4000 {
-        game.step();
-    }
+    run(&mut game, 4000);
 
     // The trough has to report its balls before any of this means anything: a
     // machine that thinks it is empty will not start a game. It comes from
@@ -228,9 +246,7 @@ fn a_coin_buys_a_game_and_the_machine_serves_a_ball() {
 
     // The ball stays: a machine that served one and then lost track of it goes
     // into a ball search and ends the game.
-    for _ in 0..5000 {
-        game.step();
-    }
+    run(&mut game, 5000);
     assert!(
         game.machine().displays().1.contains("bALL"),
         "the game ended: {:?}",
@@ -251,9 +267,7 @@ fn a_full_plunge_carries_the_ball_up_the_lane() {
         return;
     };
 
-    for _ in 0..4000 {
-        game.step();
-    }
+    run(&mut game, 4000);
     press(&mut game, "Digit5", 60, 2500);
     press(&mut game, "Digit1", 60, 3000);
     assert_eq!(
@@ -272,8 +286,8 @@ fn a_full_plunge_carries_the_ball_up_the_lane() {
     press(&mut game, "Space", 900, 0);
 
     let (mut highest, mut tallest) = (f32::MAX, f32::MIN);
-    for _ in 0..1200 {
-        game.step();
+    for t in 0..1200 {
+        tick(&mut game, t);
         let Some(ball) = game.engine.borrow().balls.first().map(|b| b.pos) else {
             break;
         };
@@ -314,9 +328,7 @@ fn the_saucer_catches_the_ball_and_the_machine_puts_it_into_play() {
         return;
     };
 
-    for _ in 0..4000 {
-        game.step();
-    }
+    run(&mut game, 4000);
     press(&mut game, "Digit5", 60, 2500);
     press(&mut game, "Digit1", 60, 3000);
     // Take the served ball out of the way: this test is about one saucer and
@@ -335,7 +347,7 @@ fn the_saucer_catches_the_ball_and_the_machine_puts_it_into_play() {
     let mut caught_at = None;
     let mut fastest_after: f32 = 0.0;
     for t in 0..8000 {
-        game.step();
+        tick(&mut game, t);
         if caught_at.is_none() && game.take_sounds().iter().any(|s| s == "popper_ball") {
             caught_at = Some(t);
         }

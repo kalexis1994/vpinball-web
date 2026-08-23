@@ -52,18 +52,12 @@ fn playing() -> Option<Game> {
     // Let the board finish booting, then a coin and the start button. The holds
     // are long enough for the ROM to see the switch close on one of its own
     // sweeps, and the waits long enough for it to act on it.
-    for _ in 0..4000 {
-        game.step();
-    }
+    run(&mut game, 4000);
     for (key, hold, after) in [("Digit5", 60, 2500), ("Digit1", 60, 3000)] {
         game.key(key, true);
-        for _ in 0..hold {
-            game.step();
-        }
+        run(&mut game, hold);
         game.key(key, false);
-        for _ in 0..after {
-            game.step();
-        }
+        run(&mut game, after);
     }
     Some(game)
 }
@@ -71,6 +65,34 @@ fn playing() -> Option<Game> {
 /// A frame's worth of steps, at sixty frames a second against a kilohertz
 /// physics loop.
 const FRAME: usize = 16;
+
+/// The end of a rendered frame.
+///
+/// Two of the script's timer events belong to a frame and not to the clock:
+/// `core.vbs` polls the ROM controller from `PinMameTimer`, whose
+/// `TimerInterval` is `-2`, and Visual Pinball fires that once a frame from
+/// `FireTimers(-2)`. A test that only calls `step` runs a table whose script
+/// never talks to its board — the flippers move but nothing plays their sound,
+/// because the callback that would is on the far side of that poll.
+fn frame(game: &mut Game) {
+    game.game_sync();
+    game.new_frame();
+}
+
+/// One millisecond of table time, with a frame every sixteen of them.
+fn tick(game: &mut Game, t: usize) {
+    game.step();
+    if t % FRAME == FRAME - 1 {
+        frame(game);
+    }
+}
+
+/// Runs `ms` milliseconds of table time, rendering as it goes.
+fn run(game: &mut Game, ms: usize) {
+    for t in 0..ms {
+        tick(game, t);
+    }
+}
 
 /// Which lights the script has on, by name.
 fn lit(game: &Game) -> Vec<Rc<str>> {
@@ -102,6 +124,7 @@ fn the_general_illumination_holds_still() {
         for _ in 0..FRAME {
             game.step();
         }
+        frame(&mut game);
         let now = lit(&game);
         if let Some(before) = &previous {
             let moved = now
@@ -136,6 +159,7 @@ fn the_inserts_still_flash() {
         for _ in 0..FRAME {
             game.step();
         }
+        frame(&mut game);
         let now = lit(&game);
         if previous.as_ref().is_some_and(|before| &now != before) {
             moved += 1;
@@ -164,6 +188,7 @@ fn nothing_blinks_at_frame_rate() {
         for _ in 0..FRAME {
             game.step();
         }
+        frame(&mut game);
         let on = lit(&game);
         for item in game.items().iter() {
             if matches!(item.kind, Kind::Light) {
@@ -207,8 +232,8 @@ fn pressing_a_flipper_button_sounds_the_flipper() {
     for (key, up) in [("KeyZ", "left"), ("KeyM", "right")] {
         game.key(key, true);
         let mut heard = false;
-        for _ in 0..400 {
-            game.step();
+        for t in 0..400 {
+            tick(&mut game, t);
             if game
                 .take_sounds()
                 .iter()
@@ -222,8 +247,8 @@ fn pressing_a_flipper_button_sounds_the_flipper() {
 
         game.key(key, false);
         let mut down = false;
-        for _ in 0..400 {
-            game.step();
+        for t in 0..400 {
+            tick(&mut game, t);
             if game
                 .take_sounds()
                 .iter()
@@ -250,8 +275,8 @@ fn the_score_row_says_ball_the_only_way_seven_segments_can() {
     // strokes it is sent, and a machine on the floor says "bALL 1" too.
     let Some(mut game) = playing() else { return };
 
-    for _ in 0..40000 {
-        game.step();
+    for t in 0..40000 {
+        tick(&mut game, t);
         let m = game.machine();
         let (_, lower) = m.displays();
         if !lower.contains("ALL") {

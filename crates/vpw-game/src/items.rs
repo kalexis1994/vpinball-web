@@ -173,10 +173,37 @@ impl Default for Visual {
 #[derive(Debug, Default)]
 pub struct Timer {
     pub enabled: Cell<bool>,
-    /// In milliseconds. Zero or less means "every tick", as in the original.
+    /// In milliseconds — or, if negative, not an interval at all.
+    ///
+    /// `-1` and `-2` are the two *frame* events, not intervals: see
+    /// [`clamp_interval`] and `Player::FireTimers`. A table sets `-2` on the
+    /// timer that polls the ROM controller, and reading that as "every
+    /// millisecond" runs it sixteen times too often.
     pub interval: Cell<f64>,
-    /// Table time at which it is next due.
+    /// Table time at which it is next due, or `NaN` for a timer that has just
+    /// been switched on and has not been given its first due time yet.
     pub due_ms: Cell<f64>,
+}
+
+/// `TimerInterval`, as the original stores it. `hittimer.cpp:16`:
+///
+/// ```cpp
+/// m_interval = intervalMs >= 0 ? max(intervalMs, MAX_TIMER_MSEC_INTERVAL) : max(-2, intervalMs);
+/// ```
+///
+/// Two separate things happen here. A non-negative interval is floored at one
+/// millisecond, because the update loop runs at a thousand hertz and asking for
+/// less is asking for something the loop cannot give. A negative one is *not*
+/// an interval: `-1` means "once per rendered frame" and `-2` means "once per
+/// frame, after the physics has caught up", and everything below `-2` is
+/// clamped up to `-2`. `Update` ignores negative intervals entirely.
+///
+/// The truncation is not a rounding choice: `TimerInterval` is a `long` in
+/// `vpinball.idl`, so a script that writes `1.5` has already written `1` before
+/// the timer ever sees it.
+pub fn clamp_interval(ms: f64) -> f64 {
+    let ms = ms.trunc();
+    if ms >= 0.0 { ms.max(1.0) } else { ms.max(-2.0) }
 }
 
 /// One part of the table.
@@ -196,6 +223,9 @@ pub struct Item {
     size: Vec3,
     visual: Visual,
     engine: Rc<RefCell<Engine>>,
+    /// Shared by every item: set whenever any timer is armed, disarmed or
+    /// given a new interval. See [`Items::armed`].
+    timers_changed: Rc<Cell<bool>>,
 }
 
 impl Item {
@@ -405,15 +435,29 @@ impl Item {
             "isdropped" => self.set_dropped(value.to_bool()?),
             "enabled" if self.kind == Kind::Timer => {
                 self.timer.enabled.set(value.to_bool()?);
-                self.timer.due_ms.set(f64::MIN);
+                self.timer.due_ms.set(f64::NAN);
+                self.timers_changed.set(true);
             }
             "timerenabled" => {
                 self.timer.enabled.set(value.to_bool()?);
-                // Restarting the timer restarts its countdown, which is what a
-                // table expects when it toggles one to reset an animation.
-                self.timer.due_ms.set(f64::MIN);
+                // Switching a timer on restarts its countdown: the original
+                // runs the whole of `SetInterval` here, and that sets the next
+                // fire to *now plus one interval*
+                // (`Player::TimerStateChange`, `player.cpp:1361`). It does not
+                // fire on the next tick — a table that arms a one-second timer
+                // gets it in a second, not immediately. `NaN` is that "not
+                // scheduled yet" state; the loop, which is the only code that
+                // knows what time it is, fills it in.
+                self.timer.due_ms.set(f64::NAN);
+                self.timers_changed.set(true);
             }
-            "timerinterval" | "interval" => self.timer.interval.set(value.to_number()?),
+            "timerinterval" | "interval" => {
+                self.timer.interval.set(clamp_interval(value.to_number()?));
+                // The interval decides *which* list this timer belongs to —
+                // the clock's, the frame's, or neither — so a change to it
+                // invalidates the cache just as arming it does.
+                self.timers_changed.set(true);
+            }
             "rotx" => set_placement(&v.rot_and_tra, 0, value.to_number()?),
             "roty" => set_placement(&v.rot_and_tra, 1, value.to_number()?),
             "rotz" => set_placement(&v.rot_and_tra, 2, value.to_number()?),
@@ -811,6 +855,16 @@ pub struct Items {
     by_name: HashMap<Box<str>, Rc<Item>>,
     /// In game-item order, so an index can go back to a name.
     all: Vec<Rc<Item>>,
+    /// The items with a timer switched on, and whether that list is stale.
+    ///
+    /// The loop asks for this a thousand times a second and a table has a
+    /// handful of timers among hundreds of parts — F-14 arms six of seven
+    /// hundred and forty-one. Walking them all to find the six is most of what
+    /// the timer phase costs, and it is pure searching: the answer only changes
+    /// when a script arms or disarms something, which happens a few times a
+    /// game. So the answer is kept and the writes say when it is stale.
+    armed: RefCell<Vec<Rc<Item>>>,
+    dirty: Rc<Cell<bool>>,
 }
 
 impl Items {
@@ -820,6 +874,10 @@ impl Items {
         collision: &vpw_table::physics::Collision,
         engine: Rc<RefCell<Engine>>,
     ) -> Self {
+        // Shared by every item built below, so that any of them can mark the
+        // armed-timer list stale without knowing anything about the others.
+        let dirty = Rc::new(Cell::new(true));
+
         // `physics::triggers` walks the game items in order and keeps the
         // enabled ones, so the n-th trigger it produced is the n-th enabled
         // trigger in the file. That is the only way back to a name.
@@ -872,11 +930,33 @@ impl Items {
                 size: item_size(item),
                 visual,
                 engine: engine.clone(),
+                timers_changed: dirty.clone(),
             });
             by_name.insert(name.to_ascii_lowercase().into_boxed_str(), entry.clone());
             all.push(entry);
         }
-        Self { by_name, all }
+        Self {
+            by_name,
+            all,
+            armed: RefCell::new(Vec::new()),
+            // Nothing has been collected yet, so the empty list is stale.
+            dirty,
+        }
+    }
+
+    /// The items with a timer switched on.
+    ///
+    /// Rebuilt only when something has changed it since the last call; see the
+    /// field. The caller gets a borrow, so it must copy out what it needs
+    /// before running any script — a handler is free to arm another timer, and
+    /// that writes through this same list.
+    pub fn armed(&self) -> std::cell::Ref<'_, Vec<Rc<Item>>> {
+        if self.dirty.replace(false) {
+            let mut armed = self.armed.borrow_mut();
+            armed.clear();
+            armed.extend(self.all.iter().filter(|i| i.timer.enabled.get()).cloned());
+        }
+        self.armed.borrow()
     }
 
     pub fn get(&self, name: &str) -> Option<Rc<Item>> {
@@ -1000,11 +1080,11 @@ fn item_timer(item: &vpin::vpx::gameitem::GameItemEnum) -> Timer {
     };
     Timer {
         enabled: Cell::new(data.is_enabled),
-        interval: Cell::new(f64::from(data.interval)),
-        // `f64::MIN` means "due on the next tick", so a timer that was saved
-        // switched on fires as soon as the table starts rather than one
-        // interval later.
-        due_ms: Cell::new(f64::MIN),
+        interval: Cell::new(clamp_interval(f64::from(data.interval))),
+        // Unscheduled, the same as one the script has just switched on: the
+        // original builds a `HitTimer` by calling `SetInterval`, so a timer
+        // saved switched on is due one interval after the table starts.
+        due_ms: Cell::new(f64::NAN),
     }
 }
 
