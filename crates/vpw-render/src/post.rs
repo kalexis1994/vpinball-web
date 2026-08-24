@@ -172,9 +172,10 @@ pub struct Post {
 impl Post {
     /// How strongly the bloom is added back.
     ///
-    /// The original takes this from the table (`m_bloom_strength`) and defaults
-    /// it to 1.8. Tables that set their own are rare, and we do not read the
-    /// field yet.
+    /// What the original defaults `m_bloom_strength` to. Only a default: the
+    /// table's own value is read and used (`vpw_table::geometry::Lighting`),
+    /// and it is not the rarity this comment used to claim — the one table this
+    /// was first noticed on asks for 0.3, a sixth of it.
     const DEFAULT_STRENGTH: f32 = 1.8;
 
     pub fn new(

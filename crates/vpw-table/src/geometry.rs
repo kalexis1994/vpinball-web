@@ -342,6 +342,15 @@ pub struct Lighting {
     pub env_scale: f32,
     /// Scene exposure, which feeds into tone mapping.
     pub exposure: f32,
+    /// How strongly the bloom is added back, from the table's own field.
+    ///
+    /// Worth reading rather than assuming, and the assumption was expensive:
+    /// the default is 1.8 and a table that wants its lights crisp sets its own,
+    /// so a renderer that hardcodes the default turns every lit insert on such
+    /// a table into a soft blown-out blob. A modern table's lamps run to an
+    /// intensity of two hundred, which is bright by design and is meant to be
+    /// bright *there*, not smeared over its neighbours.
+    pub bloom_strength: f32,
     /// How strongly the playfield mirrors what stands on it.
     ///
     /// Visual Pinball starts every part's own strength from this table-wide
@@ -649,6 +658,7 @@ fn lighting(vpx: &VPX) -> Lighting {
         env_scale: g.env_emission_scale,
         // Tables older than 10.8 do not carry the field; the neutral value is 1.
         exposure: g.exposure.unwrap_or(1.0),
+        bloom_strength: g.bloom_strength,
         reflection_strength: g.playfield_reflection_strength,
     }
 }

@@ -189,6 +189,20 @@ fn main() {
     write_wav("table.wav", &wav, vpw_game::AUDIO_RATE);
     println!("  wrote table.wav");
 
+    // What the game has lit, by name, for a renderer to photograph. Numbers
+    // about lamps have been agreeing with each other all day while the picture
+    // stayed dark, so the picture is the thing to look at.
+    if let Ok(path) = std::env::var("VPW_DUMP_LIGHTS") {
+        let mut out = String::new();
+        for item in game.items().iter() {
+            if item.kind == vpw_game::items::Kind::Light {
+                out.push_str(&format!("{}\t{:.4}\n", item.name, item.light_level()));
+            }
+        }
+        std::fs::write(&path, out).expect("could not write the light dump");
+        println!("  wrote {path}");
+    }
+
     let (dots, w, h) = game.machine().dmd();
     if !dots.is_empty() {
         println!("\nthe display says:");

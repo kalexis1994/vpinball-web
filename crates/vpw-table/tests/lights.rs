@@ -60,19 +60,30 @@ fn blinking_is_treated_as_on() {
 }
 
 #[test]
-fn the_intensity_carries_the_originals_factor() {
-    // `light.cpp:776`: lightColor_intensity.w = m_currentIntensity * 0.02f
+fn the_halo_carries_the_whole_intensity() {
+    // `light.cpp:798`: lightColor_intensity.w = m_currentIntensity
     //
-    // Without this factor every light contributes fifty times too much. Measured
-    // on F-14: the mean luminance went from 43 to 111 and 782 saturated pixels
-    // showed up where there should have been none.
+    // The `* 0.02f` twenty-two lines above it is the **bulb mesh**, a different
+    // draw of a different mesh (`light.cpp:776`), and there is no bulb mesh
+    // here. Applying it to the halo divides every lamp on a table by fifty,
+    // and the way that fails is not "dim": a bulb halo multiplies what is under
+    // it by one plus its contribution, so at a fiftieth the multiplier is one
+    // and a lit insert is pixel-for-pixel identical to an unlit one.
+    //
+    // This test used to assert the opposite, on a measurement of F-14 whose
+    // mean luminance went from 43 to 111 with the factor removed. That
+    // measurement was real and its conclusion was wrong: the bloom was pinned
+    // at the engine default of 1.8 instead of the strength the table asks for,
+    // so the light was being spread over the table rather than staying where
+    // it was. Two bugs, and each one made the other look like the fix.
     let l = build(&light(1.0, 10.0), 0.0).unwrap();
     assert!(
-        (l.intensity - 10.0 * INTENSITY_FACTOR).abs() < 1e-6,
-        "it gave {} and {} was expected",
-        l.intensity,
-        10.0 * INTENSITY_FACTOR
+        (l.intensity - 10.0).abs() < 1e-6,
+        "it gave {} and 10 was expected",
+        l.intensity
     );
+    // And the factor still exists, for the draw it belongs to.
+    assert!(INTENSITY_FACTOR > 0.0);
 }
 
 #[test]

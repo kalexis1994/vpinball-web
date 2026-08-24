@@ -352,6 +352,11 @@ impl TableRenderer {
         );
         self.post
             .set_exposure(&self.gpu.queue, scene.lighting.exposure);
+        // The table's own bloom, not the default. A table whose lamps run to an
+        // intensity of two hundred asks for very little of it, and giving it
+        // the default anyway smears every lit insert over its neighbours.
+        self.post
+            .set_strength(&self.gpu.queue, scene.lighting.bloom_strength);
 
         let frame = self.gpu.acquire()?;
         let Some(frame) = frame else { return Ok(()) };

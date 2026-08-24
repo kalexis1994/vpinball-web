@@ -19,6 +19,28 @@ fn main() {
     let read_time = t0.elapsed();
 
     let t1 = std::time::Instant::now();
+    if std::env::var("VPW_RAW_LIGHTS").is_ok() {
+        use vpin::vpx::gameitem::GameItemEnum;
+        let mut vals: Vec<(String, f32, f32, f32, bool)> = Vec::new();
+        for item in &vpx.gameitems {
+            if let GameItemEnum::Light(l) = item {
+                vals.push((
+                    l.name.clone(),
+                    l.intensity,
+                    l.falloff_radius,
+                    l.bulb_modulate_vs_add,
+                    l.is_bulb_light,
+                ));
+            }
+        }
+        vals.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+        println!("{} lights in the file", vals.len());
+        for (n, i, f, m, b) in vals.iter().take(3).chain(vals.iter().rev().take(3)) {
+            println!("  {n:<16} intensity {i:>8.2}  falloff {f:>6.1}  modulate {m:.4}  bulb {b}");
+        }
+        let bulbs = vals.iter().filter(|v| v.4).count();
+        println!("  bulb lights {bulbs} of {}", vals.len());
+    }
     let mut scene = vpw_table::geometry::extract(&vpx);
     // VPW_LIT=1 turns every lamp on. A table's lamps belong to the game, and
     // without a ROM running almost none of them are lit — which is right, and
@@ -35,6 +57,94 @@ fn main() {
             light.state = 1.0;
         }
     }
+    // VPW_LIGHTS=<file> takes the lamp states from a game that actually ran,
+    // one `name<TAB>level` per line, which is what `vpw-game`'s `table`
+    // example writes. Photographing what the ROM is doing is the only way to
+    // see what a player sees; a table with every lamp forced on and a table
+    // with none look equally unlike it.
+    if let Ok(path) = std::env::var("VPW_LIGHTS") {
+        let text = std::fs::read_to_string(&path).expect("could not read the light dump");
+        let mut levels = std::collections::HashMap::new();
+        for line in text.lines() {
+            if let Some((name, level)) = line.split_once('\t') {
+                levels.insert(
+                    name.to_ascii_lowercase(),
+                    level.parse::<f32>().unwrap_or(0.0),
+                );
+            }
+        }
+        let (mut found, mut lit) = (0, 0);
+        for light in &mut scene.lights {
+            if let Some(&level) = levels.get(&light.name.to_ascii_lowercase()) {
+                found += 1;
+                light.state = level;
+                if level > 0.0 {
+                    lit += 1;
+                }
+            }
+        }
+        println!(
+            "lights: {found} of {} named in the dump, {lit} lit",
+            scene.lights.len()
+        );
+    }
+    if std::env::var("VPW_LIGHT_STATS").is_ok() {
+        let n = scene.lights.len().max(1);
+        let mean = |f: fn(&vpw_table::light::Light) -> f32| {
+            scene.lights.iter().map(f).sum::<f32>() / n as f32
+        };
+        println!("lights            {}", scene.lights.len());
+        println!(
+            "  intensity       mean {:.4}, max {:.4}, min {:.4}",
+            mean(|l| l.intensity),
+            scene
+                .lights
+                .iter()
+                .map(|l| l.intensity)
+                .fold(0.0f32, f32::max),
+            scene
+                .lights
+                .iter()
+                .map(|l| l.intensity)
+                .fold(f32::MAX, f32::min)
+        );
+        println!("  falloff radius  mean {:.1}", mean(|l| l.falloff_radius));
+        println!("  falloff power   mean {:.2}", mean(|l| l.falloff_power));
+        println!("  modulate        mean {:.2}", mean(|l| l.modulate));
+        println!(
+            "  vertices        mean {:.0}",
+            mean(|l| l.vertices.len() as f32)
+        );
+        println!("scene lighting");
+        println!("  ambient         {:?}", scene.lighting.ambient);
+        println!("  emission        {:?}", scene.lighting.emission);
+        println!("  exposure        {}", scene.lighting.exposure);
+        println!("  bloom strength  {}", scene.lighting.bloom_strength);
+        println!("  env scale       {}", scene.lighting.env_scale);
+        for l in scene.lights.iter().take(4) {
+            println!(
+                "  e.g. {:<20} i {:.4} r {:.0} p {:.2} c {:?}",
+                l.name, l.intensity, l.falloff_radius, l.falloff_power, l.color
+            );
+        }
+    }
+    // VPW_INTENSITY=<f> scales every light, to find out how far off the scale
+    // is rather than arguing about it.
+    if let Ok(v) = std::env::var("VPW_INTENSITY")
+        && let Ok(f) = v.parse::<f32>()
+    {
+        for light in &mut scene.lights {
+            light.intensity *= f;
+        }
+    }
+    // VPW_FLAT_LIGHTS=1 forces every light onto the plain additive path, to
+    // tell "the halo is not being drawn" apart from "the halo is drawn and its
+    // blend contributes nothing".
+    if std::env::var("VPW_FLAT_LIGHTS").is_ok() {
+        for light in &mut scene.lights {
+            light.modulate = 0.0;
+        }
+    }
     let extract_time = t1.elapsed();
 
     let mut gpu = pollster::block_on(vpw_render::offscreen::Offscreen::new(width, height))
@@ -42,6 +152,8 @@ fn main() {
 
     // VPW_BLOOM=0 turns the bloom pass off, which is how you find out what it
     // is contributing: two photos of the same table, one with and one without.
+    // The table's own, unless a photograph is being taken with and without.
+    gpu.set_bloom(scene.lighting.bloom_strength);
     if let Ok(v) = std::env::var("VPW_BLOOM") {
         gpu.set_bloom(v.parse().unwrap_or(1.8));
     }

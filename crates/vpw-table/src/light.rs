@@ -54,15 +54,33 @@ pub struct Light {
     pub modulate: f32,
 }
 
-/// The original multiplies the light's intensity by this before sending it to
-/// the shader (`light.cpp:776`):
+/// What the original scales a light's intensity by **for the bulb mesh alone**
+/// (`light.cpp:776`):
 ///
 /// ```text
 /// lightColor_intensity.w = m_currentIntensity * 0.02f; //!! make configurable?
 /// ```
 ///
-/// It is not a minor detail: without the factor, every light contributes fifty
-/// times more than it should and the table gets covered in white blotches.
+/// Twenty-two lines further down, for the halo — the disc that is actually the
+/// lit insert — it is the plain intensity (`light.cpp:798`):
+///
+/// ```text
+/// lightColor_intensity.w = m_currentIntensity;
+/// ```
+///
+/// The two are different draws of different meshes and only the first is
+/// scaled. Applying it to the halo as well makes every lamp on the table fifty
+/// times too dim, and the way that fails is worth writing down, because it does
+/// not look like dimness. A bulb halo does not paint its colour on: it
+/// multiplies what is under it by one plus its contribution. Divide the
+/// contribution by fifty and the multiplier is one, so a lit insert is
+/// pixel-for-pixel identical to an unlit one — and the table reads as a table
+/// whose lamps are not wired up rather than as a table that is too dark.
+/// Measured on a real game: turning on all hundred and forty-seven of a
+/// playfield's lamps moved its average brightness by 0.6 out of 255.
+///
+/// There is no bulb mesh in this renderer yet. When there is, this is its
+/// factor and not the halo's.
 pub const INTENSITY_FACTOR: f32 = 0.02;
 
 /// Converts a light from the file.
@@ -114,7 +132,9 @@ pub fn build(l: &vpin::vpx::gameitem::light::Light, surface_z: f32) -> Option<Li
         // `targetIntensity = intensity * state`, and the scaling by state
         // happens where the state can change — at draw time — rather than here,
         // where it would be frozen at whatever the file happened to say.
-        intensity: l.intensity * INTENSITY_FACTOR,
+        // The halo's own intensity, unscaled. See [`INTENSITY_FACTOR`] for the
+        // draw that is scaled and why applying it here hides every lamp.
+        intensity: l.intensity,
         color: color(&l.color),
         color2: color(&l.color2),
         state,
