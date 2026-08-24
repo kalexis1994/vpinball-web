@@ -1,15 +1,12 @@
 [package]
-name = "vpw-ws"
+name = "vpw-at91"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
 [dependencies]
-vpw-bus = { version = "0.1.0", path = "../vpw-bus" }
 vpw-arm7 = { version = "0.1.0", path = "../vpw-arm7" }
-vpw-at91 = { version = "0.1.0", path = "../vpw-at91" }
-vpw-m6809 = { version = "0.1.0", path = "../vpw-m6809" }
 
 [dev-dependencies]
 zip = "8.6.0"

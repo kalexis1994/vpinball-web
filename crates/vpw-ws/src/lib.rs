@@ -37,6 +37,7 @@ pub mod board;
 pub mod dmd;
 pub mod games;
 pub mod io;
+pub mod sound;
 
 use vpw_m6809::Cpu;
 
@@ -68,6 +69,8 @@ pub struct Whitestar {
     pub board: Board,
     /// The display, if this game's board was given one. See [`dmd::Dmd`].
     pub dmd: Option<Box<dmd::Dmd>>,
+    /// The sound board, if this game's was given its ROMs. See [`sound`].
+    pub sound: Option<Box<sound::SoundBoard>>,
     /// Cycles since reset.
     cycle: u64,
     next_firq: u64,
@@ -87,6 +90,7 @@ impl Whitestar {
             cpu,
             board,
             dmd: None,
+            sound: None,
             cycle: 0,
             next_firq: u64::from(CPU_CLOCK_HZ / FIRQ_HZ),
             firq_until: 0,
@@ -108,6 +112,38 @@ impl Whitestar {
         dmd.load_rom(image)?;
         self.dmd = Some(Box::new(dmd));
         Ok(())
+    }
+
+    /// Gives the machine its sound board.
+    ///
+    /// Four ROMs and a BIOS: the two-megabyte `bios.u8` every one of these
+    /// boards carries, the game's own sixty-four kilobyte `u7`, and four
+    /// megabytes of samples.
+    pub fn load_sound(&mut self, bios: &[u8], u7: &[u8], samples: [&[u8]; 4]) {
+        let mut board = sound::SoundBoard::new();
+        board.board_mut().load_bios(bios);
+        board.board_mut().load_u7(u7);
+        for (i, image) in samples.iter().enumerate() {
+            board.board_mut().load_samples(i, image);
+        }
+        self.sound = Some(Box::new(board));
+    }
+
+    /// The stereo samples the sound board has made since this was last asked.
+    pub fn take_audio(&mut self) -> Vec<(i16, i16)> {
+        match &mut self.sound {
+            Some(s) => s.take_audio(),
+            None => Vec::new(),
+        }
+    }
+
+    /// The same, as mono at the rate a mixer wants. See
+    /// [`sound::SoundBoard::take_audio_at`].
+    pub fn take_audio_at(&mut self, rate: u32) -> Vec<f32> {
+        match &mut self.sound {
+            Some(s) => s.take_audio_at(rate),
+            None => Vec::new(),
+        }
     }
 
     /// The dot matrix, one byte per dot from 0 to 3, or nothing if this
@@ -143,6 +179,15 @@ impl Whitestar {
 
         let cycles = self.cpu.step(&mut self.board);
         self.cycle += u64::from(cycles);
+
+        // The sound board hears about a command the moment the CPU board
+        // writes one, and otherwise runs on its own clock alongside.
+        if let Some(sound) = &mut self.sound {
+            if std::mem::take(&mut self.board.sound_pending) {
+                sound.send(self.board.sound_latch);
+            }
+            sound.catch_up(self.cycle);
+        }
 
         // The display board runs on its own 2 MHz clock, which is this one's,
         // and takes its commands through the latch at `$3600`. It is caught up

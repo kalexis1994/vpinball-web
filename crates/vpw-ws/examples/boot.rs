@@ -49,6 +49,19 @@ fn main() {
             display.len() / 1024
         );
     }
+    // The sound board, if the zip has all five of its images.
+    let sound = set.sound;
+    match (
+        find(&roms, sound.bios),
+        find(&roms, sound.u7),
+        sound.samples.map(|n| find(&roms, n)),
+    ) {
+        (Some(bios), Some(u7), [Some(a), Some(b), Some(c), Some(d)]) => {
+            machine.load_sound(bios, u7, [a, b, c, d]);
+            println!("loading the sound board's five images");
+        }
+        _ => println!("the sound board's images are not all here; running silent"),
+    }
     println!("reset vector -> pc {:04x}", machine.cpu.pc);
     println!();
 
@@ -69,8 +82,17 @@ fn main() {
     let mut sols = 0u32;
     let steps = (seconds * f64::from(vpw_ws::CPU_CLOCK_HZ)) as u64;
     let mut spent = 0u64;
+    let (mut heard, mut peak) = (0u64, 0i32);
+    let mut wav: Vec<u8> = Vec::new();
+    let started = std::time::Instant::now();
     while spent < steps {
         spent += u64::from(machine.step());
+        for (l, r) in machine.take_audio() {
+            heard += 1;
+            peak = peak.max(i32::from(l).abs()).max(i32::from(r).abs());
+            wav.extend_from_slice(&l.to_le_bytes());
+            wav.extend_from_slice(&r.to_le_bytes());
+        }
         *banks.entry(machine.board.bank()).or_insert(0u32) += 1;
         pcs.insert(machine.cpu.pc);
         if machine.cpu.pc == entry {
@@ -94,7 +116,25 @@ fn main() {
         }
     }
 
-    println!("after {seconds}s of board time:");
+    let real = started.elapsed().as_secs_f64();
+    println!(
+        "after {seconds}s of board time ({real:.1}s of ours, {:.2}x real):",
+        seconds / real
+    );
+    if let Some(s) = &machine.sound {
+        let (taken, reads, enabled, pc) = s.diagnostics();
+        println!("  sound board     pc {pc:08x}, aic enabled {enabled:08x}");
+        println!("    fast irqs     {taken}");
+        println!("    command reads {} bytes, {} words", reads[0], reads[2]);
+        println!("    sample reads  {} bytes, {} words", reads[1], reads[3]);
+    }
+    if !wav.is_empty() {
+        // The board's own rate, which is what its timer was set to.
+        let rate = (heard as f64 / seconds).round() as u32;
+        write_wav("sound.wav", &wav, rate);
+        println!("  wrote sound.wav  {} frames at {rate} Hz", heard);
+    }
+    println!("  samples heard   {heard}, loudest {peak} of 32767");
     println!("  pc              {:04x}", machine.cpu.pc);
     println!("  firqs raised    {}", machine.firqs);
     println!("  cc.f (masked)   {}", machine.cpu.cc.f);
@@ -150,6 +190,26 @@ fn main() {
             println!("    {addr:04x}  {n} times");
         }
     }
+}
+
+/// Two channels of sixteen-bit samples, in the only container everything reads.
+fn write_wav(path: &str, samples: &[u8], rate: u32) {
+    let mut out = Vec::with_capacity(samples.len() + 44);
+    let block = 4u16;
+    out.extend_from_slice(b"RIFF");
+    out.extend_from_slice(&(36 + samples.len() as u32).to_le_bytes());
+    out.extend_from_slice(b"WAVEfmt ");
+    out.extend_from_slice(&16u32.to_le_bytes());
+    out.extend_from_slice(&1u16.to_le_bytes()); // uncompressed
+    out.extend_from_slice(&2u16.to_le_bytes()); // stereo
+    out.extend_from_slice(&rate.to_le_bytes());
+    out.extend_from_slice(&(rate * u32::from(block)).to_le_bytes());
+    out.extend_from_slice(&block.to_le_bytes());
+    out.extend_from_slice(&16u16.to_le_bytes());
+    out.extend_from_slice(b"data");
+    out.extend_from_slice(&(samples.len() as u32).to_le_bytes());
+    out.extend_from_slice(samples);
+    let _ = std::fs::write(path, out);
 }
 
 fn find<'a>(roms: &'a BTreeMap<String, Vec<u8>>, want: &str) -> Option<&'a [u8]> {

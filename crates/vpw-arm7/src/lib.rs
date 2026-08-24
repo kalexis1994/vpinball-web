@@ -347,21 +347,27 @@ impl Cpu {
     ///
     /// Between instructions, which is where a real part samples them.
     fn interrupts(&mut self) -> bool {
-        // The return address is the instruction after the one that would have
-        // run, plus the pipeline: four in ARM, and four in Thumb as well
-        // because the return is through `SUBS pc, lr, #4`.
-        let step = if self.thumb() { 2 } else { 4 };
+        // The return address is **the instruction that has not run yet, plus
+        // four**, in both states, because every handler returns through
+        // `SUBS pc, lr, #4` and that has to land on the instruction the
+        // interrupt arrived in front of rather than the one after it.
+        //
+        // Four too many is a bug that hides: a handler that runs a hundred
+        // thousand times a second returns one instruction late every time, and
+        // the program survives it for as long as the instructions it skips are
+        // ones whose result is set again straight afterwards. What it does not
+        // survive is an idle loop, which is one instruction — `b .` — branching
+        // to itself. Skip that and the processor walks off the end of the
+        // program into whatever follows it.
+        let ret = self.r[15].wrapping_add(4);
         if self.fiq && self.cpsr & F == 0 {
-            let ret = self.r[15].wrapping_add(step).wrapping_add(4);
             self.enter(vectors::FIQ, Mode::Fiq, ret, true);
             return true;
         }
         if self.irq && self.cpsr & I == 0 {
-            let ret = self.r[15].wrapping_add(step).wrapping_add(4);
             self.enter(vectors::IRQ, Mode::Irq, ret, false);
             return true;
         }
-        let _ = step;
         false
     }
 

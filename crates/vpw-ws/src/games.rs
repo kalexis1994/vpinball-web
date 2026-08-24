@@ -14,6 +14,20 @@ pub struct Game {
     pub cpu: &'static str,
     /// The display board's image, for when there is a display board to run it.
     pub display: &'static str,
+    /// The sound board's five images: the BIOS every one of these boards
+    /// carries, the game's own small one, and four megabytes of samples.
+    ///
+    /// Matched the same loose way as the rest, so a set whose sample images
+    /// are named for the game still finds them.
+    pub sound: Sound,
+}
+
+/// The five images a Stern sound board is built from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Sound {
+    pub bios: &'static str,
+    pub u7: &'static str,
+    pub samples: [&'static str; 4],
 }
 
 /// Every set this knows.
@@ -25,6 +39,11 @@ const GAMES: &[Game] = &[Game {
     set: "lotr",
     cpu: "lotrcpua",
     display: "lotrdspa",
+    sound: Sound {
+        bios: "bios.u8",
+        u7: "lotr-u7",
+        samples: ["lotr-u17", "lotr-u21", "lotr-u36", "lotr-u37"],
+    },
 }];
 
 /// Looks a game up by set name, without regard to case.

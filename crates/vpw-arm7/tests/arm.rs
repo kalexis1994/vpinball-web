@@ -386,7 +386,9 @@ fn an_interrupt_banks_the_return_address_and_the_status() {
     cpu.step(&mut ram);
     assert_eq!(cpu.mode(), Mode::Irq);
     assert_eq!(cpu.r[15], 0x18, "the IRQ vector");
-    assert_eq!(cpu.r[14], 0x108, "and the way back");
+    // Four past the instruction that had not run, so that the `SUBS pc, lr, #4`
+    // every handler ends in lands back on it.
+    assert_eq!(cpu.r[14], 0x104, "and the way back");
     assert!(cpu.cpsr & (1 << 7) != 0, "with interrupts masked");
 }
 
@@ -414,7 +416,9 @@ fn movs_pc_lr_is_how_an_exception_returns() {
     assert_eq!(cpu.mode(), Mode::Irq);
     cpu.step(&mut ram); // and returns
     assert_eq!(cpu.mode(), Mode::User, "back where it came from");
-    assert_eq!(cpu.r[15], 0x108);
+    // `MOVS pc, lr` without the subtraction lands one instruction on, which is
+    // why handlers that use it are the ones that do the subtraction themselves.
+    assert_eq!(cpu.r[15], 0x104);
 }
 
 #[test]
@@ -452,4 +456,36 @@ fn user_mode_cannot_change_its_own_mode_with_msr() {
         c.r[0] = Mode::Supervisor as u32 | NEG;
     });
     assert_eq!(cpu.mode(), Mode::User, "the control byte was refused");
+}
+
+/// An interrupt has to come back to the instruction it interrupted, not to the
+/// one after it. Every handler on this part ends in `SUBS pc, lr, #4`, so the
+/// banked link register has to be four past the instruction that has not run.
+///
+/// The case that catches it is the one every idle loop is made of: a branch to
+/// itself. Returning four bytes late walks straight out of the program.
+#[test]
+fn an_interrupt_returns_to_the_instruction_it_interrupted() {
+    let mut ram = Ram::new();
+    // 0x18 is the IRQ vector; this handler returns at once.
+    ram.at(0x18, 0xea00_0000); // b 0x20
+    ram.at(0x20, 0xe25e_f004); // subs pc, lr, #4
+    // The idle loop the interrupt lands in.
+    ram.at(0x100, 0xeaff_fffe); // b .
+
+    let mut cpu = Cpu::new();
+    cpu.r[15] = 0x100;
+    cpu.cpsr &= !(1 << 7); // interrupts allowed
+    cpu.irq = true;
+
+    cpu.step(&mut ram); // takes the interrupt
+    assert_eq!(cpu.r[15], 0x18, "should be at the vector");
+    assert_eq!(
+        cpu.r[14], 0x104,
+        "the link register is the instruction plus four"
+    );
+    cpu.irq = false;
+    cpu.step(&mut ram); // the branch in the vector
+    cpu.step(&mut ram); // subs pc, lr, #4
+    assert_eq!(cpu.r[15], 0x100, "back at the branch, not past it");
 }

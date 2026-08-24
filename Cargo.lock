@@ -2183,6 +2183,14 @@ name = "vpw-arm7"
 version = "0.1.0"
 
 [[package]]
+name = "vpw-at91"
+version = "0.1.0"
+dependencies = [
+ "vpw-arm7",
+ "zip 8.6.0",
+]
+
+[[package]]
 name = "vpw-audio"
 version = "0.1.0"
 dependencies = [
@@ -2322,6 +2330,8 @@ dependencies = [
 name = "vpw-ws"
 version = "0.1.0"
 dependencies = [
+ "vpw-arm7",
+ "vpw-at91",
  "vpw-bus",
  "vpw-m6809",
  "zip 8.6.0",

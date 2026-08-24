@@ -10,6 +10,7 @@ repository = "https://github.com/vpinball/vpinball"
 
 [workspace.dependencies]
 vpw-arm7     = { path = "crates/vpw-arm7" }
+vpw-at91     = { path = "crates/vpw-at91" }
 vpw-math     = { path = "crates/vpw-math" }
 vpw-physics  = { path = "crates/vpw-physics" }
 vpw-render   = { path = "crates/vpw-render" }

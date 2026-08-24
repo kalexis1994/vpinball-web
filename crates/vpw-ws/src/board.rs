@@ -69,8 +69,10 @@ pub struct Board {
     /// What the display board answers at `$3700`: busy in bit 7 and its four
     /// status bits from bit 3 (`se.c:753`).
     pub dmd_status: u8,
-    /// The last sound command, `$3800`.
+    /// The last sound command, `$3800`, and whether the sound board has been
+    /// told about it yet.
     pub sound_latch: u8,
+    pub sound_pending: bool,
     /// Set by bit 7 of the bank register, which is also the diagnostic LED.
     pub diagnostic_led: bool,
 
@@ -99,6 +101,7 @@ impl Board {
             dmd_enabled: false,
             dmd_status: 0,
             sound_latch: 0,
+            sound_pending: false,
             diagnostic_led: false,
             last_unmapped: None,
         }
@@ -208,7 +211,10 @@ impl Bus for Board {
             0x3601 => {
                 self.dmd_ctrl_pending = Some(if value != 0 { 0x02 } else { 0x00 });
             }
-            0x3800 => self.sound_latch = value,
+            0x3800 => {
+                self.sound_latch = value;
+                self.sound_pending = true;
+            }
             // Writing to ROM is not an error: there is code that walks memory
             // without discriminating.
             0x3801 | 0x4000..=0xffff => {}

@@ -184,10 +184,10 @@ impl Hardware {
     fn drain_audio(&mut self) -> Vec<f32> {
         match self {
             Self::S11(b) => b.drain_audio(),
-            // The sound board of a Whitestar of this vintage is an ARM7 and is
-            // not emulated. The main board only ever writes to it, so what is
-            // missing is the sound and not the game.
-            Self::Whitestar(_) => Vec::new(),
+            // The Whitestar's sound board is a processor of its own, running
+            // its own firmware out of the game's ROMs, and its output comes
+            // out at its rate rather than ours. See [`vpw_ws::sound`].
+            Self::Whitestar(b) => b.take_audio_at(vpw_s11::DEFAULT_AUDIO_RATE),
         }
     }
 
@@ -413,6 +413,21 @@ impl Machine {
         // to say for itself.
         if let Some(display) = pick_like(images, game.display) {
             machine.load_display_rom(display)?;
+        }
+        // The sound board is a third processor with five images of its own. A
+        // set without them plays silently rather than not at all, which is
+        // what a machine with the sound board unplugged does.
+        let sound = game.sound;
+        let images_for = |name: &str| pick_like(images, name);
+        match (
+            images_for(sound.bios),
+            images_for(sound.u7),
+            sound.samples.map(images_for),
+        ) {
+            (Some(bios), Some(u7), [Some(a), Some(b), Some(c), Some(d)]) => {
+                machine.load_sound(bios, u7, [a, b, c, d]);
+            }
+            _ => log::warn!("{}: the sound board's images are not all here", game.set),
         }
         if let Some(saved) = cmos {
             let ram = machine.board.ram_mut();
