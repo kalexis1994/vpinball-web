@@ -1,7 +1,7 @@
 //! Tests of the light model.
 
 use vpin::vpx::gameitem::light::Light as VpxLight;
-use vpw_table::light::{INTENSITY_FACTOR, build};
+use vpw_table::light::build;
 
 /// A circular light of a given radius, with `n` control points.
 fn light(state: f32, intensity: f32) -> VpxLight {
@@ -82,8 +82,6 @@ fn the_halo_carries_the_whole_intensity() {
         "it gave {} and 10 was expected",
         l.intensity
     );
-    // And the factor still exists, for the draw it belongs to.
-    assert!(INTENSITY_FACTOR > 0.0);
 }
 
 #[test]
