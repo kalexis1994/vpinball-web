@@ -48,7 +48,13 @@ fn main() {
     let mut banks = BTreeMap::new();
     let mut columns = 0u8;
     let mut lamp_columns = 0u16;
+    let mut lamp_rows = 0u8;
+    let mut most_lit = 0usize;
     let mut unmapped: BTreeMap<u16, u32> = BTreeMap::new();
+    let mut pcs = std::collections::BTreeSet::new();
+    let mut hot: BTreeMap<u16, u64> = BTreeMap::new();
+    let mut resets = 0u32;
+    let entry = machine.cpu.pc;
     let (mut sound_writes, mut last_sound) = (0u32, 0u8);
     let mut sols = 0u32;
     let steps = (seconds * f64::from(vpw_ws::CPU_CLOCK_HZ)) as u64;
@@ -56,8 +62,18 @@ fn main() {
     while spent < steps {
         spent += u64::from(machine.step());
         *banks.entry(machine.board.bank()).or_insert(0u32) += 1;
+        pcs.insert(machine.cpu.pc);
+        if machine.cpu.pc == entry {
+            resets += 1;
+        }
+        *hot.entry(machine.cpu.pc & 0xff00).or_insert(0u64) += 1;
         columns |= machine.board.switches.column();
         lamp_columns |= machine.board.lamps.column();
+        lamp_rows |= machine.board.lamps.rows();
+        let lit = (1..=128u8)
+            .filter(|&n| machine.board.lamps.is_lit(n))
+            .count();
+        most_lit = most_lit.max(lit);
         sols |= machine.board.solenoids.live();
         if machine.board.sound_latch != last_sound {
             last_sound = machine.board.sound_latch;
@@ -70,9 +86,23 @@ fn main() {
 
     println!("after {seconds}s of board time:");
     println!("  pc              {:04x}", machine.cpu.pc);
+    println!("  firqs raised    {}", machine.firqs);
+    println!("  cc.f (masked)   {}", machine.cpu.cc.f);
+    println!("  cc.i (masked)   {}", machine.cpu.cc.i);
+    println!("  pcs seen        {} distinct", pcs.len());
+    println!("  back at entry   {resets} times");
+    let mut top: Vec<_> = hot.into_iter().collect();
+    top.sort_by_key(|&(_, n)| std::cmp::Reverse(n));
+    println!("  busiest pages:");
+    for (page, n) in top.into_iter().take(6) {
+        println!("    {page:04x}xx  {n:>10}");
+    }
     println!("  rom banks used  {:?}", banks.keys().collect::<Vec<_>>());
     println!("  switch columns  {columns:08b}");
     println!("  lamp columns    {lamp_columns:016b}");
+    println!("  lamp rows ever  {lamp_rows:08b}");
+    println!("  most lamps lit  {most_lit}");
+    println!("  matrix now      {:?}", machine.board.lamps.matrix());
     println!("  solenoids ever  {sols:032b}");
     println!(
         "  sound latch     {:02x} (writes seen: {sound_writes})",

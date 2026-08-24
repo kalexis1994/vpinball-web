@@ -41,7 +41,6 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use vpw_s11::System11;
-use vpw_s11::games::Game as RomGame;
 use vpw_vbscript::error::{Error as VbError, Result as VbResult};
 use vpw_vbscript::object::Object;
 use vpw_vbscript::value::{Array, Value};
@@ -93,7 +92,11 @@ impl RomSource for RomDir {
 }
 
 /// How many lamps a System 11 has: an eight by eight matrix.
-const LAMPS: usize = 64;
+/// The most lamps any board here drives.
+///
+/// A System 11 has sixty-four; a Whitestar has a hundred and twenty-eight, in
+/// sixteen columns rather than eight.
+const LAMPS: usize = 128;
 
 /// How many display digits a table can ask about.
 ///
@@ -153,10 +156,144 @@ fn lamp_number(i: usize) -> u8 {
 }
 
 /// The emulated machine, and what the script has seen of it.
+/// The machine's board, whichever kind of machine it is.
+///
+/// Two families so far, and they have less in common than the shape of this
+/// enum suggests. A System 11 talks to the world through PIAs and drives a
+/// segment display; a Whitestar has no PIAs at all, twice the lamps, and a dot
+/// matrix on a board of its own. What they share is what a table's script asks
+/// for — lamps, switches, coils — so that is what this offers and the rest
+/// answers for the family that has it.
+enum Hardware {
+    S11(Box<System11>),
+    Whitestar(Box<vpw_ws::Whitestar>),
+}
+
+impl Hardware {
+    fn run_seconds(&mut self, seconds: f64) {
+        match self {
+            Self::S11(b) => {
+                b.run_seconds(seconds);
+            }
+            Self::Whitestar(b) => {
+                b.run_seconds(seconds);
+            }
+        }
+    }
+
+    fn drain_audio(&mut self) -> Vec<f32> {
+        match self {
+            Self::S11(b) => b.drain_audio(),
+            // The sound board of a Whitestar of this vintage is an ARM7 and is
+            // not emulated. The main board only ever writes to it, so what is
+            // missing is the sound and not the game.
+            Self::Whitestar(_) => Vec::new(),
+        }
+    }
+
+    fn cmos(&self) -> Vec<u8> {
+        match self {
+            Self::S11(b) => b.cmos().to_vec(),
+            Self::Whitestar(b) => b.board.ram().to_vec(),
+        }
+    }
+
+    fn lamp_lit(&self, number: u8) -> bool {
+        match self {
+            Self::S11(b) => b.lamp_lit(number),
+            Self::Whitestar(b) => b.board.lamps.is_lit(number),
+        }
+    }
+
+    fn lamp_level(&self, number: u8) -> f32 {
+        match self {
+            Self::S11(b) => b.board.lamps.level(number),
+            // No filament model here yet. System 11's is worth bringing over —
+            // the original oversamples a Whitestar's lamps twice a frame
+            // *because of* Lord of the Rings, whose modes flicker their lamps
+            // as part of the artwork.
+            Self::Whitestar(b) => f32::from(u8::from(b.board.lamps.is_lit(number))),
+        }
+    }
+
+    fn switch_closed(&self, number: u8) -> bool {
+        match self {
+            Self::S11(b) => b.switch_closed(number),
+            Self::Whitestar(b) => b.board.switches.is_closed(number),
+        }
+    }
+
+    fn set_switch(&mut self, number: u8, closed: bool) -> bool {
+        match self {
+            Self::S11(b) => b.set_switch(number, closed),
+            Self::Whitestar(b) => b.board.switches.set(number, closed),
+        }
+    }
+
+    fn solenoids_active(&self) -> u32 {
+        match self {
+            Self::S11(b) => b.solenoids_active(),
+            Self::Whitestar(b) => b.board.solenoids.live(),
+        }
+    }
+
+    fn solenoid_fired(&self, number: u8) -> bool {
+        match self {
+            Self::S11(b) => b.solenoid_fired(number),
+            Self::Whitestar(b) => b.board.solenoids.is_on(number),
+        }
+    }
+
+    /// The two buttons behind the coin door, which every family has and each
+    /// wires its own way.
+    fn diagnostic_up(&self) -> bool {
+        match self {
+            Self::S11(b) => b.board.diagnostic_up,
+            // Whitestar reads them as two of the dedicated switches rather than
+            // through a PIA. Bits 5 and 6 of `$3000`, active low.
+            Self::Whitestar(b) => b.board.switches.dedicated() & (1 << 6) == 0,
+        }
+    }
+
+    fn diagnostic_advance(&self) -> bool {
+        match self {
+            Self::S11(b) => b.board.diagnostic_advance,
+            Self::Whitestar(b) => b.board.switches.dedicated() & (1 << 5) == 0,
+        }
+    }
+
+    fn set_diagnostic_up(&mut self, closed: bool) {
+        match self {
+            Self::S11(b) => b.set_diagnostic_up(closed),
+            Self::Whitestar(b) => b.board.switches.set_dedicated(6, closed),
+        }
+    }
+
+    fn set_diagnostic_advance(&mut self, closed: bool) {
+        match self {
+            Self::S11(b) => b.set_diagnostic_advance(closed),
+            Self::Whitestar(b) => b.board.switches.set_dedicated(5, closed),
+        }
+    }
+
+    fn segments(&self) -> Vec<u16> {
+        match self {
+            Self::S11(b) => b.segments(),
+            // A Whitestar's score is a dot matrix driven by a second processor,
+            // which is not here. An empty answer is the honest one: the script
+            // asks what changed and nothing has.
+            Self::Whitestar(_) => Vec::new(),
+        }
+    }
+}
+
 pub struct Machine {
-    board: RefCell<System11>,
+    board: RefCell<Hardware>,
     /// The set that is loaded, once one is.
-    game: Cell<Option<RomGame>>,
+    /// The set that is loaded. Only its name is ever wanted, and the two
+    /// families describe a game with different types, so the name is what is
+    /// kept.
+    game: Cell<Option<&'static str>>,
     running: Cell<bool>,
     /// What the lamps and solenoids looked like when the script last asked.
     /// The difference against the board is what `ChangedLamps` reports.
@@ -173,7 +310,7 @@ pub struct Machine {
 impl Machine {
     pub fn new() -> Self {
         Self {
-            board: RefCell::new(System11::new()),
+            board: RefCell::new(Hardware::S11(Box::new(System11::new()))),
             game: Cell::new(None),
             running: Cell::new(false),
             seen_lamps: RefCell::new([false; LAMPS]),
@@ -190,7 +327,7 @@ impl Machine {
 
     /// The set that is loaded.
     pub fn game_name(&self) -> Option<&'static str> {
-        self.game.get().map(|g| g.set)
+        self.game.get()
     }
 
     /// Builds the machine for a named set from a zip.
@@ -199,15 +336,82 @@ impl Machine {
     /// manifest, because it differs by family and getting it wrong runs the CPU
     /// on garbage rather than failing.
     pub fn load(&self, set: &str, zip: &[u8], cmos: Option<&[u8]>) -> Result<(), String> {
-        let game = vpw_s11::games::find(set)
-            .ok_or_else(|| format!("'{set}' is not a set this emulator knows"))?;
-        let images = read_zip(zip)?;
+        // The name is checked before the zip is opened: "that is not a set
+        // this emulator knows" is a better answer than "that is not a zip",
+        // and for an unknown set it is also the true one.
+        enum Which {
+            S11(vpw_s11::games::Game),
+            Whitestar(vpw_ws::games::Game),
+        }
+        let which = if let Some(game) = vpw_s11::games::find(set) {
+            Which::S11(game)
+        } else if let Some(game) = vpw_ws::games::find(set) {
+            Which::Whitestar(game)
+        } else {
+            return Err(format!("'{set}' is not a set this emulator knows"));
+        };
 
-        let first = pick(&images, game.image1)
+        let images = read_zip(zip)?;
+        let name = match which {
+            Which::S11(game) => self.load_s11(game, set, &images, cmos)?,
+            Which::Whitestar(game) => self.load_whitestar(game, &images, cmos)?,
+        };
+
+        self.game.set(Some(name));
+        self.running.set(true);
+        self.owed.set(0.0);
+        *self.seen_lamps.borrow_mut() = [false; LAMPS];
+        *self.seen_solenoids.borrow_mut() = [false; SOLENOIDS + 4];
+        *self.seen_segments.borrow_mut() = [0; SEGMENTS];
+        Ok(())
+    }
+
+    /// Sega and Stern's Whitestar. See [`vpw_ws`].
+    ///
+    /// Simpler to build than a System 11 because there is less of it: one CPU
+    /// image and no wiring table. The display and the sound are separate boards
+    /// and neither is emulated, so their images are read from the zip and left
+    /// there.
+    fn load_whitestar(
+        &self,
+        game: vpw_ws::games::Game,
+        images: &[(String, Vec<u8>)],
+        cmos: Option<&[u8]>,
+    ) -> Result<&'static str, String> {
+        let cpu = pick_like(images, game.cpu)
+            .ok_or_else(|| format!("'{}' is not in the zip", game.cpu))?;
+
+        let mut machine = vpw_ws::Whitestar::new();
+        machine.load_rom(cpu)?;
+        if let Some(saved) = cmos {
+            let ram = machine.board.ram_mut();
+            if saved.len() != ram.len() {
+                return Err(format!(
+                    "the saved settings are {} bytes and the machine's memory is {}",
+                    saved.len(),
+                    ram.len()
+                ));
+            }
+            ram.copy_from_slice(saved);
+        }
+        *self.board.borrow_mut() = Hardware::Whitestar(Box::new(machine));
+        Ok(game.set)
+    }
+
+    fn load_s11(
+        &self,
+        game: vpw_s11::games::Game,
+        set: &str,
+        images: &[(String, Vec<u8>)],
+        cmos: Option<&[u8]>,
+    ) -> Result<&'static str, String> {
+        *self.board.borrow_mut() = Hardware::S11(Box::new(System11::new()));
+
+        let first = pick(images, game.image1)
             .ok_or_else(|| format!("'{}' is not in the zip", game.image1))?;
         let second = match game.image2 {
             Some(name) => {
-                Some(pick(&images, name).ok_or_else(|| format!("'{name}' is not in the zip"))?)
+                Some(pick(images, name).ok_or_else(|| format!("'{name}' is not in the zip"))?)
             }
             None => None,
         };
@@ -216,17 +420,20 @@ impl Machine {
             .place(first, second)
             .ok_or_else(|| format!("'{set}' needs two images and the zip has one"))?;
 
-        let mut board = self.board.borrow_mut();
+        let mut hardware = self.board.borrow_mut();
+        let Hardware::S11(board) = &mut *hardware else {
+            unreachable!("just built a System 11")
+        };
         board
             .load_cpu_region(&placed)
             .map_err(|e| format!("the images do not fit the map: {e}"))?;
 
         // The two sound boards are optional: a set without them still plays,
         // silently.
-        if let (Some(u21), Some(u22)) = (pick_like(&images, "u21"), pick_like(&images, "u22")) {
+        if let (Some(u21), Some(u22)) = (pick_like(images, "u21"), pick_like(images, "u22")) {
             board.load_sound_roms(u21, u22);
         }
-        if let (Some(u4), Some(u19)) = (pick_like(&images, "u4"), pick_like(&images, "u19")) {
+        if let (Some(u4), Some(u19)) = (pick_like(images, "u4"), pick_like(images, "u19")) {
             board.load_cs_sound_roms(&[u4, u19]);
         }
 
@@ -254,17 +461,10 @@ impl Machine {
                 ));
             }
         } else {
-            prime(&mut board);
+            prime(board);
         }
-        drop(board);
-
-        self.game.set(Some(game));
-        self.running.set(true);
-        self.owed.set(0.0);
-        *self.seen_lamps.borrow_mut() = [false; LAMPS];
-        *self.seen_solenoids.borrow_mut() = [false; SOLENOIDS + 4];
-        *self.seen_segments.borrow_mut() = [0; SEGMENTS];
-        Ok(())
+        drop(hardware);
+        Ok(game.set)
     }
 
     /// The sound board's output since the last time this was asked: mono, at
@@ -314,26 +514,43 @@ impl Machine {
 
     /// PIA 1's port A direction register, and the raw output register.
     pub fn lamp_ddr(&self) -> (u8, u8) {
-        let b = self.board.borrow();
-        let p = &b.board.pias[vpw_s11::pia::LAMPS];
-        (p.port_a_direction(), p.port_a_output())
+        match &*self.board.borrow() {
+            Hardware::S11(b) => {
+                let p = &b.board.pias[vpw_s11::pia::LAMPS];
+                (p.port_a_direction(), p.port_a_output())
+            }
+            // A Whitestar has no PIAs at all. Nothing to report and nothing
+            // that reads this cares which board it is talking to.
+            Hardware::Whitestar(_) => (0, 0),
+        }
     }
 
     /// How brightly a lamp is showing, 0 to 1. See [`vpw_s11::io::LampMatrix`]:
     /// the ROM dims a lamp by driving it on some sweeps and not others, so this
     /// is a level and not a switch.
     pub fn lamp_level(&self, number: u8) -> f32 {
-        self.board.borrow().board.lamps.level(number)
+        self.board.borrow().lamp_level(number)
     }
 
     /// The lamp matrix as it stands, by column.
     pub fn lamp_columns(&self) -> [u8; 8] {
-        self.board.borrow().board.lamps.columns()
+        match &*self.board.borrow() {
+            Hardware::S11(b) => b.board.lamps.columns(),
+            // Only the low eight of its sixteen. What reads this is the
+            // diagnostic view, which was drawn for a System 11.
+            Hardware::Whitestar(b) => {
+                let m = b.board.lamps.matrix();
+                [m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7]]
+            }
+        }
     }
 
     /// What PIA 1 is driving: `(rows, columns)`.
     pub fn lamp_drive(&self) -> (u8, u8) {
-        self.board.borrow().board.lamp_drive()
+        match &*self.board.borrow() {
+            Hardware::S11(b) => b.board.lamp_drive(),
+            Hardware::Whitestar(b) => ((b.board.lamps.column() & 0xff) as u8, b.board.lamps.rows()),
+        }
     }
 
     /// Whether a lamp is lit right now, without consuming the change record.
@@ -379,7 +596,12 @@ impl Machine {
 
     /// Whether the special solenoids are enabled, for diagnostics.
     pub fn special_enabled(&self) -> bool {
-        self.board.borrow().board.solenoids.special_enabled()
+        match &*self.board.borrow() {
+            Hardware::S11(b) => b.board.solenoids.special_enabled(),
+            // A Whitestar drives all thirty-two of its coils directly; there is
+            // no special bank and nothing to enable.
+            Hardware::Whitestar(_) => false,
+        }
     }
 
     /// Every display digit whose segments changed since the last time this was
@@ -431,7 +653,11 @@ impl Machine {
     /// The two score displays, for a host that wants to draw them.
     pub fn displays(&self) -> (String, String) {
         let b = self.board.borrow();
-        (b.upper_display(), b.lower_display())
+        match &*b {
+            Hardware::S11(b) => (b.upper_display(), b.lower_display()),
+            // The dot matrix is a board of its own and is not here yet.
+            Hardware::Whitestar(_) => (String::new(), String::new()),
+        }
     }
 
     /// Every lamp that changed since the last time this was asked.
@@ -446,6 +672,10 @@ impl Machine {
         let board = self.board.borrow();
         let mut seen = self.seen_lamps.borrow_mut();
         let mut rows = Vec::new();
+        // Every lamp the widest board here has. A System 11's sixty-four are
+        // the first sixty-four of them and the rest simply never light, which
+        // costs one comparison each and keeps this from having to know which
+        // machine it is reporting on.
         for i in 0..LAMPS {
             let number = lamp_number(i);
             let now = board.lamp_lit(number);
@@ -575,8 +805,8 @@ impl Controller {
     fn switch(&self, number: i32) -> bool {
         let board = self.machine.board.borrow();
         match Door::of(number) {
-            Some(Door::Up) => board.board.diagnostic_up,
-            Some(Door::Advance) => board.board.diagnostic_advance,
+            Some(Door::Up) => board.diagnostic_up(),
+            Some(Door::Advance) => board.diagnostic_advance(),
             Some(_) => false,
             None => u8::try_from(number).is_ok_and(|n| board.switch_closed(n)),
         }
@@ -897,7 +1127,10 @@ mod tests {
         //
         // Checking the round trip and not the formula: restating `i + 1` in a
         // test proves nothing, whereas this fails the moment either side moves.
-        for i in 0..LAMPS {
+        //
+        // Sixty-four of them, because this is about a System 11's matrix. A
+        // Whitestar has twice as many and numbers them on its own board.
+        for i in 0..64usize {
             let number = lamp_number(i);
             let position = vpw_s11::matrix_position(number);
             assert_eq!(

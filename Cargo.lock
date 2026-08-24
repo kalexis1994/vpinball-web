@@ -2204,6 +2204,7 @@ dependencies = [
  "vpw-s11",
  "vpw-table",
  "vpw-vbscript",
+ "vpw-ws",
  "zip 6.0.0",
 ]
 

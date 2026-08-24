@@ -28,7 +28,9 @@ pub struct Lamps {
     column: u16,
     /// Which rows are driven, already un-reversed.
     row: u8,
-    /// What has been seen lit since the last sweep, one bit per lamp.
+    /// What has been seen lit during the sweep going on now.
+    pending: [u8; LAMP_COLUMNS],
+    /// The last sweep that finished, which is what anybody reading gets.
     state: [u8; LAMP_COLUMNS],
 }
 
@@ -65,7 +67,7 @@ impl Lamps {
     }
 
     fn latch(&mut self) {
-        for (i, slot) in self.state.iter_mut().enumerate() {
+        for (i, slot) in self.pending.iter_mut().enumerate() {
             if self.column & (1 << i) != 0 {
                 *slot |= self.row;
             }
@@ -88,9 +90,17 @@ impl Lamps {
         self.state
     }
 
-    /// Forgets what was seen, which is what closes a sweep.
-    pub fn clear(&mut self) {
-        self.state = [0; LAMP_COLUMNS];
+    /// Closes the sweep: what was seen during it becomes what is showing.
+    ///
+    /// Two buffers rather than one, and the difference is the whole reason a
+    /// lamp reads as lit at all. A lamp is strobed for a fraction of a sweep,
+    /// so a matrix that is cleared and refilled in place is empty for most of
+    /// the time anybody might look at it — a script polling sixty times a
+    /// second lands in the gap and sees a dark table. What it gets instead is
+    /// the last sweep that finished, complete.
+    pub fn end_sweep(&mut self) {
+        self.state = self.pending;
+        self.pending = [0; LAMP_COLUMNS];
     }
 }
 
@@ -103,10 +113,14 @@ impl Lamps {
 pub struct Switches {
     column: u8,
     /// One byte per column, a set bit meaning closed.
-    closed: [u8; 8],
-    /// The switches wired straight to the CPU rather than through the matrix:
-    /// the coin door and the diagnostic buttons. Also active low.
-    dedicated: u8,
+    ///
+    /// Nine columns, not eight. Column **zero** is the dedicated one — the
+    /// coin door, the service buttons and the flipper switches — which the CPU
+    /// reads at `$3000` instead of strobing. A table's script addresses it the
+    /// same way it addresses the rest, as a switch number below ten, and
+    /// dropping those was why a coin never became a credit: `sega.vbs` puts the
+    /// three coin slots on switches 4, 5 and 6.
+    closed: [u8; 9],
 }
 
 impl Switches {
@@ -123,7 +137,7 @@ impl Switches {
     /// `switch_r`, `$3400`.
     pub fn read(&self) -> u8 {
         let mut rows = 0u8;
-        for (i, byte) in self.closed.iter().enumerate() {
+        for (i, byte) in self.closed[1..].iter().enumerate() {
             if self.column & (1 << i) != 0 {
                 rows |= byte;
             }
@@ -131,10 +145,12 @@ impl Switches {
         !rows
     }
 
-    /// Opens or closes a switch by its number, `column * 10 + row` with both
-    /// starting at one — the numbering a table's script uses.
+    /// Opens or closes a switch by its number, `column * 10 + row` — the
+    /// numbering a table's script uses.
     ///
-    /// Returns false for a number outside the matrix.
+    /// A number below ten is column zero, which is the dedicated column and not
+    /// part of the strobed matrix; see [`Switches::closed`]. Returns false for
+    /// a number that is not a switch at all.
     pub fn set(&mut self, number: u8, closed: bool) -> bool {
         let Some((col, row)) = Self::position(number) else {
             return false;
@@ -153,30 +169,45 @@ impl Switches {
 
     /// `dedswitch_r`, `$3000`. Active low, so a closed switch is a zero bit.
     pub fn dedicated(&self) -> u8 {
-        !self.dedicated
+        !self.closed[0]
     }
 
+    /// Closes one of the dedicated switches by its bit rather than its number.
     pub fn set_dedicated(&mut self, bit: u8, closed: bool) {
         if bit < 8 {
             if closed {
-                self.dedicated |= 1 << bit;
+                self.closed[0] |= 1 << bit;
             } else {
-                self.dedicated &= !(1 << bit);
+                self.closed[0] &= !(1 << bit);
             }
         }
     }
 
     pub fn clear(&mut self) {
-        self.closed = [0; 8];
-        self.dedicated = 0;
+        self.closed = [0; 9];
     }
 
+    /// Where a switch number lands in the matrix.
+    ///
+    /// Sega and Stern number their switches **straight through**, one to
+    /// sixty-four, and not as a column and a row the way Williams does. It is
+    /// the single most consequential line in this file. Read as Williams
+    /// numbering, `sega.vbs`'s three coin slots — switches 4, 5 and 6 — fall
+    /// into a column that is not part of the matrix at all and a coin never
+    /// becomes a credit; the start button, switch 54, lands six columns away
+    /// from the button; and the ball trough reports the wrong four switches.
+    /// All of it silently.
+    ///
+    /// The original spells the convention out where it copies the cabinet
+    /// buttons in (`se.c:252`): "Copy Start, Tilt, and Slam Tilt to proper
+    /// position in Matrix: Switches 54,55,56", into column 7 at bits 5, 6 and
+    /// 7. Which is `1 + (54 - 1) / 8` and `(54 - 1) % 8`.
     fn position(number: u8) -> Option<(usize, usize)> {
-        let (col, row) = (number / 10, number % 10);
-        if !(1..=8).contains(&col) || !(1..=8).contains(&row) {
+        if !(1..=64).contains(&number) {
             return None;
         }
-        Some((usize::from(col - 1), usize::from(row - 1)))
+        let i = usize::from(number - 1);
+        Some((1 + i / 8, i % 8))
     }
 }
 
@@ -196,15 +227,25 @@ pub struct Solenoids {
 }
 
 impl Solenoids {
+    /// Where each of the four bytes lands in the thirty-two coils.
+    ///
+    /// Not in address order. `se.c:662` spells it out as
+    /// `{ 8, 0, 16, 24 }`: the byte at `$2000` is coils 9 to 16 and the byte at
+    /// `$2001` is coils 1 to 8, and the two are the wrong way round from what
+    /// anyone would assume. Assuming it costs nothing at boot and everything
+    /// afterwards, because both banks are real coils and the machine simply
+    /// fires the wrong ones.
+    const SHIFT: [u32; 4] = [8, 0, 16, 24];
+
     /// `se_solenoid_w`, `$2000` to `$2003`.
     pub fn write(&mut self, offset: u8, data: u8) {
-        let shift = u32::from(offset & 3) * 8;
+        let shift = Self::SHIFT[usize::from(offset & 3)];
         self.live = (self.live & !(0xff << shift)) | (u32::from(data) << shift);
         self.seen |= self.live;
     }
 
     pub fn read(&self, offset: u8) -> u8 {
-        ((self.live >> (u32::from(offset & 3) * 8)) & 0xff) as u8
+        ((self.live >> Self::SHIFT[usize::from(offset & 3)]) & 0xff) as u8
     }
 
     /// `auxboard_w`, `$2006`.

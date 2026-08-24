@@ -70,6 +70,9 @@ pub struct Whitestar {
     next_firq: u64,
     firq_until: u64,
     next_sweep: u64,
+    /// How many FIRQs have been raised, for finding out whether the board is
+    /// taking them at all.
+    pub firqs: u64,
 }
 
 impl Whitestar {
@@ -84,6 +87,7 @@ impl Whitestar {
             next_firq: u64::from(CPU_CLOCK_HZ / FIRQ_HZ),
             firq_until: 0,
             next_sweep: u64::from(CPU_CLOCK_HZ / SWEEP_HZ),
+            firqs: 0,
         }
     }
 
@@ -111,6 +115,7 @@ impl Whitestar {
         if self.cycle >= self.next_firq {
             self.cpu.set_firq(true);
             self.firq_until = self.cycle + FIRQ_HOLD_CYCLES;
+            self.firqs += 1;
             self.next_firq += u64::from(CPU_CLOCK_HZ / FIRQ_HZ);
         }
         if self.firq_until != 0 && self.cycle >= self.firq_until {
@@ -124,7 +129,7 @@ impl Whitestar {
         // Closing the sweep is what makes a lamp that is strobed for a fraction
         // of it read as lit for the whole of it. See [`SWEEP_HZ`].
         if self.cycle >= self.next_sweep {
-            self.board.lamps.clear();
+            self.board.lamps.end_sweep();
             self.next_sweep += u64::from(CPU_CLOCK_HZ / SWEEP_HZ);
         }
 
