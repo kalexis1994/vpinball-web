@@ -119,8 +119,11 @@ fn a_lamp_is_lit_by_its_column_and_its_row_together() {
     let mut b = Board::new();
     b.write(0x200a, 0b1000_0000); // reversed: row 1
     b.write(0x2008, 0b0000_0001); // column 1
-    // What is showing is the last sweep that finished, so one has to.
-    b.lamps.end_sweep();
+    // A lamp has to be seen in **both** windows of a pair before it shows, so
+    // the strobe is repeated and two windows are closed. See `io::Lamps`.
+    b.lamps.end_window();
+    b.write(0x2008, 0b0000_0001);
+    b.lamps.end_window();
     assert!(b.lamps.is_lit(1), "column 1 row 1 is lamp 1");
     assert!(!b.lamps.is_lit(2));
     assert!(!b.lamps.is_lit(9), "column 2 was never strobed");
@@ -133,7 +136,9 @@ fn the_high_columns_come_from_the_auxiliary_port() {
     let mut b = Board::new();
     b.write(0x200a, 0b1000_0000);
     b.write(0x2009, 0b0000_0001); // column 9
-    b.lamps.end_sweep();
+    b.lamps.end_window();
+    b.write(0x2009, 0b0000_0001);
+    b.lamps.end_window();
     assert!(b.lamps.is_lit(65), "column 9 row 1 is lamp 65");
     assert_eq!(b.lamps.matrix().len(), LAMP_COLUMNS);
 }
@@ -279,4 +284,65 @@ fn the_solenoid_bytes_are_not_in_address_order() {
     b.write(0x2000, 1);
     assert!(b.solenoids.is_on(9), "$2000 bit 0 is coil 9");
     assert!(!b.solenoids.is_on(1));
+}
+
+/// The rule the original spells out and this game needs: a lamp shows only if
+/// it was driven in both windows of the pair. One is a lamp the game is
+/// flickering as part of its artwork, and flickering is not on.
+#[test]
+fn a_lamp_seen_in_only_one_window_of_a_pair_stays_dark() {
+    let mut b = Board::new();
+    b.write(0x200a, 0b1000_0000); // row 1
+    b.write(0x2008, 0b0000_0001); // column 1
+    b.lamps.end_window();
+    // Nothing drives it during the second window.
+    b.write(0x200a, 0);
+    b.lamps.end_window();
+    assert!(!b.lamps.is_lit(1), "seen once is not lit");
+
+    // Driven through both, it shows.
+    for _ in 0..2 {
+        b.write(0x200a, 0b1000_0000);
+        b.write(0x2008, 0b0000_0001);
+        b.lamps.end_window();
+    }
+    assert!(b.lamps.is_lit(1));
+}
+
+/// The expander board's columns are latched, not strobed: they are set once
+/// and stay, where a strobed lamp that is not driven again goes out.
+#[test]
+fn an_expander_boards_lamps_are_not_swept() {
+    let mut b = Board::new();
+    b.boards = vpw_ws::board::Boards {
+        aux_solenoids: true,
+        leds: true,
+    };
+    // The data latch, then a falling edge of ASTB to clock the low byte and a
+    // rising one to clock the high byte, whose top bits pick the row.
+    b.write(0x2006, 0b0000_0101);
+    b.write(0x200b, 0x80);
+    b.write(0x200b, 0x00); // falling: eight LEDs
+    b.write(0x2006, 0b0100_0000);
+    b.write(0x200b, 0x80); // rising: the row select
+    assert!(b.lamps.is_lit(81), "column 10 row 1 is lamp 81");
+    assert!(b.lamps.is_lit(83));
+    // And it is still lit after a pair of windows nobody drove it in.
+    b.lamps.end_window();
+    b.lamps.end_window();
+    assert!(
+        b.lamps.is_lit(81),
+        "a latched lamp does not need re-driving"
+    );
+}
+
+/// The relay is wired the other way up from what anyone would guess, and
+/// guessing costs a playfield that is dark whenever the game wants it lit.
+#[test]
+fn the_general_illumination_relay_is_on_when_the_bit_is_low() {
+    let mut b = Board::new();
+    b.write(0x200b, 0x00);
+    assert!(b.gi_relay, "bit low is the relay closed");
+    b.write(0x200b, 0x01);
+    assert!(!b.gi_relay);
 }

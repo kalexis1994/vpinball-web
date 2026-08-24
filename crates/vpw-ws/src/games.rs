@@ -20,6 +20,8 @@ pub struct Game {
     /// Matched the same loose way as the rest, so a set whose sample images
     /// are named for the game still finds them.
     pub sound: Sound,
+    /// What is on its auxiliary connector. See [`crate::board::Boards`].
+    pub boards: crate::board::Boards,
 }
 
 /// The five images a Stern sound board is built from.
@@ -43,6 +45,12 @@ const GAMES: &[Game] = &[Game {
         bios: "bios.u8",
         u7: "lotr-u7",
         samples: ["lotr-u17", "lotr-u21", "lotr-u36", "lotr-u37"],
+    },
+    // A 520-5068-01 and the nineteen-LED board that is this game's own
+    // (`segames.c:1499`).
+    boards: crate::board::Boards {
+        aux_solenoids: true,
+        leds: true,
     },
 }];
 

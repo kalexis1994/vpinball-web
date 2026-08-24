@@ -12,26 +12,63 @@
 /// eight rows that is the hundred and twenty-eight lamps a Whitestar game has.
 pub const LAMP_COLUMNS: usize = 16;
 
+/// How many of them the board strobes itself.
+///
+/// Ten: eight from the lamp strobe and two from the auxiliary board. Anything
+/// above that belongs to an expander board, which latches its lamps rather
+/// than strobing them — so those columns are not averaged over a window and
+/// not cleared at the end of one. The original draws the same line, clearing
+/// and smoothing exactly the first ten columns and copying the rest straight
+/// through (`se.c:161`).
+const STROBED_COLUMNS: usize = 10;
+
 /// The lamp matrix.
 ///
 /// A lamp is on while its column is strobed and its row driven, which on a real
-/// board is for a fraction of a sweep. Nothing here averages that: the level a
-/// lamp is showing is whether it was last seen driven. The bulb model that
-/// System 11 uses could be brought over, and should be — the original
-/// oversamples the state twice per frame *specifically because of this game*:
+/// board is for a fraction of a sweep, so what a reader gets has to be an
+/// average over a window rather than an instant.
+///
+/// The window and the rule for it are the original's (`se.c:130`), and both
+/// halves matter. The window is a **sixtieth of a second**, which has to be at
+/// least as long as a full sweep of the columns or every reading misses
+/// whichever columns fell outside it — a playfield that is dark in patches
+/// that move. And the rule is that a lamp counts as lit only if it was driven
+/// in **both** of the last two windows, which is what this game needs:
 ///
 /// > (at least) LOTR requires some kind of oversampling of the lamp state,
 /// > otherwise the flickering lamps during modes are always on!
-#[derive(Debug, Default, Clone)]
+///
+/// So the state a script reads is decided thirty times a second out of two
+/// sixtieth-of-a-second windows. A lamp the game is holding on is seen in both
+/// and reads lit; one the game is flickering as part of its artwork is seen in
+/// one and reads dark, which is the point.
+#[derive(Debug, Clone)]
 pub struct Lamps {
     /// Which columns are being strobed, low eight then high eight.
     column: u16,
     /// Which rows are driven, already un-reversed.
     row: u8,
-    /// What has been seen lit during the sweep going on now.
+    /// What has been seen driven during the window going on now.
     pending: [u8; LAMP_COLUMNS],
-    /// The last sweep that finished, which is what anybody reading gets.
+    /// How many of the current pair of windows each lamp was seen in.
+    seen: [u8; LAMP_COLUMNS * 8],
+    /// The decision from the last pair, which is what anybody reading gets.
     state: [u8; LAMP_COLUMNS],
+    /// Windows closed, to tell the first of a pair from the second.
+    windows: u32,
+}
+
+impl Default for Lamps {
+    fn default() -> Self {
+        Self {
+            column: 0,
+            row: 0,
+            pending: [0; LAMP_COLUMNS],
+            seen: [0; LAMP_COLUMNS * 8],
+            state: [0; LAMP_COLUMNS],
+            windows: 0,
+        }
+    }
 }
 
 impl Lamps {
@@ -90,17 +127,42 @@ impl Lamps {
         self.state
     }
 
-    /// Closes the sweep: what was seen during it becomes what is showing.
+    /// A column an expander board drives directly. See [`STROBED_COLUMNS`].
+    pub fn set_latched(&mut self, column: usize, value: u8) {
+        if (STROBED_COLUMNS..LAMP_COLUMNS).contains(&column) {
+            self.state[column] = value;
+        }
+    }
+
+    /// Closes one window. Called sixty times a second; see [`Lamps`].
     ///
-    /// Two buffers rather than one, and the difference is the whole reason a
-    /// lamp reads as lit at all. A lamp is strobed for a fraction of a sweep,
-    /// so a matrix that is cleared and refilled in place is empty for most of
-    /// the time anybody might look at it — a script polling sixty times a
-    /// second lands in the gap and sees a dark table. What it gets instead is
-    /// the last sweep that finished, complete.
-    pub fn end_sweep(&mut self) {
-        self.state = self.pending;
+    /// Every second window it decides, out of the pair, what is showing.
+    pub fn end_window(&mut self) {
+        for (col, driven) in self.pending.iter().enumerate().take(STROBED_COLUMNS) {
+            for row in 0..8 {
+                if driven & (1 << row) != 0 {
+                    self.seen[col * 8 + row] += 1;
+                }
+            }
+        }
         self.pending = [0; LAMP_COLUMNS];
+        self.windows += 1;
+        if !self.windows.is_multiple_of(2) {
+            return;
+        }
+        for (col, showing) in self.state.iter_mut().enumerate().take(STROBED_COLUMNS) {
+            let mut bits = 0u8;
+            for row in 0..8 {
+                // Both windows, not either: `lampstate[...] > 1` in the
+                // original, with the comment that it is what makes this game's
+                // lamps blink rather than sit on.
+                if self.seen[col * 8 + row] > 1 {
+                    bits |= 1 << row;
+                }
+            }
+            *showing = bits;
+        }
+        self.seen = [0; LAMP_COLUMNS * 8];
     }
 }
 
@@ -221,6 +283,8 @@ pub struct Solenoids {
     /// Bit *n* is coil *n+1*.
     live: u32,
     aux: u8,
+    /// The three outputs of the expander board, if the game has one.
+    latched: u8,
     /// Everything seen live since the last sweep. A coil pulse is shorter than
     /// a frame and would otherwise be missed by anything that samples.
     seen: u32,
@@ -268,7 +332,24 @@ impl Solenoids {
         std::mem::replace(&mut self.seen, self.live)
     }
 
+    /// The three outputs of the 520-5068-01 expander board, numbered 33 to 35.
+    ///
+    /// Latched rather than driven: the board holds what it was last clocked
+    /// with, so unlike the thirty-two real drivers these do not need to be
+    /// re-asserted to stay on.
+    pub fn set_latched(&mut self, data: u8) {
+        self.latched = data & 0x07;
+    }
+
+    pub fn latched(&self) -> u8 {
+        self.latched
+    }
+
     pub fn is_on(&self, number: u8) -> bool {
-        (1..=32).contains(&number) && self.live & (1 << (number - 1)) != 0
+        match number {
+            1..=32 => self.live & (1 << (number - 1)) != 0,
+            33..=35 => self.latched & (1 << (number - 33)) != 0,
+            _ => false,
+        }
     }
 }

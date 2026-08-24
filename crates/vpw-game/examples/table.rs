@@ -74,6 +74,21 @@ fn main() {
         }
     };
 
+    // What the board drives, watched rather than taken: `changed_lamps` and
+    // its friends are consumed by whoever asks first, and the table's own
+    // script is asking. A probe that drains them is a probe that stops the
+    // table working while it looks at it.
+    let mut lamps_ever = [false; 128];
+    let mut solenoids_ever = 0u32;
+    let mut lit_now = 0usize;
+    // And what the *table* has: the board's lamps only matter once the script
+    // has copied them onto the pieces the renderer draws, and that is a
+    // different set of numbers from the board's.
+    let mut table_lit_ever = 0usize;
+    let mut table_lit_now = 0usize;
+    let mut table_lights = 0usize;
+    let mut ever: std::collections::HashSet<String> = std::collections::HashSet::new();
+
     let mut heard = 0usize;
     let mut loud = 0usize;
     let mut peak = 0.0f32;
@@ -89,6 +104,32 @@ fn main() {
         if t % 17 == 16 {
             game.game_sync();
             game.new_frame();
+        }
+        if t % 16 == 0 {
+            let m = game.machine();
+            solenoids_ever |= m.solenoids_active();
+            lit_now = 0;
+            for n in 1..=128u8 {
+                if m.lamp_lit(n) {
+                    lamps_ever[usize::from(n) - 1] = true;
+                    lit_now += 1;
+                }
+            }
+        }
+        if t % 16 == 0 {
+            table_lit_now = 0;
+            table_lights = 0;
+            for item in game.items().iter() {
+                if item.kind != vpw_game::items::Kind::Light {
+                    continue;
+                }
+                table_lights += 1;
+                if item.light_level() > 0.0 {
+                    table_lit_now += 1;
+                    ever.insert(item.name.to_string());
+                }
+            }
+            table_lit_ever = ever.len();
         }
         // The mixer is where the board's audio ends up; ask it for the same
         // millisecond of sound a host would have asked for.
@@ -120,7 +161,15 @@ fn main() {
         .collect();
     println!("  which are       {closed:?}");
     println!(
-        "  solenoids       {:032b}",
+        "  lamps ever lit  {} of 128, {lit_now} lit at the end",
+        lamps_ever.iter().filter(|&&b| b).count()
+    );
+    println!(
+        "  table lights    {table_lit_ever} of {table_lights} ever on, {table_lit_now} on at the end"
+    );
+    println!("  solenoids ever  {solenoids_ever:032b}");
+    println!(
+        "  solenoids now   {:032b}",
         game.machine().solenoids_active()
     );
     println!("  sound latch     {:02x}", game.machine().sound_latch());

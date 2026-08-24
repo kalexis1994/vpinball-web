@@ -113,8 +113,14 @@ const SEGMENTS: usize = 64;
 /// machine, so the run is not contiguous and the position in this sequence —
 /// not the number — is what indexes the record of what the script has seen.
 fn solenoid_numbers() -> impl Iterator<Item = u8> {
-    (1..=SOLENOIDS as u8).chain(FLIPPER_SOLENOIDS)
+    (1..=SOLENOIDS as u8)
+        .chain(AUX_SOLENOIDS)
+        .chain(FLIPPER_SOLENOIDS)
 }
+
+/// The three outputs of a Whitestar expander board, when a game has one.
+/// Always off on a machine without it, which costs three booleans.
+const AUX_SOLENOIDS: std::ops::RangeInclusive<u8> = 33..=35;
 
 /// The flipper solenoids, which come after the driver outputs.
 const FLIPPER_SOLENOIDS: std::ops::RangeInclusive<u8> = 45..=48;
@@ -294,7 +300,7 @@ impl Hardware {
     fn gi(&self) -> Vec<f32> {
         match self {
             Self::S11(_) => Vec::new(),
-            Self::Whitestar(b) => vec![f32::from(u8::from(b.board.gi[2] & 1 != 0))],
+            Self::Whitestar(b) => vec![f32::from(u8::from(b.board.gi_relay))],
         }
     }
 
@@ -331,7 +337,7 @@ pub struct Machine {
     /// The segments each display digit had the last time the script asked. See
     /// [`Machine::changed_leds`].
     seen_segments: RefCell<[u16; SEGMENTS]>,
-    seen_solenoids: RefCell<[bool; SOLENOIDS + 4]>,
+    seen_solenoids: RefCell<[bool; SOLENOIDS + 7]>,
     /// What the general illumination looked like when the script last asked.
     seen_gi: RefCell<Vec<bool>>,
     /// Board time owed, in seconds. The board runs at 1 MHz and the game loop
@@ -347,7 +353,7 @@ impl Machine {
             running: Cell::new(false),
             seen_lamps: RefCell::new([false; LAMPS]),
             seen_segments: RefCell::new([0; SEGMENTS]),
-            seen_solenoids: RefCell::new([false; SOLENOIDS + 4]),
+            seen_solenoids: RefCell::new([false; SOLENOIDS + 7]),
             seen_gi: RefCell::new(Vec::new()),
             owed: Cell::new(0.0),
         }
@@ -394,7 +400,7 @@ impl Machine {
         self.running.set(true);
         self.owed.set(0.0);
         *self.seen_lamps.borrow_mut() = [false; LAMPS];
-        *self.seen_solenoids.borrow_mut() = [false; SOLENOIDS + 4];
+        *self.seen_solenoids.borrow_mut() = [false; SOLENOIDS + 7];
         *self.seen_segments.borrow_mut() = [0; SEGMENTS];
         self.seen_gi.borrow_mut().clear();
         Ok(())
@@ -416,6 +422,7 @@ impl Machine {
             .ok_or_else(|| format!("'{}' is not in the zip", game.cpu))?;
 
         let mut machine = vpw_ws::Whitestar::new();
+        machine.board.boards = game.boards;
         machine.load_rom(cpu)?;
         // The display is a board of its own with its own processor and its own
         // half-megabyte ROM. A set without it still plays; it just has nothing

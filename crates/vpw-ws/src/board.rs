@@ -40,6 +40,19 @@ const BANK_MASK: u8 = 0x1f;
 /// reset vector, which does not fail, it just runs somebody else's code.
 const FIXED_FROM: usize = 0x1_8000;
 
+/// Which expander boards a game has on the auxiliary connector.
+///
+/// The connector is one data latch and a handful of strobe lines, and what is
+/// on the far end of it differs from game to game — so a board that is not
+/// there must not be emulated, or its lamps come on in a game that has none.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Boards {
+    /// 520-5068-01: three more solenoids, latched on the ESTB edge.
+    pub aux_solenoids: bool,
+    /// 520-5242-00: the nineteen LEDs Lord of the Rings has.
+    pub leds: bool,
+}
+
 pub struct Board {
     ram: Box<[u8; 0x2000]>,
     /// The whole addressable ROM region, already mirrored.
@@ -69,6 +82,18 @@ pub struct Board {
     /// What the display board answers at `$3700`: busy in bit 7 and its four
     /// status bits from bit 3 (`se.c:753`).
     pub dmd_status: u8,
+    /// Which expander boards this game has hanging off the auxiliary
+    /// connector, and what they are holding.
+    pub boards: Boards,
+    /// The last byte written to `$200b`, because what the expander boards act
+    /// on is its **edges** and not its value.
+    aux_strobes: u8,
+    /// Whether the general illumination relay is closed.
+    pub gi_relay: bool,
+    /// The LED board's pair of latches: eight in the low byte, three more and
+    /// the row select in the high one.
+    led_latch: u16,
+
     /// The last sound command, `$3800`, and whether the sound board has been
     /// told about it yet.
     pub sound_latch: u8,
@@ -100,6 +125,10 @@ impl Board {
             dmd_ctrl_pending: None,
             dmd_enabled: false,
             dmd_status: 0,
+            boards: Boards::default(),
+            aux_strobes: 0,
+            gi_relay: false,
+            led_latch: 0,
             sound_latch: 0,
             sound_pending: false,
             diagnostic_led: false,
@@ -139,6 +168,52 @@ impl Board {
 
     pub fn ram_mut(&mut self) -> &mut [u8] {
         &mut self.ram[..]
+    }
+
+    /// `giaux_w`, `$200b`: the relay for the general illumination, and the
+    /// strobes for whatever is on the auxiliary connector (`se.c:798`).
+    fn write_aux_strobes(&mut self, value: u8) {
+        let was = std::mem::replace(&mut self.aux_strobes, value);
+        self.gi[2] = value;
+
+        // The relay pulls the general illumination **on** when the bit is low.
+        // Reading it the other way round does not look like an inverted bit:
+        // it looks like a table whose lamps do not work, because the general
+        // illumination is most of the light on a playfield and it would be off
+        // exactly when the game wants it on.
+        self.gi_relay = value & 0x01 == 0;
+
+        let rose = |mask: u8| was & mask == 0 && value & mask != 0;
+        let fell = |mask: u8| was & mask != 0 && value & mask == 0;
+
+        // Three more solenoids, clocked in from the data latch by ESTB.
+        if self.boards.aux_solenoids && rose(0x40) {
+            self.solenoids.set_latched(self.solenoids.aux());
+        }
+
+        // Two latches on the opposite edges of ASTB, and the top two bits of
+        // the pair say which row of LEDs the eight in the low byte belong to.
+        if self.boards.leds {
+            let before = self.led_latch;
+            let data = u16::from(self.solenoids.aux());
+            if fell(0x80) {
+                self.led_latch = (self.led_latch & 0xff00) | data;
+            } else if rose(0x80) {
+                self.led_latch = (self.led_latch & 0x00ff) | (data << 8);
+            }
+            if self.led_latch != before {
+                let low = self.led_latch as u8;
+                let high = (self.led_latch >> 8) as u8;
+                match self.led_latch & 0xc000 {
+                    0x4000 => {
+                        self.lamps.set_latched(10, low);
+                        self.lamps.set_latched(12, high & 0x07);
+                    }
+                    0x8000 => self.lamps.set_latched(11, low),
+                    _ => {}
+                }
+            }
+        }
     }
 
     fn banked(&self, addr: u16) -> u8 {
@@ -193,7 +268,7 @@ impl Bus for Board {
             0x2008 => self.lamps.set_column_low(value),
             0x2009 => self.lamps.set_column_high(value),
             0x200a => self.lamps.set_rows(value),
-            0x200b => self.gi[2] = value,
+            0x200b => self.write_aux_strobes(value),
             0x3200 => {
                 self.bank = value;
                 // Bit 7 is the diagnostic LED, inverted (`se.c:568`).

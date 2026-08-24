@@ -56,12 +56,14 @@ pub const FIRQ_HZ: u32 = 976;
 /// core means asserted for one instruction.
 const FIRQ_HOLD_CYCLES: u64 = 4;
 
-/// How many times a second the board closes a sweep of the lamps.
+/// How many times a second the board closes a window of the lamp sweep.
 ///
-/// Twice per frame at sixty frames, which is the original's `VBLANK` of 2 and
-/// the comment that goes with it: a game whose lamps flicker as part of its
-/// artwork reads as permanently on if the sweep is closed any slower.
-pub const SWEEP_HZ: u32 = 120;
+/// Sixty, and it is a floor rather than a preference: the board strobes ten
+/// columns off a 976 Hz interrupt, so a full sweep takes about ten
+/// milliseconds, and a window shorter than that misses whichever columns fall
+/// outside it every single time. Two of these windows make one decision, at
+/// thirty times a second. See [`io::Lamps`].
+pub const WINDOW_HZ: u32 = 60;
 
 /// A Whitestar machine.
 pub struct Whitestar {
@@ -94,7 +96,7 @@ impl Whitestar {
             cycle: 0,
             next_firq: u64::from(CPU_CLOCK_HZ / FIRQ_HZ),
             firq_until: 0,
-            next_sweep: u64::from(CPU_CLOCK_HZ / SWEEP_HZ),
+            next_sweep: u64::from(CPU_CLOCK_HZ / WINDOW_HZ),
             firqs: 0,
         }
     }
@@ -171,7 +173,7 @@ impl Whitestar {
         self.cycle = 0;
         self.next_firq = u64::from(CPU_CLOCK_HZ / FIRQ_HZ);
         self.firq_until = 0;
-        self.next_sweep = u64::from(CPU_CLOCK_HZ / SWEEP_HZ);
+        self.next_sweep = u64::from(CPU_CLOCK_HZ / WINDOW_HZ);
     }
 
     pub fn cycle(&self) -> u64 {
@@ -225,11 +227,11 @@ impl Whitestar {
             self.board.dmd_status = (u8::from(display.busy()) << 7) | (display.status() << 3);
         }
 
-        // Closing the sweep is what makes a lamp that is strobed for a fraction
-        // of it read as lit for the whole of it. See [`SWEEP_HZ`].
+        // Closing the window is what makes a lamp that is strobed for a
+        // fraction of it read as lit at all. See [`WINDOW_HZ`].
         if self.cycle >= self.next_sweep {
-            self.board.lamps.end_sweep();
-            self.next_sweep += u64::from(CPU_CLOCK_HZ / SWEEP_HZ);
+            self.board.lamps.end_window();
+            self.next_sweep += u64::from(CPU_CLOCK_HZ / WINDOW_HZ);
         }
 
         cycles
