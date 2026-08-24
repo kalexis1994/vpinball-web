@@ -2314,6 +2314,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "vpw-ws"
+version = "0.1.0"
+dependencies = [
+ "vpw-bus",
+ "vpw-m6809",
+ "zip 8.6.0",
+]
+
+[[package]]
 name = "wasip2"
 version = "1.0.4+wasi-0.2.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"

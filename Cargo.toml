@@ -13,6 +13,7 @@ vpw-math     = { path = "crates/vpw-math" }
 vpw-physics  = { path = "crates/vpw-physics" }
 vpw-render   = { path = "crates/vpw-render" }
 vpw-vbscript = { path = "crates/vpw-vbscript" }
+vpw-ws       = { path = "crates/vpw-ws" }
 
 # Release profile for wasm: binary size and speed come first.
 [profile.release]

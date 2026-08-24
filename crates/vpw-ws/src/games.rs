@@ -1,0 +1,40 @@
+//! Which Whitestar games this knows, and what each one's zip holds.
+//!
+//! Kept apart from the board because it is a list and not a mechanism, and
+//! because it is the file that grows: the board is the same silicon in every
+//! one of these games and the differences are which images are in the zip.
+
+/// A Whitestar game.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Game {
+    /// The set name, which is what a table's script calls `cGameName`.
+    pub set: &'static str,
+    /// The CPU image inside the zip. The name is matched without regard to
+    /// case, and only has to be contained in the entry's.
+    pub cpu: &'static str,
+    /// The display board's image, for when there is a display board to run it.
+    pub display: &'static str,
+}
+
+/// Every set this knows.
+///
+/// A short list on purpose. The board is the same for all of them and adding
+/// one is a row, but a row that has not been booted against a real image is a
+/// row that claims something nobody checked.
+const GAMES: &[Game] = &[Game {
+    set: "lotr",
+    cpu: "lotrcpua",
+    display: "lotrdspa",
+}];
+
+/// Looks a game up by set name, without regard to case.
+pub fn find(set: &str) -> Option<Game> {
+    GAMES
+        .iter()
+        .copied()
+        .find(|g| g.set.eq_ignore_ascii_case(set))
+}
+
+pub fn all() -> impl Iterator<Item = Game> {
+    GAMES.iter().copied()
+}
