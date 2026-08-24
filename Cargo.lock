@@ -2179,6 +2179,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "vpw-arm7"
+version = "0.1.0"
+
+[[package]]
 name = "vpw-audio"
 version = "0.1.0"
 dependencies = [

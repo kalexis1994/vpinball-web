@@ -9,6 +9,7 @@ license = "GPL-3.0-or-later"
 repository = "https://github.com/vpinball/vpinball"
 
 [workspace.dependencies]
+vpw-arm7     = { path = "crates/vpw-arm7" }
 vpw-math     = { path = "crates/vpw-math" }
 vpw-physics  = { path = "crates/vpw-physics" }
 vpw-render   = { path = "crates/vpw-render" }
