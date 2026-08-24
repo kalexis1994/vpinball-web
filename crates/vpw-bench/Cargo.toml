@@ -1,0 +1,12 @@
+[package]
+name = "vpw-bench"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+vpw-arm7 = { version = "0.1.0", path = "../vpw-arm7" }
+vpw-at91 = { version = "0.1.0", path = "../vpw-at91" }

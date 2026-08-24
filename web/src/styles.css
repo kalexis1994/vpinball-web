@@ -243,6 +243,10 @@ body {
 }
 
 /* Tilt warning in the top bar. */
+.player-quiet {
+  color: #e0a33a;
+}
+
 .player-tilt {
   color: #ff6b6b;
   letter-spacing: 0.08em;

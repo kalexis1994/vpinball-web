@@ -191,6 +191,15 @@ impl Hardware {
         }
     }
 
+    fn sound_stats(&self) -> (bool, u64) {
+        match self {
+            // A System 11 makes its own sound on the same board, so there is
+            // never a separate one to be missing.
+            Self::S11(_) => (true, 0),
+            Self::Whitestar(b) => b.sound_stats(),
+        }
+    }
+
     fn cmos(&self) -> Vec<u8> {
         match self {
             Self::S11(b) => b.cmos().to_vec(),
@@ -525,6 +534,12 @@ impl Machine {
             return Vec::new();
         }
         self.board.borrow_mut().drain_audio()
+    }
+
+    /// Whether this machine has a sound board and how much it has produced.
+    /// See [`vpw_ws::Whitestar::sound_stats`].
+    pub fn sound_stats(&self) -> (bool, u64) {
+        self.board.borrow().sound_stats()
     }
 
     /// The machine's battery-backed memory: settings, audits, high scores.

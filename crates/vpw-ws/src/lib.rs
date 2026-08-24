@@ -137,6 +137,20 @@ impl Whitestar {
         }
     }
 
+    /// Whether the sound board's images were all there, and how many samples
+    /// it has made since it was built.
+    ///
+    /// The one pair of numbers that tells a player why a machine is quiet: no
+    /// board at all is a missing image in the zip, a board making nothing is a
+    /// firmware that has not got going, and a board making twenty-four thousand
+    /// a second is one doing its job with nothing to say.
+    pub fn sound_stats(&self) -> (bool, u64) {
+        match &self.sound {
+            Some(s) => (true, s.produced),
+            None => (false, 0),
+        }
+    }
+
     /// The same, as mono at the rate a mixer wants. See
     /// [`sound::SoundBoard::take_audio_at`].
     pub fn take_audio_at(&mut self, rate: u32) -> Vec<f32> {

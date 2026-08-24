@@ -283,6 +283,16 @@ function LoopBadge({ loop }: { loop: Loop }) {
   return (
     <span className="player-fps">
       {loop.fps.toFixed(0)} fps · {loop.tps.toFixed(0)} Hz physics
+      {/* Why a machine is quiet, which is otherwise invisible: no board at all
+          is a missing image in the zip, a board at zero is firmware that has
+          not got going, and a board at its full rate with nothing coming out
+          of the speakers is a machine in attract mode with nothing to say. */}
+      {loop.romRunning && !loop.soundBoard && (
+        <strong className="player-quiet"> · no sound board</strong>
+      )}
+      {loop.romRunning && loop.soundBoard && (
+        <span> · {(loop.soundRate / 1000).toFixed(1)}k sound</span>
+      )}
       {loop.tilt && <strong className="player-tilt"> · TILT</strong>}
     </span>
   );

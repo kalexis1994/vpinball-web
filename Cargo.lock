@@ -2198,6 +2198,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "vpw-bench"
+version = "0.1.0"
+dependencies = [
+ "vpw-arm7",
+ "vpw-at91",
+]
+
+[[package]]
 name = "vpw-bus"
 version = "0.1.0"
 

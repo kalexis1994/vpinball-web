@@ -291,6 +291,10 @@ export interface Loop {
   romRunning: boolean;
   /** The set that is running, or empty. */
   romName: string;
+  /** Whether this machine has a sound board of its own that loaded. */
+  soundBoard: boolean;
+  /** Samples a second it is making. A working one is a shade over 24000. */
+  soundRate: number;
   /** What the machine last said about itself, mostly why a ROM would not load. */
   notice: string;
 }
@@ -311,6 +315,8 @@ export async function loopStats(): Promise<Loop | null> {
     handlerCalls: l.handlerCalls,
     romRunning: l.romRunning,
     romName: l.romName,
+    soundBoard: l.soundBoard,
+    soundRate: l.soundRate,
     notice: l.notice,
   };
 }

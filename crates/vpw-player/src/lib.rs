@@ -42,15 +42,20 @@ struct FrameStats {
     /// Last average computed, so the UI can read it.
     last_fps: f64,
     last_tps: f64,
+    /// Samples the sound board had made when the window opened, and the rate
+    /// worked out from the window that just closed.
+    sound_at: u64,
+    sound_rate: f64,
 }
 
 impl FrameStats {
     /// Accumulates and, once per second, returns (fps, ticks/s) and resets.
-    fn tick(&mut self, now_ms: f64, ticks: u32) -> Option<(f64, f64)> {
+    fn tick(&mut self, now_ms: f64, ticks: u32, sound: u64) -> Option<(f64, f64)> {
         self.frames += 1;
         self.physics_ticks += u64::from(ticks);
         if self.window_start_ms == 0.0 {
             self.window_start_ms = now_ms;
+            self.sound_at = sound;
             return None;
         }
         let elapsed = (now_ms - self.window_start_ms) / 1000.0;
@@ -59,6 +64,8 @@ impl FrameStats {
         }
         self.last_fps = f64::from(self.frames) / elapsed;
         self.last_tps = self.physics_ticks as f64 / elapsed;
+        self.sound_rate = sound.saturating_sub(self.sound_at) as f64 / elapsed;
+        self.sound_at = sound;
         self.frames = 0;
         self.physics_ticks = 0;
         self.window_start_ms = now_ms;
@@ -221,8 +228,16 @@ impl Player {
         }
         self.finished_ms = clock_ms();
 
-        if let Some((fps, tps)) = self.stats.tick(now_ms, ticks) {
-            log::info!("{fps:.1} fps | {tps:.0} physics ticks/s (target 1000)");
+        let made = self
+            .table
+            .as_ref()
+            .map_or(0, |t| t.machine().sound_stats().1);
+        if let Some((fps, tps)) = self.stats.tick(now_ms, ticks, made) {
+            log::info!(
+                "{fps:.1} fps | {tps:.0} physics ticks/s (target 1000) | \
+                 sound board {:.0} samples/s (target 24242)",
+                self.stats.sound_rate
+            );
         }
     }
 }
@@ -838,6 +853,19 @@ pub struct LoopStats {
     /// nothing anywhere on the screen to tell them apart.
     #[wasm_bindgen(js_name = romRunning, readonly)]
     pub rom_running: bool,
+    /// Whether this machine's sound board is there, and how many samples a
+    /// second it is making.
+    ///
+    /// Separate from `rom_running` because they fail apart: a game board runs
+    /// perfectly out of one image in the zip while the five the sound board
+    /// needs are missing, and the result is a machine that plays and says
+    /// nothing. And a board that is there but making nothing is a different
+    /// fault again from one making its full rate with nothing to say, which is
+    /// what a machine in attract mode sounds like.
+    #[wasm_bindgen(js_name = soundBoard, readonly)]
+    pub sound_board: bool,
+    #[wasm_bindgen(js_name = soundRate, readonly)]
+    pub sound_rate: f64,
     /// The set that is running, or empty. Answers "which machine is this".
     rom_name: String,
     /// What the machine or the script last said about itself: why a ROM would
@@ -924,6 +952,11 @@ pub fn loop_stats() -> Option<LoopStats> {
                     .table
                     .as_ref()
                     .is_some_and(|t| t.machine().is_running()),
+                sound_board: player
+                    .table
+                    .as_ref()
+                    .is_some_and(|t| t.machine().sound_stats().0),
+                sound_rate: s.sound_rate,
                 rom_name: player
                     .table
                     .as_ref()
