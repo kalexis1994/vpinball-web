@@ -606,6 +606,16 @@ impl Machine {
 
     /// Whether a playfield switch is closed. For a host or a test that wants
     /// to see what the script told the board.
+    /// Opens or closes a switch, the way the playfield does.
+    ///
+    /// A table's script goes through `Controller.Switch(n)` and never touches
+    /// this; it is here for a host driving the board on its own — a test, or a
+    /// machine with nothing on it yet, which still has to be told there are
+    /// balls in the trough or it will spend its life searching for them.
+    pub fn set_switch(&self, number: u8, closed: bool) {
+        self.board.borrow_mut().set_switch(number, closed);
+    }
+
     pub fn switch_closed(&self, number: u8) -> bool {
         self.board.borrow().switch_closed(number)
     }

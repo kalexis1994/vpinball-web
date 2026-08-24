@@ -67,6 +67,14 @@ fn main() {
 
     // Somebody has to be at the door, or a board that boots sits waiting.
     machine.board.switches.set_dedicated(0, false);
+    // Balls in the trough, given as switch numbers. A machine that cannot see
+    // any spends its life searching for them and lights nothing.
+    if let Some(list) = std::env::args().nth(3) {
+        for number in list.split(',').filter_map(|n| n.trim().parse::<u8>().ok()) {
+            machine.board.switches.set(number, true);
+            println!("holding switch {number} closed");
+        }
+    }
 
     let mut banks = BTreeMap::new();
     let mut columns = 0u8;
