@@ -10,20 +10,25 @@
 //!   00400000-005fffff  the BIOS, where it stays
 //!   10000000-101fffff  U8, two megabytes, on an eight-bit bus
 //!   20000000-20000003  the command from the CPU board
-//!   20000004-21ffffff  U17, U21, U36 and U37, one to a socket
+//!   20000004-207fffff  U17, U21, U36 and U37, in two interleaved pairs
 //!   40000000-4000ffff  U7, sixty-four kilobytes
 //! write
 //!   20400000-20400003  the samples, two channels in the two halves of a word
 //! ```
 //!
-//! The sample sockets are the part that is not obvious. The chip select gives
-//! them thirty-two megabytes between them, eight each, and the parts in them
-//! are one megabyte. The address lines above a part's size are simply not
-//! connected, so each one answers eight times over inside its own window —
-//! and firmware that walks past the end of a part reads the start of it again
-//! rather than nothing. Mapping the four as four contiguous megabytes instead
-//! looks tidier and is wrong: the boot test reads high in the last socket, and
-//! a board that answers that with silence fails its own ROM check and stops.
+//! The sample parts are the part that is not obvious, and guessing at them is
+//! how a board produces music with noise all over it: near enough to the right
+//! bytes that a tune is recognisable, and wrong enough that nothing else is.
+//! They are not four parts one after another and they are not four sockets in
+//! a row. They are two pairs, wired the way byte-wide parts are wired to make
+//! a sixteen-bit-wide store: **A0 chooses within a pair and A21 chooses the
+//! pair**, so consecutive addresses alternate between two chips, and the
+//! address a chip actually sees is the processor's with those two lines taken
+//! out — which means shifted right by one. A29 is the chip select's own line
+//! and A22 is not connected to anything.
+//!
+//! The order the four sit in is not the order they are named in either:
+//! `desound.c:453` gives it as U37, U21, U36, U17 for selector zero to three.
 //!
 //! The eight-bit buses matter. U8 and the sample ROMs are byte-wide devices on
 //! the external bus, so a word read of one is four accesses, and a core that
@@ -41,11 +46,8 @@ pub const CLOCK_HZ: u32 = 40_000_000;
 const PAGE0: usize = 0x10_0000;
 const RESET_RAM: usize = 0x10_0000;
 const BIOS: usize = 0x20_0000;
-/// How much of the map one sample socket answers to, whatever is in it.
-const SOCKET: usize = 0x80_0000;
-/// Where the sample sockets begin, and where they end.
-const SAMPLES_FROM: u32 = 0x2000_0000;
-const SAMPLES_TO: u32 = 0x21ff_ffff;
+/// Where the sample parts answer, from `desound.c:860`.
+const SAMPLES_TO: u32 = 0x207f_ffff;
 const U7: usize = 0x1_0000;
 
 /// The sound board's memory and peripherals.
@@ -157,13 +159,19 @@ impl Sound {
     /// about why the address is folded twice: once to pick the socket, and
     /// again inside it because the part is smaller than its window.
     fn sample_byte(&self, addr: u32) -> u8 {
-        let at = (addr - SAMPLES_FROM) as usize;
-        let part = &self.samples[(at / SOCKET) & 3];
+        // A29 is the chip select and A22 goes nowhere (`desound.c:556`).
+        let a = addr & 0xdfbf_ffff;
+        // Which of the four, from A21 and A0. The numbering is the board's,
+        // not the parts' names: `rommap` in the original is `{4,2,3,1}`.
+        const ORDER: [usize; 4] = [3, 1, 2, 0];
+        let part = &self.samples[ORDER[(((a & 0x0020_0000) >> 20) | (a & 1)) as usize]];
+        // And what is left of the address once those two lines are taken out.
+        let at = ((a & !0x0020_0000) >> 1) as usize;
         match part.is_empty() {
             // An empty socket floats high, which is what a ROM test reads
             // when the part is not there.
             true => 0xff,
-            false => part[(at % SOCKET) % part.len()],
+            false => part[at % part.len()],
         }
     }
 
