@@ -54,6 +54,7 @@ export function Player({ table, title, source, rom, onExit }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [phase, setPhase] = useState<Phase>('starting');
   const [loop, setLoop] = useState<Loop | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [marked, setMarked] = useState<string | null>(null);
   const [view, setView] = useState<CameraView>(() => settings().camera);
 
@@ -92,7 +93,12 @@ export function Player({ table, title, source, rom, onExit }: Props) {
 
         timer = window.setInterval(() => {
           void loopStats().then((l) => {
-            if (alive && l) setLoop(l);
+            if (!alive || !l) return;
+            setLoop(l);
+            // Kept until it is replaced rather than for one poll: the machine
+            // says why it would not start exactly once, and a notice that
+            // flashes for a quarter of a second is a notice nobody read.
+            if (l.notice) setNotice(l.notice);
           });
         }, 250);
       } catch (e) {
@@ -187,6 +193,8 @@ export function Player({ table, title, source, rom, onExit }: Props) {
             physics is falling behind and the game is running in slow motion.
             The rest of the time a playfield is better with nothing on it. */}
         {loop && (loop.tilt || loop.tps < 900) && <LoopBadge loop={loop} />}
+        {loop && !loop.romRunning && <NoMachine wanted={table?.rom.name ?? rom?.name ?? null} />}
+        {notice && <p className="player-notice">{notice}</p>}
         {marked && (
           <span className="player-fps">
             saved {TELEMETRY_WINDOW_S}s · {marked}
@@ -241,6 +249,36 @@ function ExitIcon() {
  * that means the simulation is falling behind and the table is running in slow
  * motion — which looks like lag but is not.
  */
+/**
+ * Says that the table is running without its machine.
+ *
+ * A table with no ROM — or with a ROM for hardware this emulator does not have
+ * — loads, renders, and rolls a ball around perfectly. It also takes a coin and
+ * starts nothing, because the rules of the game live on a board that is not
+ * there. From the player's seat that is indistinguishable from a bug, and there
+ * was nothing anywhere on the screen to tell the two apart: somebody put a coin
+ * in, pressed start, and watched nothing happen with no way of knowing why.
+ */
+function NoMachine({ wanted }: { wanted: string | null }) {
+  return (
+    <div className="player-nomachine" role="status">
+      <strong>No machine</strong>
+      <span>
+        The table is running but its ROM is not, so a coin credits nothing and
+        start starts nothing: the rules of the game live on the machine's board.
+      </span>
+      {wanted ? (
+        <span>
+          It asks for <code>{wanted}.zip</code>. Import it from Content — or it
+          may be a machine this emulator cannot run yet.
+        </span>
+      ) : (
+        <span>This table did not say which ROM it needs.</span>
+      )}
+    </div>
+  );
+}
+
 function LoopBadge({ loop }: { loop: Loop }) {
   return (
     <span className="player-fps">

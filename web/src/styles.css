@@ -962,3 +962,48 @@ body {
   background: var(--accent);
   color: var(--accent-ink);
 }
+
+/* The machine is missing. Deliberately in the way: the alternative is a player
+   putting a coin in, pressing start, and watching nothing happen. */
+.player-nomachine {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  max-width: min(28rem, 82vw);
+  padding: 1rem 1.25rem;
+  border: 1px solid #7c2d2d;
+  border-radius: 0.6rem;
+  background: #1a0f12ee;
+  color: #f3e7e7;
+  font-size: 0.85rem;
+  line-height: 1.45;
+  text-align: center;
+  pointer-events: none;
+}
+.player-nomachine strong {
+  font-size: 1rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #ff9a9a;
+}
+
+/* What the machine said about itself, once. */
+.player-notice {
+  position: absolute;
+  bottom: 0.75rem;
+  left: 50%;
+  transform: translateX(-50%);
+  margin: 0;
+  max-width: 90vw;
+  padding: 0.35rem 0.7rem;
+  border-radius: 0.4rem;
+  background: #14161fdd;
+  color: #cfd6e6;
+  font-size: 0.75rem;
+  text-align: center;
+  pointer-events: none;
+}

@@ -123,9 +123,18 @@ async function provideLibraries(): Promise<void> {
  * and nothing scores, which is the honest outcome rather than a failure.
  */
 async function provideRom(wasm: Wasm, rom: RomInfo | undefined): Promise<void> {
-  if (!rom?.name) return;
+  // Both of these used to be silent, and both leave the player with a table
+  // that renders, rolls a ball, takes a coin and starts nothing — because the
+  // rules of the game are on a board that was never handed over.
+  if (!rom?.name) {
+    console.warn('[player] this table did not say which ROM it needs');
+    return;
+  }
   const zip = (await readRom(rom.name)) ?? (await devRom(rom.name));
-  if (!zip) return;
+  if (!zip) {
+    console.warn(`[player] the ROM "${rom.name}" is not loaded; import ${rom.name}.zip`);
+    return;
+  }
   wasm.addRom(rom.name, zip);
 
   // And the machine's own memory, so it is the same machine as last time,
@@ -258,6 +267,12 @@ export interface Loop {
   tiltRisk: number;
   /** How many of the table's own script handlers have run. */
   handlerCalls: number;
+  /** Whether the machine's ROM is loaded and executing. */
+  romRunning: boolean;
+  /** The set that is running, or empty. */
+  romName: string;
+  /** What the machine last said about itself, mostly why a ROM would not load. */
+  notice: string;
 }
 
 /** The state of the last second, or `null` if the player never started. */
@@ -274,6 +289,9 @@ export async function loopStats(): Promise<Loop | null> {
     warnings: l.warnings,
     tiltRisk: l.tiltRisk,
     handlerCalls: l.handlerCalls,
+    romRunning: l.romRunning,
+    romName: l.romName,
+    notice: l.notice,
   };
 }
 

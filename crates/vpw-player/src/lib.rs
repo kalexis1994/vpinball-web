@@ -732,6 +732,36 @@ pub struct LoopStats {
     /// that says whether the table's rules are running at all.
     #[wasm_bindgen(js_name = handlerCalls, readonly)]
     pub handler_calls: f64,
+    /// Whether the machine's ROM is loaded and executing.
+    ///
+    /// The one thing that was impossible to see from the outside. A table with
+    /// no ROM, or with a ROM this emulator cannot run, loads and renders and
+    /// rolls a ball around perfectly — and takes a coin, and starts nothing,
+    /// because the rules of the game live on a board that is not there. From
+    /// the player's seat that is indistinguishable from a bug, and there was
+    /// nothing anywhere on the screen to tell them apart.
+    #[wasm_bindgen(js_name = romRunning, readonly)]
+    pub rom_running: bool,
+    /// The set that is running, or empty. Answers "which machine is this".
+    rom_name: String,
+    /// What the machine or the script last said about itself: why a ROM would
+    /// not load, mostly. Empty when it has said nothing.
+    notice: String,
+}
+
+#[wasm_bindgen]
+impl LoopStats {
+    /// A `String` cannot be a `wasm_bindgen` field, so these are getters. See
+    /// the fields for what they are.
+    #[wasm_bindgen(getter, js_name = romName)]
+    pub fn rom_name(&self) -> String {
+        self.rom_name.clone()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn notice(&self) -> String {
+        self.notice.clone()
+    }
 }
 
 /// Holds the shooter rod where a finger is holding it, from 0 to 1.
@@ -794,6 +824,24 @@ pub fn loop_stats() -> Option<LoopStats> {
                 // As `f64` because JS has no `u64`, and `wasm-bindgen` would
                 // hand it over as a `BigInt`, which the UI then cannot format.
                 handler_calls: hud.map_or(0.0, |h| h.handlers as f64),
+                rom_running: player
+                    .table
+                    .as_ref()
+                    .is_some_and(|t| t.machine().is_running()),
+                rom_name: player
+                    .table
+                    .as_ref()
+                    .and_then(|t| t.machine().game_name())
+                    .unwrap_or_default()
+                    .to_string(),
+                // Taken, not peeked: a notice is shown once and then it is the
+                // player's problem, not something to repeat sixty times a
+                // second for the rest of the session.
+                notice: player
+                    .table
+                    .as_ref()
+                    .map(|t| t.take_messages().join(" · "))
+                    .unwrap_or_default(),
             }
         })
     })
