@@ -19,14 +19,56 @@ createRoot(root).render(
 // Development is left alone on purpose. A service worker that serves the last
 // build from a cache is the single most confusing thing that can happen while
 // somebody is editing the thing it cached.
+/**
+ * Announces a new build, and applies it when the player says so.
+ *
+ * A waiting service worker takes over on its own only once every tab running
+ * the old build has gone. That is the right default and the wrong behaviour to
+ * leave a player with: on a phone nobody closes a tab, they reload, and a
+ * reload is precisely what does not help — so without this a player stays on an
+ * old build indefinitely while being told the thing is fixed.
+ *
+ * The reload happens on `controllerchange` rather than straight after the
+ * message, because that is the event that says the new worker is actually in
+ * charge; reloading sooner just reloads the old one again.
+ */
+function watchForUpdates(registration: ServiceWorkerRegistration): void {
+  let reloading = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (reloading) return;
+    reloading = true;
+    window.location.reload();
+  });
+
+  const offer = (worker: ServiceWorker | null) => {
+    // Only when one is already in charge: the first install of all is not an
+    // update, and asking about it would be asking about nothing.
+    if (!worker || !navigator.serviceWorker.controller) return;
+    window.dispatchEvent(
+      new CustomEvent('vpw-update', { detail: () => worker.postMessage('take-over') }),
+    );
+  };
+
+  offer(registration.waiting);
+  registration.addEventListener('updatefound', () => {
+    const installing = registration.installing;
+    installing?.addEventListener('statechange', () => {
+      if (installing.state === 'installed') offer(installing);
+    });
+  });
+}
+
 if (import.meta.env.PROD && 'serviceWorker' in navigator) {
   window.addEventListener('load', () => {
     const base = import.meta.env.BASE_URL;
-    navigator.serviceWorker.register(`${base}sw.js`, { scope: base }).catch((e: unknown) => {
-      // Not fatal, and not worth a dialog: the page works, it just will not
-      // work on a plane. Private windows and some corporate policies refuse
-      // registration outright.
-      console.warn('the service worker did not register:', e);
-    });
+    navigator.serviceWorker
+      .register(`${base}sw.js`, { scope: base })
+      .then((registration) => watchForUpdates(registration))
+      .catch((e: unknown) => {
+        // Not fatal, and not worth a dialog: the page works, it just will not
+        // work on a plane. Private windows and some corporate policies refuse
+        // registration outright.
+        console.warn('the service worker did not register:', e);
+      });
   });
 }

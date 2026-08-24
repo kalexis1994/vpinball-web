@@ -144,9 +144,14 @@ function telemetrySink(): Plugin {
  * was generated against, and a stale pairing of the two cannot be assembled
  * out of a cache keyed by name.
  *
- * The service worker deliberately does **not** call `skipWaiting`. A new build
- * waits until every tab running the old one has gone, so a running game is
- * never served half of one version and half of another.
+ * The service worker deliberately does **not** call `skipWaiting` on its own. A
+ * new build waits, so a running game is never served half of one version and
+ * half of another. What it does do is accept a message asking it to take over,
+ * which is what the page sends when the player says yes — because "waits until
+ * every tab running the old one has gone" is a sentence about desktops. On a
+ * phone nobody closes a tab; they reload, and reloading is exactly the thing
+ * that does not help. Left like that, a player sits on a build from days ago
+ * and every fix lands nowhere.
  */
 function pwa(): Plugin {
   const base = process.env.VPW_BASE ?? '/';
@@ -236,9 +241,14 @@ const CACHE = 'vpw-${version}';
 const SHELL = ${JSON.stringify(shell, null, 2)};
 
 self.addEventListener('install', (event) => {
-  // Not skipWaiting: a new build takes over only once every tab running the old
-  // one is gone, so a game in progress is never handed half of each.
+  // Not skipWaiting here: a new build takes over when the page asks, below, so
+  // a game in progress is never handed half of each.
   event.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)));
+});
+
+self.addEventListener('message', (event) => {
+  // The page has told the player there is an update and the player said yes.
+  if (event.data === 'take-over') self.skipWaiting();
 });
 
 self.addEventListener('activate', (event) => {

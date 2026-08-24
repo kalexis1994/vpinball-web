@@ -243,6 +243,17 @@ body {
 }
 
 /* Tilt warning in the top bar. */
+.player-update {
+  border: 1px solid #4a9eff;
+  border-radius: 999px;
+  background: rgba(20, 40, 70, 0.85);
+  color: #cfe4ff;
+  font: inherit;
+  font-size: 0.85rem;
+  padding: 0.2rem 0.75rem;
+  cursor: pointer;
+}
+
 .player-quiet {
   color: #e0a33a;
 }

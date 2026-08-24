@@ -56,7 +56,16 @@ export function Player({ table, title, source, rom, onExit }: Props) {
   const [loop, setLoop] = useState<Loop | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [marked, setMarked] = useState<string | null>(null);
+  // A new build, waiting for permission to take over. See `watchForUpdates`
+  // in `main.tsx` for why this is asked rather than done.
+  const [update, setUpdate] = useState<(() => void) | null>(null);
   const [view, setView] = useState<CameraView>(() => settings().camera);
+
+  useEffect(() => {
+    const offered = (e: Event) => setUpdate(() => (e as CustomEvent<() => void>).detail);
+    window.addEventListener('vpw-update', offered);
+    return () => window.removeEventListener('vpw-update', offered);
+  }, []);
 
   const key = source.kind === 'library' ? `db:${source.id}` : `url:${source.url}`;
 
@@ -195,6 +204,21 @@ export function Player({ table, title, source, rom, onExit }: Props) {
         {loop && (loop.tilt || loop.tps < 900) && <LoopBadge loop={loop} />}
         {loop && !loop.romRunning && <NoMachine wanted={table?.rom.name ?? rom?.name ?? null} />}
         {notice && <p className="player-notice">{notice}</p>}
+        {/* Worth the space it takes: without it a player stays on an old build
+            for as long as they keep reloading instead of closing the tab, and
+            every fix lands nowhere. */}
+        {update && (
+          <button
+            type="button"
+            className="player-update"
+            onClick={() => {
+              setUpdate(null);
+              update();
+            }}
+          >
+            New version ready · tap to load it
+          </button>
+        )}
         {marked && (
           <span className="player-fps">
             saved {TELEMETRY_WINDOW_S}s · {marked}
