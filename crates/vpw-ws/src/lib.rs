@@ -34,6 +34,7 @@
 //! > otherwise the flickering lamps during modes are always on!
 
 pub mod board;
+pub mod dmd;
 pub mod games;
 pub mod io;
 
@@ -65,6 +66,8 @@ pub const SWEEP_HZ: u32 = 120;
 pub struct Whitestar {
     pub cpu: Cpu,
     pub board: Board,
+    /// The display, if this game's board was given one. See [`dmd::Dmd`].
+    pub dmd: Option<Box<dmd::Dmd>>,
     /// Cycles since reset.
     cycle: u64,
     next_firq: u64,
@@ -83,6 +86,7 @@ impl Whitestar {
         Self {
             cpu,
             board,
+            dmd: None,
             cycle: 0,
             next_firq: u64::from(CPU_CLOCK_HZ / FIRQ_HZ),
             firq_until: 0,
@@ -96,6 +100,20 @@ impl Whitestar {
         self.board.load_rom(image)?;
         self.reset();
         Ok(())
+    }
+
+    /// Gives the machine its display board.
+    pub fn load_display_rom(&mut self, image: &[u8]) -> Result<(), String> {
+        let mut dmd = dmd::Dmd::new();
+        dmd.load_rom(image)?;
+        self.dmd = Some(Box::new(dmd));
+        Ok(())
+    }
+
+    /// The dot matrix, one byte per dot from 0 to 3, or nothing if this
+    /// machine has no display board loaded.
+    pub fn dmd_frame(&self) -> Option<&[u8]> {
+        self.dmd.as_ref().map(|d| &d.frame()[..])
     }
 
     pub fn reset(&mut self) {
@@ -125,6 +143,28 @@ impl Whitestar {
 
         let cycles = self.cpu.step(&mut self.board);
         self.cycle += u64::from(cycles);
+
+        // The display board runs on its own 2 MHz clock, which is this one's,
+        // and takes its commands through the latch at `$3600`. It is caught up
+        // rather than interleaved instruction by instruction: it answers the
+        // CPU board only through a busy line and a status byte, and both of
+        // those are levels that survive being read a few microseconds late.
+        if let Some(display) = &mut self.dmd {
+            if std::mem::take(&mut self.board.dmd_data_pending) {
+                display.set_data(self.board.dmd_latch);
+                // The CPU board strobes it in with a low-then-high pulse, which
+                // is what `dmdlatch_w` does (`se.c:725`).
+                display.set_ctrl(self.board.dmd_ctrl & !1);
+                display.set_ctrl(self.board.dmd_ctrl | 1);
+                self.board.dmd_ctrl |= 1;
+            }
+            if let Some(ctrl) = self.board.dmd_ctrl_pending.take() {
+                display.set_ctrl(ctrl);
+                self.board.dmd_ctrl = ctrl;
+            }
+            display.run_until(self.cycle);
+            self.board.dmd_status = (u8::from(display.busy()) << 7) | (display.status() << 3);
+        }
 
         // Closing the sweep is what makes a lamp that is strobed for a fraction
         // of it read as lit for the whole of it. See [`SWEEP_HZ`].

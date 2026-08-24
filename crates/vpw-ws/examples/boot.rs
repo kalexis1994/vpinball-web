@@ -39,6 +39,16 @@ fn main() {
 
     let mut machine = Whitestar::new();
     machine.load_rom(cpu).expect("the image fits the region");
+    if let Some(display) = find(&roms, set.display) {
+        machine
+            .load_display_rom(display)
+            .expect("the display image fits");
+        println!(
+            "loading {} ({} KB) as the display image",
+            set.display,
+            display.len() / 1024
+        );
+    }
     println!("reset vector -> pc {:04x}", machine.cpu.pc);
     println!();
 
@@ -113,6 +123,25 @@ fn main() {
         machine.board.dmd_latch, machine.board.dmd_enabled
     );
     println!("  diagnostic led  {}", machine.board.diagnostic_led);
+    if let Some(display) = &machine.dmd {
+        let f = display.frame();
+        let lit = f.iter().filter(|&&d| d > 0).count();
+        println!("  dmd frames      {}", display.frames);
+        println!("  dots lit        {lit} of {}", f.len());
+        println!("  dmd status      {:02x}", machine.board.dmd_status);
+        // A picture is worth more than a count.
+        for y in 0..vpw_ws::dmd::HEIGHT {
+            let row: String = (0..vpw_ws::dmd::WIDTH)
+                .map(|x| match f[y * vpw_ws::dmd::WIDTH + x] {
+                    0 => ' ',
+                    1 => '.',
+                    2 => '+',
+                    _ => '#',
+                })
+                .collect();
+            println!("    |{row}|");
+        }
+    }
     if unmapped.is_empty() {
         println!("  every address it touched is on the map");
     } else {

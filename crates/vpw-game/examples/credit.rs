@@ -65,6 +65,29 @@ fn main() {
     game.start().expect("the script should start");
 
     println!("rom running   {}", game.machine().is_running());
+    let show = |g: &Game, when: &str| {
+        let (dots, w, h) = g.machine().dmd();
+        if dots.is_empty() {
+            return;
+        }
+        println!();
+        println!("the display, {when}:");
+        for y in 0..h {
+            let row: String = (0..w)
+                .step_by(2)
+                .map(|x| match dots[y * w + x] {
+                    0 => ' ',
+                    1 => '.',
+                    2 => '+',
+                    _ => '#',
+                })
+                .collect();
+            if row.trim().is_empty() {
+                continue;
+            }
+            println!("  |{row}|");
+        }
+    };
     let troughs = |g: &Game| {
         (11..=14u8)
             .map(|n| {
@@ -99,6 +122,47 @@ fn main() {
         println!("  sounds      {}", game.take_sounds().len());
         println!("  trough      {}", troughs(&game));
         println!("  coil 1      {}", game.machine().solenoid_fired(1));
+    }
+
+    show(&game, "with a game in progress");
+
+    // Play it. If the rules are running, the machine reacts to the ball: it
+    // sends a sound command for every bumper and every target, it moves its
+    // lamps as modes come and go, and it fires coils. If it is merely alive but
+    // not playing, none of that happens however long the ball rolls.
+    game.key("Space", true);
+    t = run(&mut game, 600, t);
+    game.key("Space", false);
+
+    let (mut sounds, mut last) = (0u32, 0u8);
+    let mut lamp_changes = 0usize;
+    let mut coils = 0u32;
+    let mut seen_lamps: Vec<bool> = (1..=128u8).map(|n| game.machine().lamp_lit(n)).collect();
+    for second in 0..30 {
+        for _ in 0..100 {
+            t = run(&mut game, 10, t);
+            let sl = game.machine().sound_latch();
+            if sl != last {
+                last = sl;
+                sounds += 1;
+            }
+            coils |= game.machine().solenoids_active();
+            for (i, was) in seen_lamps.iter_mut().enumerate() {
+                let now = game.machine().lamp_lit(i as u8 + 1);
+                if now != *was {
+                    *was = now;
+                    lamp_changes += 1;
+                }
+            }
+        }
+        if second == 9 || second == 29 {
+            println!();
+            println!("after {} seconds of play:", second + 1);
+            println!("  sound commands  {sounds}");
+            println!("  lamp changes    {lamp_changes}");
+            println!("  coils used      {}", coils.count_ones());
+            println!("  balls           {}", game.engine.borrow().balls.len());
+        }
     }
 
     // Watch a while: serving a ball is a coil pulse and a pulse is easy to miss.

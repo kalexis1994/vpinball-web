@@ -55,11 +55,19 @@ pub struct Board {
     /// General illumination, `$200b` and `$3406`.
     pub gi: [u8; 3],
 
-    /// What the CPU last sent the display board, and whether it is listening.
+    /// What the CPU last sent the display board, and whether that is new.
+    ///
+    /// The display is a board of its own with its own processor, reached
+    /// through a one-byte latch and two control lines. Writing the latch is a
+    /// *command*, so it is flagged rather than merely stored: the machine hands
+    /// it over on the next step and strobes it in.
     pub dmd_latch: u8,
+    pub dmd_data_pending: bool,
+    pub dmd_ctrl: u8,
+    pub dmd_ctrl_pending: Option<u8>,
     pub dmd_enabled: bool,
-    /// What the display board answers at `$3700`. Nothing drives the display
-    /// yet, so it answers the value a board with nothing to say would.
+    /// What the display board answers at `$3700`: busy in bit 7 and its four
+    /// status bits from bit 3 (`se.c:753`).
     pub dmd_status: u8,
     /// The last sound command, `$3800`.
     pub sound_latch: u8,
@@ -85,6 +93,9 @@ impl Board {
             dips: 0xff,
             gi: [0; 3],
             dmd_latch: 0,
+            dmd_data_pending: false,
+            dmd_ctrl: 0,
+            dmd_ctrl_pending: None,
             dmd_enabled: false,
             dmd_status: 0,
             sound_latch: 0,
@@ -189,8 +200,14 @@ impl Bus for Board {
             0x3406 => self.gi[0] = value,
             0x3407 => self.gi[1] = value,
             0x3500 => self.dmd_enabled = value != 0,
-            0x3600 => self.dmd_latch = value,
-            0x3601 => self.dmd_status = 0,
+            0x3600 => {
+                self.dmd_latch = value;
+                self.dmd_data_pending = true;
+            }
+            // Reset, on bit 1 (`dmdreset_w`, `se.c:729`).
+            0x3601 => {
+                self.dmd_ctrl_pending = Some(if value != 0 { 0x02 } else { 0x00 });
+            }
             0x3800 => self.sound_latch = value,
             // Writing to ROM is not an error: there is code that walks memory
             // without discriminating.

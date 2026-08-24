@@ -289,6 +289,14 @@ impl Hardware {
         }
     }
 
+    /// The dot matrix, one byte per dot from 0 to 3, if there is one.
+    fn dmd(&self) -> Option<&[u8]> {
+        match self {
+            Self::S11(_) => None,
+            Self::Whitestar(b) => b.dmd_frame(),
+        }
+    }
+
     fn segments(&self) -> Vec<u16> {
         match self {
             Self::S11(b) => b.segments(),
@@ -400,6 +408,12 @@ impl Machine {
 
         let mut machine = vpw_ws::Whitestar::new();
         machine.load_rom(cpu)?;
+        // The display is a board of its own with its own processor and its own
+        // half-megabyte ROM. A set without it still plays; it just has nothing
+        // to say for itself.
+        if let Some(display) = pick_like(images, game.display) {
+            machine.load_display_rom(display)?;
+        }
         if let Some(saved) = cmos {
             let ram = machine.board.ram_mut();
             if saved.len() != ram.len() {
@@ -685,6 +699,28 @@ impl Machine {
     /// clearing it makes every lamp latch on and stay on.
     ///
     /// For the numbering, which is not the WPC one, see [`lamp_number`].
+    /// The machine's dot matrix, one byte per dot from 0 (dark) to 3 (full),
+    /// and how wide it is. Empty on a machine whose score is segments.
+    pub fn dmd(&self) -> (Vec<u8>, usize, usize) {
+        match self.board.borrow().dmd() {
+            Some(f) => (f.to_vec(), vpw_ws::dmd::WIDTH, vpw_ws::dmd::HEIGHT),
+            None => (Vec::new(), 0, 0),
+        }
+    }
+
+    /// The last sound command the board sent its sound board.
+    ///
+    /// The sound board is not emulated for every family, but *that a command
+    /// was sent* is the cheapest evidence there is that the game's rules are
+    /// running: a machine sends one for every bumper, every target and every
+    /// mode, and a machine that is merely powered sends none.
+    pub fn sound_latch(&self) -> u8 {
+        match &*self.board.borrow() {
+            Hardware::S11(b) => b.board.sound_latch(),
+            Hardware::Whitestar(b) => b.board.sound_latch,
+        }
+    }
+
     /// The general illumination strings that have changed since last asked.
     ///
     /// A table polls this every time it polls the lamps, and what it does with

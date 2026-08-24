@@ -263,6 +263,31 @@ fn segment_raster(segments: &[u16], size: (u32, u32)) -> vpw_render::segments::R
 /// change a few times a second at most, and redrawing a texture sixty times a
 /// second to put the same pixels back is work nobody sees.
 fn draw_display(table: &Game, renderer: &mut TableRenderer, last: &mut Vec<u16>) {
+    // A machine says its score one of two ways and this is where the two meet:
+    // a row of segments, or a panel of dots. Nothing above here knows which
+    // kind of machine it is talking to.
+    let (dots, width, height) = table.machine().dmd();
+    if !dots.is_empty() {
+        // Cheap enough to compare: four thousand bytes against a frame time.
+        // Worth comparing, because uploading a texture that has not changed is
+        // the same picture at the cost of a texture upload.
+        let digest: Vec<u16> = dots
+            .chunks(64)
+            .map(|c| c.iter().map(|&d| u16::from(d)).sum())
+            .collect();
+        if digest == *last {
+            return;
+        }
+        *last = digest;
+        renderer.set_display(&dot_raster(
+            &dots,
+            width,
+            height,
+            vpw_table::backbox::DISPLAY_PIXELS,
+        ));
+        return;
+    }
+
     let segments = table.machine().segments();
     if segments.is_empty() || segments == *last {
         return;
@@ -272,6 +297,77 @@ fn draw_display(table: &Game, renderer: &mut TableRenderer, last: &mut Vec<u16>)
         &segments,
         vpw_table::backbox::DISPLAY_PIXELS,
     ));
+}
+
+/// Draws a dot matrix into the panel on the machine's head.
+///
+/// A dot has four levels rather than two — see `vpw_ws::dmd` for how a one-bit
+/// panel produces them — so this is not a stencil, it is four brightnesses of
+/// the same amber. The dots are drawn as dots, with a gap, because that is what
+/// the thing looks like: a solid block of lit pixels reads as a screen and a
+/// grid of round lights reads as a machine.
+fn dot_raster(
+    dots: &[u8],
+    width: usize,
+    height: usize,
+    size: (u32, u32),
+) -> vpw_render::segments::Raster {
+    let (w, h) = (size.0 as usize, size.1 as usize);
+    let mut rgba = vec![0u8; w * h * 4];
+    if width == 0 || height == 0 {
+        return vpw_render::segments::Raster {
+            width: size.0,
+            height: size.1,
+            rgba,
+        };
+    }
+
+    // The panel is drawn to fit the width, centred vertically: a 128 by 32
+    // display is four times wider than it is tall and the head is not.
+    let cell = (w / width).max(1);
+    let top = (h.saturating_sub(height * cell)) / 2;
+    let left = (w.saturating_sub(width * cell)) / 2;
+    // A dot fills most of its cell, so the grid between them stays visible.
+    let dot = (cell * 4 / 5).max(1);
+    let inset = (cell - dot) / 2;
+
+    for y in 0..height {
+        for x in 0..width {
+            let level = dots[y * width + x];
+            if level == 0 {
+                continue;
+            }
+            // 0 is dark, 3 is full. The steps are what the board itself makes
+            // by showing a frame for two thirds of the cycle or one third.
+            let scale = f32::from(level) / 3.0;
+            let colour = [
+                (255.0 * scale) as u8,
+                (150.0 * scale) as u8,
+                (30.0 * scale) as u8,
+                255,
+            ];
+            for dy in 0..dot {
+                let py = top + y * cell + inset + dy;
+                if py >= h {
+                    continue;
+                }
+                for dx in 0..dot {
+                    let px = left + x * cell + inset + dx;
+                    if px >= w {
+                        continue;
+                    }
+                    let at = (py * w + px) * 4;
+                    rgba[at..at + 4].copy_from_slice(&colour);
+                }
+            }
+        }
+    }
+
+    vpw_render::segments::Raster {
+        width: size.0,
+        height: size.1,
+        rgba,
+    }
 }
 
 /// Copies the state of the physics into the renderer's matrices.
