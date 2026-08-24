@@ -501,9 +501,21 @@ fn bumper(b: &vpin::vpx::gameitem::bumper::Bumper, vpx: &VPX, out: &mut Vec<Shap
 ///   ball falls through — because there only the kicker's inner circle fires.
 ///   In modern mode the full radius is used.
 fn kicker(k: &vpin::vpx::gameitem::kicker::Kicker, vpx: &VPX, out: &mut Vec<Shape>) {
-    if !k.is_enabled {
-        return;
-    }
+    // A kicker that is switched off still **exists**. The original always
+    // builds the hit circle and puts the flag on it —
+    // `phitcircle->m_enabled = m_d.m_enabled` (`kicker.cpp:184`) — and
+    // `CreateSizedBallWithMass` asks only whether the circle is there
+    // (`kicker.cpp:657`), not whether it is on.
+    //
+    // Skipping it entirely, which is what this did, means a switched-off
+    // kicker cannot make a ball and cannot be switched on later either. That
+    // is not a corner: a ball trough's release kicker is normally saved off,
+    // precisely so it does not catch balls rolling past, and a table uses it
+    // as nothing but a ball factory. The machine starts a game, knocks four
+    // times trying to serve, and gives you nothing.
+    //
+    // Whether it is on is set from the file where the items are built, through
+    // the same switch a script uses.
     let base_z = surface_height(&vpx.gameitems, &k.surface, k.center.x, k.center.y);
     let factor = if k.legacy_mode {
         if k.fall_through { 0.75 } else { 0.6 }

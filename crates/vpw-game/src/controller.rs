@@ -276,6 +276,19 @@ impl Hardware {
         }
     }
 
+    /// The general illumination, as a level from zero to one per string.
+    ///
+    /// One string on a Whitestar (`se.c:314` sets `nGI = 1`), driven by bit 0
+    /// of the strobe latch at `$200b` — the GI relay. A System 11 runs its
+    /// general illumination off the same lamp hardware and has nothing separate
+    /// to report.
+    fn gi(&self) -> Vec<f32> {
+        match self {
+            Self::S11(_) => Vec::new(),
+            Self::Whitestar(b) => vec![f32::from(u8::from(b.board.gi[2] & 1 != 0))],
+        }
+    }
+
     fn segments(&self) -> Vec<u16> {
         match self {
             Self::S11(b) => b.segments(),
@@ -302,6 +315,8 @@ pub struct Machine {
     /// [`Machine::changed_leds`].
     seen_segments: RefCell<[u16; SEGMENTS]>,
     seen_solenoids: RefCell<[bool; SOLENOIDS + 4]>,
+    /// What the general illumination looked like when the script last asked.
+    seen_gi: RefCell<Vec<bool>>,
     /// Board time owed, in seconds. The board runs at 1 MHz and the game loop
     /// hands it a millisecond at a time.
     owed: Cell<f64>,
@@ -316,6 +331,7 @@ impl Machine {
             seen_lamps: RefCell::new([false; LAMPS]),
             seen_segments: RefCell::new([0; SEGMENTS]),
             seen_solenoids: RefCell::new([false; SOLENOIDS + 4]),
+            seen_gi: RefCell::new(Vec::new()),
             owed: Cell::new(0.0),
         }
     }
@@ -363,6 +379,7 @@ impl Machine {
         *self.seen_lamps.borrow_mut() = [false; LAMPS];
         *self.seen_solenoids.borrow_mut() = [false; SOLENOIDS + 4];
         *self.seen_segments.borrow_mut() = [0; SEGMENTS];
+        self.seen_gi.borrow_mut().clear();
         Ok(())
     }
 
@@ -668,6 +685,30 @@ impl Machine {
     /// clearing it makes every lamp latch on and stay on.
     ///
     /// For the numbering, which is not the WPC one, see [`lamp_number`].
+    /// The general illumination strings that have changed since last asked.
+    ///
+    /// A table polls this every time it polls the lamps, and what it does with
+    /// the answer is `UBound` — so the answer has to be an array. Returning
+    /// anything else is not a quiet degradation: `core.vbs:2488` raises a type
+    /// mismatch, that aborts the whole of `PinMameTimer`, and everything the
+    /// rest of that handler would have done — including dispatching the
+    /// solenoid callbacks that serve a ball — silently does not happen. The
+    /// machine lights up, knocks a few times and never gives you a ball.
+    pub fn changed_gis(&self) -> Vec<(u8, bool)> {
+        let now = self.board.borrow().gi();
+        let mut seen = self.seen_gi.borrow_mut();
+        seen.resize(now.len(), false);
+        let mut rows = Vec::new();
+        for (i, level) in now.iter().enumerate() {
+            let on = *level >= 0.5;
+            if on != seen[i] {
+                seen[i] = on;
+                rows.push((i as u8, on));
+            }
+        }
+        rows
+    }
+
     pub fn changed_lamps(&self) -> Vec<(u8, bool)> {
         let board = self.board.borrow();
         let mut seen = self.seen_lamps.borrow_mut();
@@ -841,6 +882,12 @@ impl Object for Controller {
             // What the board has done since the script last looked.
             "changedlamps" => Ok(two_column_array(&self.machine.changed_lamps())),
             "changedsolenoids" => Ok(two_column_array(&self.machine.changed_solenoids())),
+            // Both spellings. `core.vbs:2436` asks for `ChangedGIStrings`;
+            // older tables ask for `ChangedGIs`. Answering only one of them
+            // leaves the other falling through to the chainable stand-in,
+            // which is an object rather than an array and blows up on
+            // `UBound` — see [`Machine::changed_gis`] for what that costs.
+            "changedgis" | "changedgistrings" => Ok(two_column_array(&self.machine.changed_gis())),
             "changedleds" => {
                 // `ChangedLEDs(nHigh, nLow, [nnHigh], [nnLow])`, two 32-bit
                 // halves per mask and the second mask defaulting to zero

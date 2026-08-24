@@ -327,7 +327,21 @@ impl Object for Item {
         };
         match specific {
             Ok(v) => Ok(v),
-            Err(_) => Ok(self.remembered(&lower)),
+            Err(e) => {
+                // Accepted rather than refused, for the reason in the module
+                // note: a real Visual Pinball part has every member, so
+                // answering "no such member" is the less faithful of the two
+                // mistakes. But it is *said*, because the two cases hiding
+                // behind this line are worlds apart — a table asking for a
+                // presentational member this renderer does not do yet, and a
+                // member that is implemented and failed. The second one was
+                // invisible until a kicker quietly refused to make a ball.
+                // 438 is "no such member", which is the case this is for.
+                if e.number != 438 {
+                    log::warn!("{}.{name}: {e}", self.name);
+                }
+                Ok(self.remembered(&lower))
+            }
         }
     }
 
@@ -771,6 +785,11 @@ impl Item {
     /// Returns the ball's index, because the script gets the ball back and
     /// tables use it — see the caller.
     fn create_ball(&self, radius: f32) -> Result<usize> {
+        log::warn!(
+            "PROBE create_ball on {}: shapes {:?}",
+            self.name,
+            self.shapes
+        );
         let Some(i) = self.shape() else {
             return Err(Error::no_such_member("CreateBall"));
         };
@@ -932,6 +951,15 @@ impl Items {
                 engine: engine.clone(),
                 timers_changed: dirty.clone(),
             });
+            // A part the file saved switched off. The shape exists either way —
+            // see `physics::kicker` for why — so the state is applied here,
+            // through the same switch a script would use.
+            if let vpin::vpx::gameitem::GameItemEnum::Kicker(k) = item
+                && !k.is_enabled
+            {
+                entry.visual.collidable.set(false);
+                entry.set_collidable(false);
+            }
             by_name.insert(name.to_ascii_lowercase().into_boxed_str(), entry.clone());
             all.push(entry);
         }

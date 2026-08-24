@@ -26,7 +26,24 @@ fn run(game: &mut Game, ms: u32, from: u32) -> u32 {
     from + ms
 }
 
+fn logging() {
+    struct Stderr;
+    impl log::Log for Stderr {
+        fn enabled(&self, _: &log::Metadata<'_>) -> bool {
+            true
+        }
+        fn log(&self, record: &log::Record<'_>) {
+            eprintln!("[{}] {}", record.level(), record.args());
+        }
+        fn flush(&self) {}
+    }
+    static LOGGER: Stderr = Stderr;
+    let _ = log::set_logger(&LOGGER);
+    log::set_max_level(log::LevelFilter::Warn);
+}
+
 fn main() {
+    logging();
     let mut args = std::env::args().skip(1);
     let path = args
         .next()
