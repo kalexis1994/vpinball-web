@@ -22,6 +22,7 @@ import {
   storageAvailable,
   storageUsage,
 } from '../lib/library';
+import { forgetLoadedTable } from '../lib/player';
 import { displayName, formatBytes, type TableEntry } from '../lib/types';
 import { ImportReview } from './ImportReview';
 import { ScreenHead } from './ScreenHead';
@@ -89,6 +90,13 @@ export function Content({ onBack, onChange }: Props) {
     setBusy(null);
     setPlan(null);
     if (failures.length > 0) setErrors((prev) => [...prev, ...failures]);
+    // Whatever was last loaded was loaded against the library as it was a
+    // moment ago. If what just arrived is the ROM that table was missing,
+    // reusing that load would hand the player the same machine-less table for
+    // the rest of the session — the script has already asked for a controller
+    // and already been told there is not one, and nothing but loading it again
+    // makes it ask a second time.
+    forgetLoadedTable();
     await refresh();
   }, [plan, refresh]);
 

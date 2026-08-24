@@ -785,11 +785,6 @@ impl Item {
     /// Returns the ball's index, because the script gets the ball back and
     /// tables use it — see the caller.
     fn create_ball(&self, radius: f32) -> Result<usize> {
-        log::warn!(
-            "PROBE create_ball on {}: shapes {:?}",
-            self.name,
-            self.shapes
-        );
         let Some(i) = self.shape() else {
             return Err(Error::no_such_member("CreateBall"));
         };

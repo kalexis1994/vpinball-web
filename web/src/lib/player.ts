@@ -203,17 +203,37 @@ export function startPlayer(canvasId: string): Promise<void> {
 }
 
 /**
+ * Forgets the last table that was loaded, so the next ask reloads it.
+ *
+ * Called when a ROM arrives. Handing a machine over *after* the table has
+ * loaded does nothing: the script has already run, already asked for a
+ * controller, and already been told there is not one. Only loading the table
+ * again makes that ask happen a second time.
+ */
+export function forgetLoadedTable(): void {
+  loaded = null;
+}
+
+/**
  * Fetches a table and loads it into the player.
  *
- * `key` identifies the table: asking twice for the same one returns the
- * promise from the first call instead of redoing the work.
+ * `key` identifies the table **and the machine it was loaded with**: asking
+ * twice for the same pair returns the promise from the first call instead of
+ * redoing the work.
+ *
+ * The machine is part of the key because it is part of the answer. Loading a
+ * table without its ROM and then loading the ROM used to leave the player with
+ * the first result for ever — a table that renders and rolls a ball and starts
+ * no game, with the machine sitting in storage unused until the page was
+ * reloaded.
  */
 export function loadTable(
   key: string,
   fetchBytes: () => Promise<Uint8Array>,
   rom?: RomInfo,
 ): Promise<LoadStats> {
-  if (loaded?.key === key) return loaded.stats;
+  const cacheKey = `${key}|${rom?.name ?? ''}`;
+  if (loaded?.key === cacheKey) return loaded.stats;
 
   const stats = (async () => {
     const wasm = await initWasm();
@@ -246,7 +266,7 @@ export function loadTable(
     };
   })();
 
-  loaded = { key, stats };
+  loaded = { key: cacheKey, stats };
   // If it fails, forget it so it can be retried.
   stats.catch(() => {
     if (loaded?.key === key) loaded = null;
