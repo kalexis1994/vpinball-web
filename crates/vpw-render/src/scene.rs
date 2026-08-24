@@ -61,13 +61,17 @@ pub struct GpuMaterial {
     pub clearcoat: [f32; 4],
     /// x = has texture, y = is metal, z = wrap lighting, w = edge
     pub flags: [f32; 4],
-    /// x = specular image lerp, y = thickness, the rest free
+    /// x = specular image lerp, y = thickness, z = alpha test, w free
     pub extra: [f32; 4],
 }
 
 impl GpuMaterial {
     /// Builds the block from what `Material::shader_inputs` resolves.
-    fn from_inputs(i: &vpw_table::geometry::ShaderInputs, has_texture: bool) -> Self {
+    fn from_inputs(
+        i: &vpw_table::geometry::ShaderInputs,
+        has_texture: bool,
+        alpha_test: f32,
+    ) -> Self {
         Self {
             base_color: [i.base_color[0], i.base_color[1], i.base_color[2], i.alpha],
             glossy: [
@@ -83,7 +87,7 @@ impl GpuMaterial {
                 i.wrap_lighting,
                 i.edge,
             ],
-            extra: [i.glossy_image_lerp, i.thickness, 0.0, 0.0],
+            extra: [i.glossy_image_lerp, i.thickness, alpha_test, 0.0],
         }
     }
 }
@@ -450,7 +454,16 @@ pub fn material_slot(
     let inputs = material
         .map(vpw_table::geometry::Material::shader_inputs)
         .unwrap_or_default();
-    let data = GpuMaterial::from_inputs(&inputs, textured);
+    // The alpha test belongs to the *image*, not to the material: it is what
+    // the table's author set on that picture, and it is how a cut-out piece of
+    // artwork gets its background thrown away rather than drawn. Only where
+    // there really is a texture with an alpha channel to test — the original's
+    // `pin->m_alphaTestValue >= 0.f && !pin->IsOpaque()` (`ramp.cpp:907`).
+    let alpha_test = match image {
+        Some(i) if textured && i.has_alpha => i.alpha_test,
+        _ => -1.0,
+    };
+    let data = GpuMaterial::from_inputs(&inputs, textured, alpha_test);
     let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("vpw-material"),
         contents: bytemuck::bytes_of(&data),

@@ -285,6 +285,25 @@ pub struct Image {
     /// material, this decides whether the piece goes to the blended pass
     /// (`Shader.cpp:850`).
     pub has_alpha: bool,
+    /// Below what alpha a texel is thrown away instead of drawn, or negative
+    /// where the table did not ask for it.
+    ///
+    /// This is **not** transparency, and it is not decided by the material. A
+    /// sword cut out of its background is a texture with an alpha channel on a
+    /// piece whose material is plain opaque plastic, and the original draws it
+    /// in the opaque pass with the see-through texels *discarded*:
+    ///
+    /// ```hlsl
+    /// clip(pixel.a <= alphaTestValue ? -1 : 1);
+    /// ```
+    ///
+    /// Without that, the cut-out background is drawn as whatever colour it
+    /// happens to carry, and a piece of artwork comes out as a flat rectangle
+    /// — which looks exactly like a texture that failed to load.
+    ///
+    /// The table stores it out of 255 and the shader wants it out of one, so it
+    /// is scaled on the way in, the same as `Texture.cpp:937`.
+    pub alpha_test: f32,
     /// Whether its pixels change while the table runs.
     ///
     /// Almost nothing a table carries does: an image comes out of the file
@@ -597,6 +616,8 @@ pub fn extract(vpx: &VPX) -> Scene {
         ]),
         width: crate::backbox::DISPLAY_PIXELS.0,
         height: crate::backbox::DISPLAY_PIXELS.1,
+        // The score is drawn on it, not cut out of it.
+        alpha_test: -1.0,
         has_alpha: true,
         redrawn: true,
     });
@@ -864,6 +885,9 @@ fn images(vpx: &VPX) -> Vec<Image> {
             // format among those that show up in tables which cannot carry
             // alpha is JPEG.
             has_alpha: i.bits.is_none() && !i.ext().eq_ignore_ascii_case("jpg"),
+            // `Texture.cpp:937`. A table that never set one leaves the field at
+            // its own default, which is below zero and means "do not".
+            alpha_test: i.alpha_test_value / 255.0,
         })
         .collect()
 }

@@ -240,6 +240,26 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
         texel = vec4<f32>(saturate(texel.rgb), texel.a);
     }
 
+    // The alpha test. `BasicShader.hlsl:366`:
+    //
+    //     clip(pixel.a <= alphaTestValue ? -1 : 1);
+    //
+    // This is what makes a piece of artwork cut out of its background come out
+    // as the artwork. A sword on a transparent background is an ordinary opaque
+    // plastic ramp as far as its material is concerned — the material's own
+    // opacity is off — so nothing about the material says the background should
+    // not be drawn. What says so is the value the table's author set on the
+    // *image*, and without honouring it the cut-out area is painted in whatever
+    // colour it happens to carry and the piece comes out as a flat rectangle,
+    // indistinguishable from a texture that failed to load.
+    //
+    // A negative threshold is the original's way of saying the table never
+    // asked for one, and nothing is thrown away.
+    let alpha_test = material.extra.z;
+    if (alpha_test >= 0.0 && texel.a <= alpha_test) {
+        discard;
+    }
+
     // `pixel.a *= cBase_Alpha.a` (`BasicShader.hlsl:368`).
     var alpha = material.base_color.a * texel.a;
     let albedo = vec4<f32>(material.base_color.rgb * texel.rgb, alpha);
