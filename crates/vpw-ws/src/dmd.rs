@@ -41,6 +41,108 @@ const FRAME_CYCLES: u64 = 25_720;
 /// How much ROM the board addresses. Thirty-two banks of sixteen kilobytes.
 const ROM_REGION: usize = 0x8_0000;
 
+/// The low-pass filter that turns the panel's flicker into shades.
+///
+/// A dot on this panel is either on or off, and the board makes its shades by
+/// **time**: two frames a cycle, one shown for two thirds of it and one for a
+/// third, at 233 Hz. An eye does not see 233 Hz; it sees the average over the
+/// last few hundredths of a second. Handing a viewer the raw pair of bits
+/// instead — which is what `Dmd::frame` is — gives a picture whose middle
+/// shades strobe and crawl, because a game animates by changing *which* of
+/// the two frames a dot is in, and the raw pair changes every cycle.
+///
+/// So the original does what the eye does (`core_dmd_pwm_init`,
+/// `core.c:3521`; `core_dmd_update_pwm`, `core.c:3640`): it keeps the last
+/// fifteen one-bit frames and takes a weighted sum, with weights that are a
+/// 15 Hz low-pass designed for the 230 Hz refresh — `fir_230_15`, quoted
+/// below to the digit. Each vblank submits the slow frame **twice** and the
+/// fast one **once** (`dedmd.c:168-169`), which is how two-thirds and
+/// one-third fall out of a filter that knows nothing about either.
+///
+/// Kept apart from the board so it can be fed by hand: what it computes is
+/// arithmetic on frames, and arithmetic is what a test can check.
+pub struct Pwm {
+    /// The last [`Pwm::TAPS`] one-bit frames, newest at `next - 1`.
+    raw: Vec<[u8; PLANE]>,
+    next: usize,
+    luminance: Box<[u8; WIDTH * HEIGHT]>,
+    /// The frame ids the luminance was last computed from, so an unchanged
+    /// ring is not filtered again.
+    computed_at: u64,
+    submitted: u64,
+}
+
+impl Pwm {
+    /// How many frames the filter looks back over.
+    pub const TAPS: usize = 15;
+
+    /// `fir_230_15` (`core.c:3524`): a 15 Hz low-pass for a 230 Hz refresh.
+    const FIR: [u32; Self::TAPS] = [
+        5683808, 23123723, 77603279, 187082483, 344389128, 514464295, 646635594, 696543928,
+        646635594, 514464295, 344389128, 187082483, 77603279, 23123723, 5683808,
+    ];
+
+    pub fn new() -> Self {
+        Self {
+            raw: vec![[0; PLANE]; Self::TAPS],
+            next: 0,
+            luminance: Box::new([0; WIDTH * HEIGHT]),
+            computed_at: 0,
+            submitted: 0,
+        }
+    }
+
+    /// `core_dmd_submit_frame` (`core.c:3579`): the same frame, `times` over.
+    pub fn submit(&mut self, frame: &[u8; PLANE], times: usize) {
+        for _ in 0..times {
+            self.raw[self.next] = *frame;
+            self.next = (self.next + 1) % Self::TAPS;
+            self.submitted += 1;
+        }
+    }
+
+    /// Brings the shades up to date with what has been submitted.
+    ///
+    /// The sum of the weights is the value of a dot that was lit in every one
+    /// of the last fifteen frames, and a dot's shade is its own sum over that
+    /// (`core.c:3697`, "linear luminance"), here on a scale of 255.
+    pub fn update(&mut self) {
+        if self.computed_at == self.submitted {
+            return;
+        }
+        self.computed_at = self.submitted;
+        let total: u64 = Self::FIR.iter().map(|&w| u64::from(w)).sum();
+        let mut sums = [0u64; WIDTH * HEIGHT];
+        // Newest frame first, as the original walks its ring backwards from
+        // the write position, so `FIR[0]` weighs the most recent.
+        let mut at = self.next;
+        for &weight in &Self::FIR {
+            at = (at + Self::TAPS - 1) % Self::TAPS;
+            let frame = &self.raw[at];
+            for (i, sum) in sums.iter_mut().enumerate() {
+                let (byte, bit) = (i / 8, 7 - (i % 8));
+                if (frame[byte] >> bit) & 1 != 0 {
+                    *sum += u64::from(weight);
+                }
+            }
+        }
+        for (lum, sum) in self.luminance.iter_mut().zip(sums) {
+            *lum = ((sum * 255 + total / 2) / total) as u8;
+        }
+    }
+
+    /// One byte per dot, 0 dark to 255 fully lit, as the eye would see it.
+    pub fn luminance(&self) -> &[u8; WIDTH * HEIGHT] {
+        &self.luminance
+    }
+}
+
+impl Default for Pwm {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// The display board.
 pub struct Dmd {
     cpu: Cpu,
@@ -49,6 +151,8 @@ pub struct Dmd {
     next_frame: u64,
     /// The last frame that finished, one byte per dot, 0 to 3.
     frame: Box<[u8; WIDTH * HEIGHT]>,
+    /// The same frames through the eye's low-pass. See [`Pwm`].
+    pwm: Pwm,
     /// How many frames have been produced. A host that wants to know whether
     /// the picture is moving can watch this instead of comparing pixels.
     pub frames: u64,
@@ -176,6 +280,7 @@ impl Dmd {
             cycle: 0,
             next_frame: FRAME_CYCLES,
             frame: Box::new([0; WIDTH * HEIGHT]),
+            pwm: Pwm::new(),
             frames: 0,
             resets: 0,
         }
@@ -259,6 +364,13 @@ impl Dmd {
     }
 
     /// The last frame, one byte per dot from 0 (dark) to 3 (full).
+    /// The picture as the eye sees it: one byte per dot, 0 to 255, low-pass
+    /// filtered over the last fifteen frames. See [`Pwm`]. This is what a
+    /// viewer should draw; [`Dmd::frame`] is the raw pair of bits.
+    pub fn luminance(&self) -> &[u8; WIDTH * HEIGHT] {
+        self.pwm.luminance()
+    }
+
     pub fn frame(&self) -> &[u8; WIDTH * HEIGHT] {
         &self.frame
     }
@@ -304,6 +416,20 @@ impl Dmd {
                 self.frame[y * WIDTH + x] = at(slow) * 2 + at(fast);
             }
         }
+        // And the same two planes into the filter, the slow one twice and the
+        // fast one once, which is how long each is on the glass
+        // (`dedmd.c:168-169`).
+        let plane = |base: usize| -> [u8; PLANE] {
+            let mut out = [0u8; PLANE];
+            for (i, b) in out.iter_mut().enumerate() {
+                *b = self.board.vram[(base + i) % self.board.vram.len()];
+            }
+            out
+        };
+        let (slow_plane, fast_plane) = (plane(slow), plane(fast));
+        self.pwm.submit(&slow_plane, 2);
+        self.pwm.submit(&fast_plane, 1);
+        self.pwm.update();
         self.frames += 1;
     }
 }

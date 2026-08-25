@@ -351,7 +351,9 @@ impl Hardware {
     fn dmd(&self) -> Option<&[u8]> {
         match self {
             Self::S11(_) => None,
-            Self::Whitestar(b) => b.dmd_frame(),
+            // The filtered picture, not the raw pair of bits: a viewer wants
+            // what the eye sees. See `vpw_ws::dmd::Pwm`.
+            Self::Whitestar(b) => b.dmd_luminance(),
         }
     }
 

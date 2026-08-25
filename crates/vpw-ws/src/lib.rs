@@ -182,6 +182,11 @@ impl Whitestar {
         self.dmd.as_ref().map(|d| &d.frame()[..])
     }
 
+    /// The display as the eye sees it, 0 to 255 per dot. See [`dmd::Pwm`].
+    pub fn dmd_luminance(&self) -> Option<&[u8]> {
+        self.dmd.as_ref().map(|d| &d.luminance()[..])
+    }
+
     pub fn reset(&mut self) {
         self.cpu.reset(&mut self.board);
         self.cycle = 0;

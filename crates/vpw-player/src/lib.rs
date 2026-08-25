@@ -319,9 +319,9 @@ fn draw_display(table: &Game, renderer: &mut TableRenderer, last: &mut Vec<u16>)
 
 /// Draws a dot matrix into the panel on the machine's head.
 ///
-/// A dot has four levels rather than two — see `vpw_ws::dmd` for how a one-bit
-/// panel produces them — so this is not a stencil, it is four brightnesses of
-/// the same amber. The dots are drawn as dots, with a gap, because that is what
+/// A dot has a level rather than a bit — see `vpw_ws::dmd::Pwm` for how a
+/// one-bit panel produces shades and how they are smoothed — so this is not a
+/// stencil, it is brightnesses of the same amber. The dots are drawn as dots, with a gap, because that is what
 /// the thing looks like: a solid block of lit pixels reads as a screen and a
 /// grid of round lights reads as a machine.
 fn dot_raster(
@@ -355,9 +355,11 @@ fn dot_raster(
             if level == 0 {
                 continue;
             }
-            // 0 is dark, 3 is full. The steps are what the board itself makes
-            // by showing a frame for two thirds of the cycle or one third.
-            let scale = f32::from(level) / 3.0;
+            // 0 is dark, 255 is full, and everything between is the board's
+            // own flicker averaged the way an eye averages it — see
+            // `vpw_ws::dmd::Pwm`. Not four steps: a game animates by moving a
+            // dot between the two frames, and four steps of that strobe.
+            let scale = f32::from(level) / 255.0;
             let colour = [
                 (255.0 * scale) as u8,
                 (150.0 * scale) as u8,

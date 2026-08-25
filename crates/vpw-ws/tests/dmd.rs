@@ -123,3 +123,91 @@ fn the_command_latch_drops_the_reset_line_on_its_way_past() {
     d.latch(0x44);
     assert_eq!(d.resets, 2);
 }
+
+/// The filter, fed by hand. See `vpw_ws::dmd::Pwm`.
+mod pwm {
+    use vpw_ws::dmd::{FRAME_BYTES, Pwm};
+
+    /// A plane with dot (0, 0) lit or not. Bit 7 of byte 0 is the first dot.
+    fn plane(lit: bool) -> [u8; FRAME_BYTES] {
+        let mut p = [0u8; FRAME_BYTES];
+        if lit {
+            p[0] = 0x80;
+        }
+        p
+    }
+
+    /// One vblank's worth: the slow plane twice, the fast one once
+    /// (`dedmd.c:168-169`).
+    fn vblank(pwm: &mut Pwm, slow: bool, fast: bool) {
+        pwm.submit(&plane(slow), 2);
+        pwm.submit(&plane(fast), 1);
+        pwm.update();
+    }
+
+    #[test]
+    fn a_dot_lit_in_both_frames_is_fully_on_and_in_neither_is_off() {
+        let mut pwm = Pwm::new();
+        for _ in 0..Pwm::TAPS {
+            vblank(&mut pwm, true, true);
+        }
+        assert_eq!(pwm.luminance()[0], 255);
+        assert_eq!(pwm.luminance()[1], 0, "its neighbour was never lit");
+        for _ in 0..Pwm::TAPS {
+            vblank(&mut pwm, false, false);
+        }
+        assert_eq!(pwm.luminance()[0], 0);
+    }
+
+    #[test]
+    fn the_slow_frame_is_two_thirds_and_the_fast_one_a_third() {
+        // Not because the filter knows: because the slow frame is submitted
+        // twice and the fast one once, and the weights are symmetric enough
+        // that the share comes out as the share of time on the glass.
+        let mut slow = Pwm::new();
+        let mut fast = Pwm::new();
+        for _ in 0..Pwm::TAPS {
+            vblank(&mut slow, true, false);
+            vblank(&mut fast, false, true);
+        }
+        let (s, f) = (
+            i32::from(slow.luminance()[0]),
+            i32::from(fast.luminance()[0]),
+        );
+        assert!(
+            (s - 170).abs() <= 12,
+            "slow only should be about two thirds, was {s}"
+        );
+        assert!(
+            (f - 85).abs() <= 12,
+            "fast only should be about a third, was {f}"
+        );
+        assert!(s > f, "and the slow frame is the brighter of the two");
+    }
+
+    #[test]
+    fn a_dot_that_flickers_every_frame_reads_as_a_steady_shade() {
+        // The whole point. A game animates by moving a dot between the two
+        // frames; the raw pair of bits goes 3, 0, 3, 0 and a viewer that drew
+        // that would strobe. The eye sees a shade, and so does this.
+        let mut pwm = Pwm::new();
+        for _ in 0..Pwm::TAPS {
+            vblank(&mut pwm, true, true);
+            vblank(&mut pwm, false, false);
+        }
+        let mut seen = Vec::new();
+        for i in 0..8 {
+            vblank(&mut pwm, i % 2 == 0, i % 2 == 0);
+            seen.push(i32::from(pwm.luminance()[0]));
+        }
+        let (lo, hi) = (*seen.iter().min().unwrap(), *seen.iter().max().unwrap());
+        assert!(
+            hi - lo < 60,
+            "a flickering dot should settle to a shade, not swing between {lo} and {hi}"
+        );
+        assert!(
+            lo > 60 && hi < 200,
+            "and the shade is a middle one: {lo}..{hi}"
+        );
+    }
+}
