@@ -826,17 +826,25 @@ pub fn primitive_transform_from_fields(position: Vec3, size: Vec3, rot_and_tra: 
         * Mat4::from_scale(size)
 }
 
+/// A colour from the file, the way the original converts one.
+///
+/// A plain divide by 255 and **no gamma decode**, which is `convertColor`
+/// (`utils/color.h:22`) and is what feeds the material's base, glossy and
+/// clearcoat (`Shader.cpp:830-838`), the ambient and the scene lights
+/// (`Renderer.cpp:1049`, `:1062`) and a lamp's two colours
+/// (`light.cpp:711-712`).
+///
+/// The asymmetry with textures is deliberate on the original's part and is
+/// worth stating, because it looks like a bug: a *texture* is decoded, by the
+/// hardware, because it is a picture of something. A material colour is not a
+/// picture — it is a multiplier the table's author dialled in while looking at
+/// the result, so the number that matters is the one they saw.
+///
+/// Decoding it as well costs about a third of the light on a table. A base
+/// colour of 180 is a multiplier of 0.706 in the original and 0.456 with a
+/// decode, so a playfield the original draws at 70 out of 255 comes out at 54.
 fn color(c: &Color) -> [f32; 3] {
-    // The file's colors are 8-bit sRGB; the shader works in linear.
-    [c.r, c.g, c.b].map(|v| srgb_to_linear(f32::from(v) / 255.0))
-}
-
-fn srgb_to_linear(c: f32) -> f32 {
-    if c <= 0.04045 {
-        c / 12.92
-    } else {
-        ((c + 0.055) / 1.055).powf(2.4)
-    }
+    [c.r, c.g, c.b].map(|v| f32::from(v) / 255.0)
 }
 
 fn materials(vpx: &VPX) -> Vec<Material> {

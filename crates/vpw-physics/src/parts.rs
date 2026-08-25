@@ -499,7 +499,8 @@ impl Kicker {
         if !self.enabled || self.captured.is_some() {
             return None;
         }
-        self.circle.hit_test(ball, dtime)
+        // A kicker is not a wall. See `HitCircle::hit_test_as_volume`.
+        self.circle.hit_test_as_volume(ball, dtime)
     }
 
     /// What height the ball has to be at for the kicker to grab it.

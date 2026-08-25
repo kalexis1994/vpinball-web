@@ -58,6 +58,60 @@ fn main() {
     .unwrap_or_else(|e| panic!("the table failed to load: {e}"));
     game.start().unwrap_or_else(|e| panic!("Table1_Init: {e}"));
 
+    // The pieces that move a ball, with where they are, so a fault a player
+    // describes by position can be named. VPX's y grows toward the player, so
+    // "bottom left" is small x and large y.
+    if std::env::var("VPW_MECHS").is_ok() {
+        use vpin::vpx::gameitem::GameItemEnum as G;
+        let mut rows: Vec<(f32, f32, &str, String)> = Vec::new();
+        for item in &vpx.gameitems {
+            let (c, kind) = match item {
+                G::Kicker(k) => (k.center, "Kicker"),
+                G::Gate(g) => (g.center, "Gate"),
+                G::Bumper(b) => (b.center, "Bumper"),
+                G::Spinner(sp) => (sp.center, "Spinner"),
+                _ => continue,
+            };
+            rows.push((c.x, c.y, kind, item.name().to_string()));
+        }
+        // Nearest the bottom-left corner first. VPX's y grows toward the
+        // player, so that corner is small x and large y.
+        let far = vpx.gamedata.bottom;
+        rows.sort_by(|a, b| {
+            let d = |r: &(f32, f32, &str, String)| r.0 * r.0 + (far - r.1) * (far - r.1);
+            d(a).partial_cmp(&d(b)).unwrap()
+        });
+        println!("mechanisms, nearest the bottom-left corner first:");
+        for (x, y, kind, name) in rows.iter().take(12) {
+            println!("  {kind:<8} {name:<22} at ({x:>6.0}, {y:>6.0})");
+        }
+        for item in &vpx.gameitems {
+            if let G::Gate(g) = item
+                && (g.name == "Gate7" || std::env::var("VPW_MECHS").as_deref() == Ok("all"))
+            {
+                println!(
+                    "  {} two_way {} collidable {} rot {} min {} max {} len {} visible {}",
+                    g.name,
+                    g.two_way,
+                    g.is_collidable,
+                    g.rotation,
+                    g.angle_min,
+                    g.angle_max,
+                    g.length,
+                    g.is_visible
+                );
+            }
+            if let G::Kicker(k) = item
+                && k.name == "sw9"
+            {
+                println!(
+                    "  {} enabled {} type {:?} angle {} speed {} radius {}",
+                    k.name, k.is_enabled, k.kicker_type, k.orientation, k.scatter, k.radius
+                );
+            }
+        }
+        println!();
+    }
     println!("board running   {}", game.machine().is_running());
     println!("game name       {:?}", game.machine().game_name());
     println!();

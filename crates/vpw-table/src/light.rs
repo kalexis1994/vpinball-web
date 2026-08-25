@@ -149,13 +149,10 @@ pub fn build(l: &vpin::vpx::gameitem::light::Light, surface_z: f32) -> Option<Li
     })
 }
 
+/// A lamp's colour, the way the original converts one: a divide by 255 and no
+/// gamma decode (`convertColor`, `utils/color.h:22`, fed to a light at
+/// `light.cpp:711-712`). See `geometry::color` for why the asymmetry with
+/// textures is deliberate.
 fn color(c: &vpin::vpx::color::Color) -> [f32; 3] {
-    [c.r, c.g, c.b].map(|v| {
-        let v = f32::from(v) / 255.0;
-        if v <= 0.04045 {
-            v / 12.92
-        } else {
-            ((v + 0.055) / 1.055).powf(2.4)
-        }
-    })
+    [c.r, c.g, c.b].map(|v| f32::from(v) / 255.0)
 }

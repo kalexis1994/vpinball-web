@@ -246,9 +246,62 @@ impl HitCircle {
         }
     }
 
-    /// `HitCircle::HitTestBasicRadius` (`collide.cpp:208`) with the flags of a
-    /// rigid object.
+    /// `HitCircle::HitTestBasicRadius` with the flags of a rigid object:
+    /// bumper, flipper base, gate, spinner (`collide.cpp:209`).
     pub fn hit_test(&self, ball: &Ball, dtime: f32) -> Option<CollisionEvent> {
+        self.hit_test_with(ball, dtime, true, true, true)
+    }
+
+    /// The same, with the flags of a kicker or a trigger: **all three off**.
+    ///
+    /// The original writes the two cases out on one line (`collide.cpp:209`):
+    /// "all of these true = bumper/flipperbase/gate/spinner, all false =
+    /// kicker/trigger". Reusing the rigid version for a kicker turns it into a
+    /// solid post, and an invisible one — because each flag does something
+    /// different and all three point the same way:
+    ///
+    /// - `lateral` adds the ball's radius to the target, so a twenty-five unit
+    ///   saucer becomes a fifty unit obstacle.
+    /// - `rigid` allows a **contact**, which the engine then resolves with
+    ///   friction. A kicker never produces one in the original; the assignment
+    ///   is inside the rigid branch (`collide.cpp:264`).
+    /// - `direction` throws away a hit where the ball is receding, which is
+    ///   exactly the case a kicker has to keep — the original's own comment is
+    ///   "commonly hit while receding" (`collide.cpp:255`).
+    ///
+    /// What that looks like on a table: a ball kicked up an outlane runs into
+    /// a rigid disc twice the size of the saucer it just left, loses its speed
+    /// to friction, and drops back in to be kicked again, for ever.
+    ///
+    /// **`direction` is left on here, and that is a departure.** The original
+    /// turns it off so that a ball already inside and on its way out still
+    /// reports — and then decides what to do about it from the set of volumes
+    /// it remembers each ball being inside of (`collide.cpp:276`). This engine
+    /// deliberately does not keep that set: it derives inside-ness from the
+    /// position on each step instead, which is what `trigger.rs` explains at
+    /// length and why three of the original's self-repair branches are not
+    /// needed here. Without the set there is nothing to tell a ball leaving
+    /// from a ball arriving, so a receding hit would let a saucer grab the ball
+    /// it has just ejected. Off by one flag and honest about it beats faithful
+    /// to a branch whose state does not exist.
+    pub fn hit_test_as_volume(&self, ball: &Ball, dtime: f32) -> Option<CollisionEvent> {
+        self.hit_test_with(ball, dtime, true, false, false)
+    }
+
+    /// `HitCircle::HitTestBasicRadius` (`collide.cpp:208`).
+    ///
+    /// Not implemented: the original's `capsule3D` branch for a ball riding
+    /// above the shape's top, and the volume-set bookkeeping that decides
+    /// whether a trigger reports entering or leaving. Both need state this
+    /// engine does not keep yet.
+    fn hit_test_with(
+        &self,
+        ball: &Ball,
+        dtime: f32,
+        direction: bool,
+        lateral: bool,
+        rigid: bool,
+    ) -> Option<CollisionEvent> {
         if ball.locked {
             return None;
         }
@@ -257,8 +310,11 @@ impl HitCircle {
         let dist = Vec2::new(ball.pos.x - self.center.x, ball.pos.y - self.center.y);
         let dv = Vec2::new(ball.vel.x, ball.vel.y);
 
-        // With the lateral flag, the effective radius includes the ball's.
-        let target_radius = self.radius + ball.radius;
+        // The ball's radius counts only for a lateral hit.
+        let target_radius = match lateral {
+            true => self.radius + ball.radius,
+            false => self.radius,
+        };
 
         let bcddsq = dist.length_squared();
         let bcdd = bcddsq.sqrt();
@@ -268,15 +324,15 @@ impl HitCircle {
 
         let b = dist.dot(dv);
         let bnv = b / bcdd;
-        if bnv > C_LOWNORMVEL {
-            return None; // moving away
+        if direction && bnv > C_LOWNORMVEL {
+            return None; // clearly receding
         }
 
         let bnd = bcdd - target_radius;
         let a = dv.length_squared();
 
         let mut is_contact = false;
-        let hittime = if bnd < PHYS_TOUCH {
+        let hittime = if rigid && bnd < PHYS_TOUCH {
             if bnd < -ball.radius {
                 return None; // too far inside
             }
@@ -289,8 +345,9 @@ impl HitCircle {
                 (-bnd / bnv).max(0.0)
             }
         } else {
-            if a < 1.0e-8 {
-                return None; // not moving relative to the circle
+            // Outside and receding, or inside and approaching: no hit.
+            if (!rigid && bnd * bnv > 0.0) || a < 1.0e-8 {
+                return None;
             }
             let (t1, t2) = solve_quadratic(a, 2.0 * b, bcddsq - target_radius * target_radius)?;
             // If the two times have different signs, the ball is already

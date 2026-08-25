@@ -50,6 +50,9 @@ const BIOS: usize = 0x20_0000;
 const SAMPLES_TO: u32 = 0x207f_ffff;
 const U7: usize = 0x1_0000;
 
+/// How many sound commands the board holds. `desound.c:433`.
+const COMMAND_QUEUE: usize = 4;
+
 /// The sound board's memory and peripherals.
 pub struct Sound {
     /// Page zero: the BIOS is here at reset and the program is here after.
@@ -68,9 +71,26 @@ pub struct Sound {
     /// is, which is how firmware stops them without losing their setup.
     pub power: u32,
 
-    /// The command byte the CPU board has posted, and whether it is new.
+    /// The commands the CPU board has posted and the firmware has not read.
+    ///
+    /// A queue and not a latch, and the reason is written on the reference's
+    /// read handler: "Buffer the sound commands (to account for timing offsets
+    /// between the 6809 Main CPU & the AT91 CPU)" (`desound.c:713`). The game's
+    /// processor writes a burst of bytes microseconds apart while the firmware
+    /// looks at the port on its own schedule, so a single byte loses every one
+    /// but the last. Single-byte commands survive that — which is why the right
+    /// samples play — and a command with a parameter after it does not: the
+    /// firmware sees the parameter twice and never sees what it was for.
+    ///
+    /// Four deep, which is the reference's `ARMSNDBUFSIZE` and its comment that
+    /// two "should actually be good enough, but lets play safe"
+    /// (`desound.c:433`).
     pub command: u8,
     pub command_pending: bool,
+    queue: [u8; COMMAND_QUEUE],
+    write_at: usize,
+    read_at: usize,
+    last_written: u8,
 
     /// The two channels the firmware writes, kept apart because it writes them
     /// apart: one halfword each, to the two halves of the same word.
@@ -112,6 +132,10 @@ impl Sound {
             power: 0x17c,
             command: 0,
             command_pending: false,
+            queue: [0; COMMAND_QUEUE],
+            write_at: 0,
+            read_at: 0,
+            last_written: 0,
             left: Vec::new(),
             right: Vec::new(),
             remapped: false,
@@ -185,9 +209,40 @@ impl Sound {
     /// looks, not at all. The line is dropped again when the firmware reads the
     /// latch, which is what reading it is for.
     pub fn send(&mut self, command: u8) {
+        // Only a change is queued (`desound.c:696`): the game holds the latch
+        // between commands and re-posting the same byte is not a new one.
+        if command == self.last_written {
+            return;
+        }
+        self.last_written = command;
+        self.queue[self.write_at] = command;
+        self.write_at = (self.write_at + 1) % COMMAND_QUEUE;
+        // A full queue drops the oldest rather than the newest, so a burst
+        // longer than the queue loses its head and keeps its tail.
+        if self.write_at == self.read_at {
+            self.read_at = (self.read_at + 1) % COMMAND_QUEUE;
+        }
         self.command = command;
         self.command_pending = true;
-        self.aic.raise(irq::FIQ);
+    }
+
+    /// Takes the next command, or repeats the last one when there is none.
+    ///
+    /// Repeating rather than answering zero is the reference's behaviour
+    /// (`desound.c:725`) and it is what makes a polling firmware work: it reads
+    /// the port continuously and acts on a **change**, so an idle port has to
+    /// keep saying the same thing.
+    fn take_command(&mut self) -> u8 {
+        let data = self.queue[self.read_at];
+        if self.read_at != self.write_at {
+            self.read_at = (self.read_at + 1) % COMMAND_QUEUE;
+        }
+        if self.read_at == self.write_at {
+            self.queue[self.read_at] = data;
+        }
+        self.command = data;
+        self.command_pending = false;
+        data
     }
 
     /// Whether the fast interrupt line is down. See [`Sound::send`].
@@ -482,8 +537,7 @@ impl Bus for Sound {
                 self.aic.clear(irq::FIQ);
                 self.reads[0] += 1;
                 self.last_read = Some(addr);
-                self.command_pending = false;
-                self.command
+                self.take_command()
             }
             0x2000_0004..=SAMPLES_TO => {
                 self.reads[1] += 1;
@@ -538,8 +592,7 @@ impl Bus for Sound {
                 self.aic.clear(irq::FIQ);
                 self.reads[2] += 1;
                 self.last_read = Some(addr);
-                self.command_pending = false;
-                u32::from(self.command)
+                u32::from(self.take_command())
             }
             // A word from a byte-wide part is four accesses on the bus, and
             // the part answers each of them for itself.

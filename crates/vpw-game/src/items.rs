@@ -236,6 +236,14 @@ impl Item {
 
     /// The part's nine placement numbers as they stand, which is how a script
     /// animates a toy the physics knows nothing about.
+    /// Where this piece sits on the playfield, as the file places it.
+    ///
+    /// For naming a fault a player describes by position: VPX's y grows toward
+    /// the player, so the bottom left of a table is small x and large y.
+    pub fn position(&self) -> Vec3 {
+        self.position
+    }
+
     pub fn placement(&self) -> [f32; 9] {
         self.visual.rot_and_tra.get()
     }
