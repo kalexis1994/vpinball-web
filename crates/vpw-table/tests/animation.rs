@@ -402,6 +402,7 @@ fn the_moving_pieces_leave_the_baked_scene() {
         },
         playfield_image: String::new(),
         playfield_material: String::new(),
+        env_image: String::new(),
         lighting: vpw_table::geometry::Lighting {
             lights: [Vec3::ZERO; 2],
             emission: [0.0; 3],

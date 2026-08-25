@@ -380,6 +380,11 @@ pub struct Scene {
     /// Playfield texture, applied to the generated plane.
     pub playfield_image: String,
     pub playfield_material: String,
+    /// The image the table lights itself with — `EIMG`, `pintable.cpp:2415`
+    /// — resolved against `images` like any other texture name. Empty when
+    /// the table never set one, which is when the renderer uses the map that
+    /// ships with Visual Pinball (`Renderer.cpp:208-210`).
+    pub env_image: String,
     pub lighting: Lighting,
     /// Every lamp the table has, lit or not.
     ///
@@ -667,6 +672,9 @@ pub fn extract(vpx: &VPX) -> Scene {
         playfield,
         playfield_image: g.image.clone(),
         playfield_material: g.playfield_material.clone(),
+        // `Option` in the file because 10.01 did not write the tag; a
+        // missing one means the same as an empty one.
+        env_image: g.env_image.clone().unwrap_or_default(),
         lighting: lighting(vpx),
         physics: table_physics(vpx),
         lights,

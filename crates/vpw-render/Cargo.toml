@@ -5,6 +5,8 @@ edition = "2024"
 
 [dependencies]
 bytemuck = { version = "1.25.2", features = ["derive"] }
+# For the irradiance map, which is RGBA16F as in the original.
+half = "2"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "bmp"] }
 log = "0.4"
 vpw-math = { version = "0.1.0", path = "../vpw-math" }

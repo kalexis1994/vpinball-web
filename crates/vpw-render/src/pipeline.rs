@@ -37,6 +37,13 @@ pub struct TablePipeline {
     pub mirror_bind_group: wgpu::BindGroup,
     /// One black pixel, bound wherever a probe would be but must not be.
     blank: wgpu::TextureView,
+    /// The probes the frame groups were last built with, kept so they can
+    /// be built again when the environment changes underneath them: the
+    /// environment is the table's (`Renderer.cpp:208`), and a bind group
+    /// holds the views it was made from.
+    transmission: wgpu::TextureView,
+    transmission_sampler: wgpu::Sampler,
+    reflection: wgpu::TextureView,
     pub frame_bind_group: wgpu::BindGroup,
     pub envmap: crate::env::EnvMap,
     pub mip_levels: u32,
@@ -234,6 +241,7 @@ impl TablePipeline {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 
+        // The shipped map, until a table brings its own (`set_envmap`).
         let envmap = crate::env::EnvMap::default_map(device, queue)
             .expect("the default environment map has to be loadable");
         // A one-pixel black stand-in until `set_transmission` is handed the real
@@ -293,6 +301,9 @@ impl TablePipeline {
         Self {
             mirror_buffer,
             mirror_bind_group,
+            transmission: blank.clone(),
+            transmission_sampler: envmap.sampler.clone(),
+            reflection: blank.clone(),
             blank,
             light_frame_layout,
             light_frame_bind_group,
@@ -343,26 +354,47 @@ impl TablePipeline {
         sampler: &wgpu::Sampler,
         reflection: &wgpu::TextureView,
     ) {
+        self.transmission = view.clone();
+        self.transmission_sampler = sampler.clone();
+        self.reflection = reflection.clone();
+        self.rebind(device);
+    }
+
+    /// Swaps in a table's environment map.
+    ///
+    /// The map belongs to the table, not to the pipeline (`Renderer.cpp:208`
+    /// loads it from `m_table->m_envImage`), so it is set when a table is and
+    /// not when the pipeline is. The frame groups hold the old views and are
+    /// built again; the mip count and height the shader picks its specular
+    /// level from (`set_frame`) follow the new map.
+    pub fn set_envmap(&mut self, device: &wgpu::Device, envmap: crate::env::EnvMap) {
+        self.mip_levels = envmap.mip_levels;
+        self.env_height = envmap.height;
+        self.envmap = envmap;
+        self.rebind(device);
+    }
+
+    /// Builds both frame groups again from whatever is currently set.
+    fn rebind(&mut self, device: &wgpu::Device) {
         self.frame_bind_group = Self::frame_bg(
             device,
             &self.frame_layout,
             &self.frame_buffer,
             &self.envmap,
-            view,
-            sampler,
-            reflection,
+            &self.transmission,
+            &self.transmission_sampler,
+            &self.reflection,
         );
         // The reflection pass renders *into* the probe, so its own bind group
         // must not hold it — and has no use for it either: nothing reflects
         // inside a reflection.
-        let _ = reflection;
         self.mirror_bind_group = Self::frame_bg(
             device,
             &self.frame_layout,
             &self.mirror_buffer,
             &self.envmap,
-            view,
-            sampler,
+            &self.transmission,
+            &self.transmission_sampler,
             &self.blank,
         );
     }

@@ -221,6 +221,13 @@ impl TableRenderer {
             &self.pipeline.material_layout,
             scene,
         );
+        // The light the table asked to be seen under, or the shipped map when
+        // it asked for none (`Renderer.cpp:208-210`). Per table, not per
+        // pipeline: on F-14 it is the only light there is.
+        self.pipeline.set_envmap(
+            &self.gpu.device,
+            crate::env::EnvMap::for_table(&self.gpu.device, &self.gpu.queue, scene),
+        );
 
         let pf = scene.playfield;
         // The sheet itself, flat, and separately the corners of everything
