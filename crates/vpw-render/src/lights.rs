@@ -1,13 +1,28 @@
 //! The lights on the GPU.
 //!
-//! They get their own pipeline and their own pass, after the geometry: they are
-//! drawn **additively** over what is already there, without writing depth —but
-//! testing it, so that an insert is not visible through a ramp that covers it.
+//! They get their own pipelines and their own pass, after the geometry: they
+//! are drawn **additively** over what is already there, without writing depth
+//! — but testing it, so that an insert is not visible through a ramp that
+//! covers it.
 //!
 //! The original draws them with `blend_modulate_vs_add` at 0.0001, which is its
 //! way of saying "pure additive without turning blending off"
 //! (`light.cpp:781`).
+//!
+//! # A lit insert is a texture, lit
+//!
+//! A classic light with a picture is not a halo. The original draws it with
+//! the `light_with_texture` technique (`light.cpp:808-811`): the picture is
+//! bound as `tex_light_color`, the light lies on a surface whose *material* is
+//! set on the shader (`:807`), and the fragment lights the picture's texel
+//! through that material before folding the halo into it. So such a light
+//! needs what a piece of the table needs — a material block and a texture —
+//! and it gets them the way a piece of the table does: through
+//! [`crate::scene::material_slot`], into the pipeline's material layout. Two
+//! lights on the same surface with the same picture share one slot; F-14 has
+//! sixty inserts and one picture between them.
 
+use std::collections::HashMap;
 use wgpu::util::DeviceExt;
 
 /// What the shader needs from each light.
@@ -21,8 +36,19 @@ struct GpuLight {
     /// rgb = edge color, a = falloff exponent
     color2: [f32; 4],
     /// x = how much the halo modulates rather than adds, y = how much of it
-    /// reaches the transmitted-light buffer.
+    /// reaches the transmitted-light buffer, z = image mode (the picture as it
+    /// is, not lit).
     blend: [f32; 4],
+}
+
+/// One vertex of a light's mesh: where it is, and where on the insert's
+/// picture it looks (`light.cpp:515-520`). A light with no picture carries
+/// zeros there; the untextured techniques never read them.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct GpuLightVertex {
+    pos: [f32; 3],
+    uv: [f32; 2],
 }
 
 /// One uploaded light: its shape and its data block.
@@ -55,14 +81,24 @@ pub struct Light {
     /// Whether the **file** declared this one a blinker. See
     /// [`Lights::blinks`].
     blinking: bool,
+    /// The insert's picture and the material it is lit through, when it has a
+    /// picture that resolved. `None` is the original's null `offTexel`
+    /// (`light.cpp:708`), which takes the halo-only technique (`:823`).
+    texel: Option<wgpu::BindGroup>,
+    /// Whether the light is drawn at zero intensity. See
+    /// `vpw_table::light::Light::drawn_when_off`.
+    drawn_when_off: bool,
 }
 
-/// Which of the three draws a call is making. They differ in the blend, in
+/// Which of the four draws a call is making. They differ in the blend, in
 /// whether they test depth, and in which lights they take.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Which {
-    /// A flat additive disc, depth-tested: the classic insert.
+    /// A flat additive disc, depth-tested: the classic light with no picture.
     Classic,
+    /// The classic light with a picture — the lit insert — depth-tested and
+    /// added one-to-one.
+    Texel,
     /// The modulating halo of a bulb light, depth-tested.
     Bulb,
     /// Into the transmitted-light buffer, no depth, bulbs only.
@@ -111,7 +147,19 @@ pub struct Lights {
     flat: wgpu::RenderPipeline,
     /// A bulb light's halo, which modulates as well as adds. See `fs_bulb`.
     bulb: wgpu::RenderPipeline,
+    /// The lit insert: a picture lit through its surface's material with the
+    /// halo folded in. See `fs_texel`.
+    texel: wgpu::RenderPipeline,
     pub layout: wgpu::BindGroupLayout,
+    /// What goes in the material's slot for a light that has no picture.
+    ///
+    /// The light's own data is at group 2 so that a lit insert can take the
+    /// material shader's group 1 unchanged, and a light without a picture has
+    /// nothing to put there. WebGPU lets a pipeline layout leave the slot
+    /// empty, but whether a draw then has to bind *something* to it is the
+    /// kind of question two implementations answer differently; an empty
+    /// bind group is the answer they all accept.
+    empty: wgpu::BindGroup,
     pub lights: Vec<Light>,
     /// The lamps' names, in the same order, so a caller can find the one the
     /// script is talking about.
@@ -119,14 +167,30 @@ pub struct Lights {
 }
 
 impl Lights {
+    /// Builds the pipelines against the table's own layouts.
+    ///
+    /// The lit insert needs the material shader's frame — the environment
+    /// map, for the light loop — and its material layout; the halos need only
+    /// the frame uniform. The transmitted-light pass is drawn with the frame
+    /// layout that leaves the transmitted-light texture *out*, because that
+    /// pass is the one writing it.
     pub fn new(
         device: &wgpu::Device,
-        frame_layout: &wgpu::BindGroupLayout,
+        pipeline: &crate::pipeline::TablePipeline,
         color_format: wgpu::TextureFormat,
     ) -> Self {
+        // One module, the material shader with the light stages after it. See
+        // the header of `light.wgsl` for why the two share a module.
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("vpw-light-shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("light.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                format!(
+                    "{}{}",
+                    include_str!("material.wgsl"),
+                    include_str!("light.wgsl")
+                )
+                .into(),
+            ),
         });
 
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -142,30 +206,90 @@ impl Lights {
                 count: None,
             }],
         });
+        let empty_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("vpw-light-empty-layout"),
+            entries: &[],
+        });
+        let empty = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("vpw-light-empty-bg"),
+            layout: &empty_layout,
+            entries: &[],
+        });
 
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        // Three pipeline layouts: the halos in the scene, the halos in the
+        // transmitted-light pass, and the lit insert with its material.
+        let halo_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("vpw-light-pipeline-layout"),
-            bind_group_layouts: &[Some(frame_layout), Some(&layout)],
+            bind_group_layouts: &[
+                Some(&pipeline.frame_layout),
+                Some(&empty_layout),
+                Some(&layout),
+            ],
+            immediate_size: 0,
+        });
+        let transmitted_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("vpw-light-transmitted-pipeline-layout"),
+            bind_group_layouts: &[
+                Some(&pipeline.light_frame_layout),
+                Some(&empty_layout),
+                Some(&layout),
+            ],
+            immediate_size: 0,
+        });
+        let texel_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("vpw-light-texel-pipeline-layout"),
+            bind_group_layouts: &[
+                Some(&pipeline.frame_layout),
+                Some(&pipeline.material_layout),
+                Some(&layout),
+            ],
             immediate_size: 0,
         });
 
         let attributes = [Some(wgpu::VertexBufferLayout {
-            array_stride: 12,
+            array_stride: std::mem::size_of::<GpuLightVertex>() as u64,
             step_mode: wgpu::VertexStepMode::Vertex,
-            attributes: &[wgpu::VertexAttribute {
-                format: wgpu::VertexFormat::Float32x3,
-                offset: 0,
-                shader_location: 0,
-            }],
+            attributes: &[
+                wgpu::VertexAttribute {
+                    format: wgpu::VertexFormat::Float32x3,
+                    offset: 0,
+                    shader_location: 0,
+                },
+                wgpu::VertexAttribute {
+                    format: wgpu::VertexFormat::Float32x2,
+                    offset: 12,
+                    shader_location: 1,
+                },
+            ],
         })];
 
-        let make = |name: &str, entry: &str, depth: Option<wgpu::DepthStencilState>| {
+        // In the scene the halo must be occluded — an insert under a ramp is
+        // not visible through it — so it tests depth without writing it. In the
+        // transmitted-light pass there is no depth buffer at all and there
+        // should not be: the question there is where the lamp light *is*, not
+        // what can see it, and the original disables z for the same pass with
+        // the same reasoning (`Renderer.cpp:1496`).
+        let tested = || {
+            Some(wgpu::DepthStencilState {
+                format: crate::pipeline::DEPTH_FORMAT,
+                depth_write_enabled: Some(false),
+                depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                stencil: Default::default(),
+                bias: Default::default(),
+            })
+        };
+
+        let make = |name: &str,
+                    pipeline_layout: &wgpu::PipelineLayout,
+                    entry: &str,
+                    blend: wgpu::BlendComponent,
+                    depth: Option<wgpu::DepthStencilState>| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(name),
-                layout: Some(&pipeline_layout),
+                layout: Some(pipeline_layout),
                 vertex: wgpu::VertexState {
                     module: &shader,
-                    entry_point: Some("vs_main"),
+                    entry_point: Some("vs_light"),
                     buffers: &attributes,
                     compilation_options: Default::default(),
                 },
@@ -174,16 +298,8 @@ impl Lights {
                     entry_point: Some(entry),
                     targets: &[Some(wgpu::ColorTargetState {
                         format: color_format,
-                        // Additive: the light **adds** to what is already there.
-                        // The alpha the shader returns modulates how much it adds
-                        // at the edge of the halo, where the attenuation has
-                        // already faded it out.
                         blend: Some(wgpu::BlendState {
-                            color: wgpu::BlendComponent {
-                                src_factor: wgpu::BlendFactor::SrcAlpha,
-                                dst_factor: wgpu::BlendFactor::One,
-                                operation: wgpu::BlendOperation::Add,
-                            },
+                            color: blend,
                             alpha: wgpu::BlendComponent::REPLACE,
                         }),
                         write_mask: wgpu::ColorWrites::COLOR,
@@ -202,86 +318,95 @@ impl Lights {
             })
         };
 
-        // Two of the same pipeline, differing only in the depth test.
-        //
-        // In the scene the halo must be occluded — an insert under a ramp is
-        // not visible through it — so it tests depth without writing it. In the
-        // transmitted-light pass there is no depth buffer at all and there
-        // should not be: the question there is where the lamp light *is*, not
-        // what can see it, and the original disables z for the same pass with
-        // the same reasoning (`Renderer.cpp:1496`).
+        // Additive: the light **adds** to what is already there. The alpha the
+        // shader returns modulates how much it adds at the edge of the halo,
+        // where the attenuation has already faded it out.
+        let additive = wgpu::BlendComponent {
+            src_factor: wgpu::BlendFactor::SrcAlpha,
+            dst_factor: wgpu::BlendFactor::One,
+            operation: wgpu::BlendOperation::Add,
+        };
+        let pipeline_classic = make("vpw-lights", &halo_layout, "fs_classic", additive, tested());
+        let flat = make(
+            "vpw-lights-flat",
+            &transmitted_layout,
+            "fs_transmitted",
+            additive,
+            None,
+        );
         // The bulb halo's blend, which is where a bulb light differs from a
         // classic one. See `fs_bulb` in `light.wgsl` for what the three
         // settings compute; `light.cpp:827` is where the original sets them.
-        let bulb = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("vpw-lights-bulb"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                buffers: &attributes,
-                compilation_options: Default::default(),
+        let bulb = make(
+            "vpw-lights-bulb",
+            &halo_layout,
+            "fs_bulb",
+            wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::SrcAlpha,
+                dst_factor: wgpu::BlendFactor::OneMinusSrc,
+                operation: wgpu::BlendOperation::ReverseSubtract,
             },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_bulb"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: color_format,
-                    blend: Some(wgpu::BlendState {
-                        color: wgpu::BlendComponent {
-                            src_factor: wgpu::BlendFactor::SrcAlpha,
-                            dst_factor: wgpu::BlendFactor::OneMinusSrc,
-                            operation: wgpu::BlendOperation::ReverseSubtract,
-                        },
-                        alpha: wgpu::BlendComponent::REPLACE,
-                    }),
-                    write_mask: wgpu::ColorWrites::COLOR,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                cull_mode: None,
-                ..Default::default()
-            },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: crate::pipeline::DEPTH_FORMAT,
-                depth_write_enabled: Some(false),
-                depth_compare: Some(wgpu::CompareFunction::LessEqual),
-                stencil: Default::default(),
-                bias: Default::default(),
-            }),
-            multisample: Default::default(),
-            multiview_mask: None,
-            cache: None,
-        });
-
-        let pipeline = make(
-            "vpw-lights",
-            "fs_main",
-            Some(wgpu::DepthStencilState {
-                format: crate::pipeline::DEPTH_FORMAT,
-                depth_write_enabled: Some(false),
-                depth_compare: Some(wgpu::CompareFunction::LessEqual),
-                stencil: Default::default(),
-                bias: Default::default(),
-            }),
+            tested(),
         );
-        let flat = make("vpw-lights-flat", "fs_transmitted", None);
+        // The lit insert is added whole — `SRCBLEND ONE`, `DESTBLEND ONE`
+        // (`light.cpp:815-817`), with the note that "TOTAN and Flintstones
+        // inserts break if alpha blending is disabled here". Its alpha is the
+        // overlay's and means nothing to the blend; scaling by it, the way the
+        // halo is, would fade the artwork by the picture's own alpha channel.
+        let texel = make(
+            "vpw-lights-texel",
+            &texel_layout,
+            "fs_texel",
+            wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::One,
+                dst_factor: wgpu::BlendFactor::One,
+                operation: wgpu::BlendOperation::Add,
+            },
+            tested(),
+        );
 
         Self {
-            pipeline,
+            pipeline: pipeline_classic,
             bulb,
             flat,
+            texel,
             layout,
+            empty,
             lights: Vec::new(),
             names: Vec::new(),
         }
     }
 
-    /// Uploads a table's lit lights.
-    pub fn upload(&mut self, device: &wgpu::Device, lights: &[vpw_table::light::Light]) {
+    /// Uploads a table's lights, pictures included.
+    ///
+    /// The scene is needed and not just its lights: an insert's picture is
+    /// one of the table's images and the material it is lit through is one of
+    /// the table's materials, both resolved by name the way the original's
+    /// `GetImage` and `GetSurfaceMaterial` resolve them (`light.cpp:373`,
+    /// `:708`).
+    pub fn upload(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        pipeline: &crate::pipeline::TablePipeline,
+        scene: &vpw_table::geometry::Scene,
+    ) {
+        let lights = &scene.lights;
         self.names = lights.iter().map(|l| l.name.clone()).collect();
+
+        // The same sampler and the same fallback as the table's pieces, so an
+        // insert samples its picture exactly the way the playfield under it
+        // samples the same picture. The original asks for clamp addressing
+        // here (`light.cpp:811`) where the table's pieces wrap; the insert's
+        // coordinates are inside the table and so inside 0..1, and the one
+        // texel at the border where the two differ is not worth a second
+        // sampler.
+        let sampler = crate::scene::table_sampler(device);
+        let white = crate::scene::white_texture(device, queue);
+        // One slot per (surface material, picture): the picture is uploaded
+        // once, not once per insert.
+        let mut slots: HashMap<(String, String), Option<wgpu::BindGroup>> = HashMap::new();
+
         self.lights = lights
             .iter()
             .map(|l| {
@@ -302,7 +427,12 @@ impl Lights {
                         l.color[2] * tint[2],
                         lamp.level(),
                     ],
-                    blend: [l.modulate, l.transmission_scale, 0.0, 0.0],
+                    blend: [
+                        l.modulate,
+                        l.transmission_scale,
+                        if l.image_mode { 1.0 } else { 0.0 },
+                        0.0,
+                    ],
                     color2: [
                         l.color2[0] * tint[0],
                         l.color2[1] * tint[1],
@@ -315,10 +445,47 @@ impl Lights {
                     contents: bytemuck::bytes_of(&data),
                     usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                 });
+
+                let texel = if l.image.is_empty() {
+                    None
+                } else {
+                    let key = (
+                        l.surface_material.to_ascii_lowercase(),
+                        l.image.to_ascii_lowercase(),
+                    );
+                    slots
+                        .entry(key)
+                        .or_insert_with(|| {
+                            let slot = crate::scene::material_slot(
+                                device,
+                                queue,
+                                &pipeline.material_layout,
+                                &sampler,
+                                &white,
+                                scene.material(&l.surface_material),
+                                scene.image(&l.image),
+                            );
+                            // A name that is not one of the table's images is
+                            // the original's null `offTexel`: the halo alone.
+                            slot.textured.then_some(slot.bind_group)
+                        })
+                        .clone()
+                };
+
+                let vertices: Vec<GpuLightVertex> = l
+                    .vertices
+                    .iter()
+                    .enumerate()
+                    .map(|(i, &pos)| GpuLightVertex {
+                        pos,
+                        uv: l.uvs.get(i).copied().unwrap_or([0.0; 2]),
+                    })
+                    .collect();
+
                 Light {
                     vertices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                         label: Some("vpw-light-vertices"),
-                        contents: bytemuck::cast_slice(&l.vertices),
+                        contents: bytemuck::cast_slice(&vertices),
                         usage: wgpu::BufferUsages::VERTEX,
                     }),
                     indices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -343,6 +510,11 @@ impl Lights {
                     bulb: l.is_bulb,
                     transmission: l.transmission_scale,
                     blinking: l.blinking,
+                    // Only with a picture that resolved: a light whose picture
+                    // is missing falls back to the halo, and a halo at zero
+                    // intensity is nothing.
+                    drawn_when_off: texel.is_some() && l.drawn_when_off(),
+                    texel,
                 }
             })
             .collect();
@@ -404,6 +576,12 @@ impl Lights {
         self.lights.get(index).is_some_and(|l| l.blinking)
     }
 
+    /// How many of the uploaded lights are lit inserts — a picture lit through
+    /// a material — rather than halos.
+    pub fn textured(&self) -> usize {
+        self.lights.iter().filter(|l| l.texel.is_some()).count()
+    }
+
     pub fn is_empty(&self) -> bool {
         self.lights.is_empty()
     }
@@ -412,17 +590,24 @@ impl Lights {
         self.lights.len()
     }
 
-    /// Emits the lights.
+    /// Emits the lights into the scene.
     ///
-    /// Two pipelines, chosen per light: a bulb blends into what is under it and
-    /// a classic one is added flat on top. The original switches the same two
-    /// sets of render states for the same reason (`light.cpp:817` and `:827`).
+    /// `frame` is the table's full frame bind group, environment and all: the
+    /// lit insert goes through the light loop, and the light loop reads the
+    /// environment map.
+    ///
+    /// Three pipelines, chosen per light: a bulb blends into what is under it,
+    /// a classic one with a picture adds the lit picture, and one without adds
+    /// its halo flat on top. The original switches the same sets of render
+    /// states for the same reason (`light.cpp:810-817` and `:827`).
     pub fn draw(&self, pass: &mut wgpu::RenderPass<'_>, frame: &wgpu::BindGroup) {
         self.draw_with(pass, &self.pipeline, Which::Classic, frame);
+        self.draw_with(pass, &self.texel, Which::Texel, frame);
         self.draw_with(pass, &self.bulb, Which::Bulb, frame);
     }
 
-    /// The same, into a pass with no depth buffer.
+    /// The same, into a pass with no depth buffer. `frame` is the reduced
+    /// frame bind group, the one without the transmitted-light texture.
     pub fn draw_flat(&self, pass: &mut wgpu::RenderPass<'_>, frame: &wgpu::BindGroup) {
         self.draw_with(pass, &self.flat, Which::Transmitted, frame);
     }
@@ -439,9 +624,13 @@ impl Lights {
         }
         pass.set_pipeline(pipeline);
         pass.set_bind_group(0, frame, &[]);
+        if which != Which::Texel {
+            pass.set_bind_group(1, &self.empty, &[]);
+        }
         for l in &self.lights {
             let takes = match which {
-                Which::Classic => !l.bulb,
+                Which::Classic => !l.bulb && l.texel.is_none(),
+                Which::Texel => l.texel.is_some(),
                 Which::Bulb => l.bulb,
                 // The transmitted-light buffer takes bulb lights and only bulb
                 // lights, and only those with something to transmit: the
@@ -456,11 +645,19 @@ impl Lights {
                 continue;
             }
             // A lamp that is off contributes nothing but still costs a draw
-            // call, and a table has hundreds of them with a handful lit.
-            if l.lamp.level() <= 0.0 {
+            // call, and a table has hundreds of them with a handful lit — bar
+            // the insert with a picture of its own, which is drawn dark
+            // (`light.cpp:713-718`), and only in the scene: in the
+            // transmitted-light buffer dark is nothing.
+            if l.lamp.level() <= 0.0 && !(which == Which::Texel && l.drawn_when_off) {
                 continue;
             }
-            pass.set_bind_group(1, &l.bind_group, &[]);
+            if let Some(texel) = &l.texel
+                && which == Which::Texel
+            {
+                pass.set_bind_group(1, texel, &[]);
+            }
+            pass.set_bind_group(2, &l.bind_group, &[]);
             pass.set_vertex_buffer(0, l.vertices.slice(..));
             pass.set_index_buffer(l.indices.slice(..), wgpu::IndexFormat::Uint32);
             pass.draw_indexed(0..l.index_count, 0, 0..1);

@@ -1,7 +1,22 @@
 //! Tests of the light model.
 
 use vpin::vpx::gameitem::light::{Fader as VpxFader, Light as VpxLight};
-use vpw_table::light::{BLINKING, Fader, Lamp, build};
+use vpw_math::Vec3;
+use vpw_table::geometry::Bounds;
+use vpw_table::light::{BLINKING, Fader, Lamp, Site, build};
+
+/// A 1000 by 2000 playfield with a picture and a material of its own, which is
+/// what a light lies on when it names no surface.
+fn site() -> Site {
+    Site {
+        table: Bounds {
+            min: Vec3::new(0.0, 0.0, 0.0),
+            max: Vec3::new(1000.0, 2000.0, 0.0),
+        },
+        material: "Playfield".into(),
+        image: "playfield".into(),
+    }
+}
 
 /// A circular light of a given radius, with `n` control points.
 fn light(state: f32, intensity: f32) -> VpxLight {
@@ -37,9 +52,9 @@ fn a_light_that_starts_off_is_still_a_light() {
     // it on. Something does: in F-14 only 24 of 443 lamps start on, and the
     // other 419 are the game's — the ROM lights them as you play. Dropping them
     // at load gave a playfield that could never light up.
-    let off = build(&light(0.0, 1.0), 0.0).expect("kept");
+    let off = build(&light(0.0, 1.0), 0.0, &site()).expect("kept");
     assert_eq!(off.state, 0.0, "and it knows it is off");
-    let on = build(&light(1.0, 1.0), 0.0).expect("kept");
+    let on = build(&light(1.0, 1.0), 0.0, &site()).expect("kept");
     assert_eq!(on.state, 1.0);
     // Both at full intensity: how bright it is drawn is the state's business,
     // and the state changes several times a second.
@@ -48,7 +63,7 @@ fn a_light_that_starts_off_is_still_a_light() {
 
 #[test]
 fn a_light_with_no_intensity_is_not_drawn_either() {
-    assert!(build(&light(1.0, 0.0), 0.0).is_none());
+    assert!(build(&light(1.0, 0.0), 0.0, &site()).is_none());
 }
 
 #[test]
@@ -56,7 +71,7 @@ fn a_blinking_lamp_is_carried_as_lit_and_flagged() {
     // State 2 is "blinking". It is kept at full brightness with the flag beside
     // it, because what the lamp actually shows is the pattern's business — one
     // is only where the pattern starts.
-    let l = build(&light(2.0, 1.0), 0.0).expect("it has to be drawn");
+    let l = build(&light(2.0, 1.0), 0.0, &site()).expect("it has to be drawn");
     assert!(l.intensity > 0.0);
     assert_eq!(l.state, 1.0);
     assert!(l.blinking, "the pattern is what makes it a blinker");
@@ -69,13 +84,13 @@ fn a_lamp_the_author_hid_is_not_drawn() {
     // Drawing them puts coloured discs on the playfield that no real game has.
     let mut hidden = light(1.0, 1.0);
     hidden.visible = Some(false);
-    assert!(build(&hidden, 0.0).is_none());
+    assert!(build(&hidden, 0.0, &site()).is_none());
 
     // Absent means shown: the chunk is from 10.8 and the original's constructor
     // defaults it to true (`light.h:94`).
     let mut old = light(1.0, 1.0);
     old.visible = None;
-    assert!(build(&old, 0.0).is_some());
+    assert!(build(&old, 0.0, &site()).is_some());
 }
 
 #[test]
@@ -86,7 +101,7 @@ fn a_pre_10_8_lamp_that_starts_lit_is_lit() {
     let mut l = light(0.0, 1.0);
     l.state = None;
     l.state_u32 = 1;
-    assert_eq!(build(&l, 0.0).expect("kept").state, 1.0);
+    assert_eq!(build(&l, 0.0, &site()).expect("kept").state, 1.0);
 }
 
 #[test]
@@ -98,7 +113,7 @@ fn a_bulb_floats_its_halo_and_a_classic_light_does_not() {
     let mut bulb = light(1.0, 1.0);
     bulb.is_bulb_light = true;
     bulb.bulb_halo_height = 28.0;
-    let l = build(&bulb, 40.0).unwrap();
+    let l = build(&bulb, 40.0, &site()).unwrap();
     assert!(
         l.vertices.iter().all(|v| (v[2] - 68.1).abs() < 1e-4),
         "the halo should float at 40 + 28 + 0.1"
@@ -108,7 +123,7 @@ fn a_bulb_floats_its_halo_and_a_classic_light_does_not() {
     // no halo height — the original adds it only for a bulb.
     let mut classic = light(1.0, 1.0);
     classic.bulb_halo_height = 28.0;
-    let l = build(&classic, 40.0).unwrap();
+    let l = build(&classic, 40.0, &site()).unwrap();
     assert!(l.vertices.iter().all(|v| (v[2] - 40.1).abs() < 1e-4));
 }
 
@@ -120,7 +135,7 @@ fn the_falloff_is_centred_at_the_lamp_s_own_height() {
     // is painted on, so a raised lamp washes wider instead of spotting tight.
     let mut raised = light(1.0, 1.0);
     raised.height = Some(30.0);
-    let l = build(&raised, 40.0).unwrap();
+    let l = build(&raised, 40.0, &site()).unwrap();
     assert!((l.center.z - 70.0).abs() < 1e-4, "got {}", l.center.z);
     // And the outline is still on the surface.
     assert!(l.vertices.iter().all(|v| (v[2] - 40.1).abs() < 1e-4));
@@ -132,9 +147,9 @@ fn what_a_lamp_transmits_comes_from_the_file() {
     // altogether (`light.cpp:600`) and anything else scales it (`:801`).
     let mut l = light(1.0, 1.0);
     l.transmission_scale = 0.0;
-    assert_eq!(build(&l, 0.0).unwrap().transmission_scale, 0.0);
+    assert_eq!(build(&l, 0.0, &site()).unwrap().transmission_scale, 0.0);
     l.transmission_scale = 0.75;
-    assert_eq!(build(&l, 0.0).unwrap().transmission_scale, 0.75);
+    assert_eq!(build(&l, 0.0, &site()).unwrap().transmission_scale, 0.75);
 }
 
 #[test]
@@ -144,11 +159,11 @@ fn a_file_with_no_blink_interval_still_blinks() {
     // which is not a blink, it is a flicker.
     let mut l = light(2.0, 1.0);
     l.blink_interval = 0;
-    assert_eq!(build(&l, 0.0).unwrap().blink_interval, 125.0);
+    assert_eq!(build(&l, 0.0, &site()).unwrap().blink_interval, 125.0);
     // And an empty pattern becomes one off frame, the way the original replaces
     // it (`light.cpp:1258`), because the pattern is indexed unconditionally.
     l.blink_pattern = String::new();
-    assert_eq!(build(&l, 0.0).unwrap().blink, vec![false]);
+    assert_eq!(build(&l, 0.0, &site()).unwrap().blink, vec![false]);
 }
 
 #[test]
@@ -161,7 +176,7 @@ fn a_lamp_ramps_up_at_the_speed_the_file_asks_for() {
     off.fade_speed_up = 0.2;
     off.fade_speed_down = 0.1;
     off.fader = Some(VpxFader::Linear);
-    let built = build(&off, 0.0).unwrap();
+    let built = build(&off, 0.0, &site()).unwrap();
     assert_eq!(built.fader, Fader::Linear);
     let mut lamp = Lamp::new(&built);
     assert_eq!(lamp.level(), 0.0, "the file says off");
@@ -185,7 +200,7 @@ fn a_lamp_ramps_up_at_the_speed_the_file_asks_for() {
 fn a_fader_of_none_is_still_a_switch() {
     let mut off = light(0.0, 10.0);
     off.fader = Some(VpxFader::None);
-    let mut lamp = Lamp::new(&build(&off, 0.0).unwrap());
+    let mut lamp = Lamp::new(&build(&off, 0.0, &site()).unwrap());
     lamp.update(1.0, 1.0, 1.0);
     assert_eq!(lamp.level(), 10.0);
 }
@@ -198,7 +213,7 @@ fn a_lamp_with_no_usable_fade_speed_still_gets_there() {
     // game. A dead lamp is a worse answer than an instant one.
     let mut off = light(0.0, 10.0);
     off.fade_speed_up = 0.0;
-    let mut lamp = Lamp::new(&build(&off, 0.0).unwrap());
+    let mut lamp = Lamp::new(&build(&off, 0.0, &site()).unwrap());
     lamp.update(1.0, 1.0, 16.0);
     assert_eq!(lamp.level(), 10.0);
 }
@@ -213,7 +228,7 @@ fn a_blinking_lamp_walks_its_pattern() {
     l.blink_pattern = "1000".into();
     l.blink_interval = 100;
     l.fader = Some(VpxFader::None);
-    let built = build(&l, 0.0).unwrap();
+    let built = build(&l, 0.0, &site()).unwrap();
     let mut lamp = Lamp::new(&built);
     assert_eq!(lamp.level(), 10.0, "the pattern starts lit");
 
@@ -242,7 +257,7 @@ fn switching_a_lamp_to_blinking_restarts_its_pattern() {
     l.blink_pattern = "1100".into();
     l.blink_interval = 100;
     l.fader = Some(VpxFader::None);
-    let built = build(&l, 0.0).unwrap();
+    let built = build(&l, 0.0, &site()).unwrap();
 
     // Two lamps left running on plain for very different lengths of time, then
     // told to blink.
@@ -275,7 +290,7 @@ fn an_incandescent_lamp_takes_its_time_and_reddens() {
     // goes orange on the way out.
     let mut l = light(0.0, 10.0);
     l.fader = Some(VpxFader::Incandescent);
-    let built = build(&l, 0.0).unwrap();
+    let built = build(&l, 0.0, &site()).unwrap();
     assert_eq!(built.fader, Fader::Incandescent);
     let mut lamp = Lamp::new(&built);
     assert_eq!(lamp.level(), 0.0);
@@ -322,9 +337,9 @@ fn a_lamp_starts_where_the_file_leaves_it() {
     // Not at zero with a fade to climb out of: a lamp the file declares as lit
     // is lit on the first frame, the way `RenderSetup` leaves it
     // (`light.cpp:1311`).
-    let on = build(&light(1.0, 10.0), 0.0).unwrap();
+    let on = build(&light(1.0, 10.0), 0.0, &site()).unwrap();
     assert_eq!(Lamp::new(&on).level(), 10.0);
-    let off = build(&light(0.0, 10.0), 0.0).unwrap();
+    let off = build(&light(0.0, 10.0), 0.0, &site()).unwrap();
     assert_eq!(Lamp::new(&off).level(), 0.0);
 }
 
@@ -335,7 +350,7 @@ fn the_dimmer_and_the_switch_are_two_different_numbers() {
     // frame and leaves the switch alone.
     let mut l = light(1.0, 10.0);
     l.fader = Some(VpxFader::None);
-    let mut lamp = Lamp::new(&build(&l, 0.0).unwrap());
+    let mut lamp = Lamp::new(&build(&l, 0.0, &site()).unwrap());
     lamp.update(1.0, 0.25, 16.0);
     assert_eq!(lamp.level(), 2.5);
 }
@@ -357,7 +372,7 @@ fn the_halo_carries_the_whole_intensity() {
     // at the engine default of 1.8 instead of the strength the table asks for,
     // so the light was being spread over the table rather than staying where
     // it was. Two bugs, and each one made the other look like the fix.
-    let l = build(&light(1.0, 10.0), 0.0).unwrap();
+    let l = build(&light(1.0, 10.0), 0.0, &site()).unwrap();
     assert!(
         (l.intensity - 10.0).abs() < 1e-6,
         "it gave {} and 10 was expected",
@@ -370,8 +385,8 @@ fn an_intermediate_state_is_carried_as_the_state() {
     // From 10.8 onwards the state is a float, and half a light is half as
     // bright. The halving happens where the state can still change — at draw
     // time — so what comes out of here is the state, not a dimmed intensity.
-    let full = build(&light(1.0, 10.0), 0.0).unwrap();
-    let half = build(&light(0.5, 10.0), 0.0).unwrap();
+    let full = build(&light(1.0, 10.0), 0.0, &site()).unwrap();
+    let half = build(&light(0.5, 10.0), 0.0, &site()).unwrap();
     assert_eq!(half.state, 0.5);
     assert_eq!(half.intensity, full.intensity);
 }
@@ -380,7 +395,7 @@ fn an_intermediate_state_is_carried_as_the_state() {
 fn the_shape_sits_just_above_the_surface() {
     // The original raises it by 0.1 so it does not fight with the playfield over
     // depth (`light.cpp:515`).
-    let l = build(&light(1.0, 1.0), 40.0).unwrap();
+    let l = build(&light(1.0, 1.0), 40.0, &site()).unwrap();
     assert!(
         l.vertices.iter().all(|v| (v[2] - 40.1).abs() < 1e-4),
         "z badly placed"
@@ -391,9 +406,110 @@ fn the_shape_sits_just_above_the_surface() {
 
 #[test]
 fn the_shape_gets_triangulated() {
-    let l = build(&light(1.0, 1.0), 0.0).unwrap();
+    let l = build(&light(1.0, 1.0), 0.0, &site()).unwrap();
     assert_eq!(l.indices.len() % 3, 0);
     assert!(!l.indices.is_empty(), "an octagon has to give triangles");
     let max = l.indices.iter().copied().max().unwrap() as usize;
     assert!(max < l.vertices.len(), "index out of range");
+}
+
+#[test]
+fn an_insert_with_a_picture_samples_it_in_table_space() {
+    // `light.cpp:519-520`: `tu = x * inv_tablewidth`, `tv = y * inv_tableheight`.
+    // The picture is of the whole playfield with this insert lit, and the
+    // light's outline is a window cut into it — so a light around (100, 100) on
+    // a 1000 by 2000 table looks up the picture near (0.1, 0.05), not at its
+    // own 0..1.
+    let mut l = light(1.0, 1.0);
+    l.image = "inserts_lit".into();
+    let built = build(&l, 0.0, &site()).unwrap();
+    assert_eq!(built.image, "inserts_lit");
+    assert_eq!(built.uvs.len(), built.vertices.len(), "one per vertex");
+    for (v, uv) in built.vertices.iter().zip(&built.uvs) {
+        assert!((uv[0] - v[0] / 1000.0).abs() < 1e-6, "{uv:?} for {v:?}");
+        assert!((uv[1] - v[1] / 2000.0).abs() < 1e-6, "{uv:?} for {v:?}");
+        assert!((0.0..=1.0).contains(&uv[0]) && (0.0..=1.0).contains(&uv[1]));
+    }
+    // And that is nowhere near stretching the outline itself over 0..1.
+    let span = built.uvs.iter().map(|uv| uv[0]).fold(0.0f32, f32::max)
+        - built.uvs.iter().map(|uv| uv[0]).fold(1.0f32, f32::min);
+    assert!(
+        span < 0.05,
+        "a 40 VPU insert is a sliver of a 1000 VPU table"
+    );
+}
+
+#[test]
+fn a_bulb_has_no_picture_however_the_file_names_one() {
+    // `light.cpp:708`: `offTexel = m_BulbLight ? nullptr : GetImage(m_szImage)`.
+    // A bulb is a halo floating over the surface and its picture, if the
+    // editor left one in the file, is never looked at.
+    let mut bulb = light(1.0, 1.0);
+    bulb.is_bulb_light = true;
+    bulb.image = "inserts_lit".into();
+    let built = build(&bulb, 0.0, &site()).unwrap();
+    assert!(built.image.is_empty());
+    assert!(built.uvs.is_empty());
+    assert!(!built.drawn_when_off());
+
+    // And a classic light with no picture has nothing to map either.
+    let built = build(&light(1.0, 1.0), 0.0, &site()).unwrap();
+    assert!(built.image.is_empty());
+    assert!(built.uvs.is_empty());
+}
+
+#[test]
+fn an_unlit_insert_is_drawn_unless_its_picture_is_the_playfield_s_own() {
+    // `light.cpp:713-718`. A classic light whose picture is the very image of
+    // the surface it lies on adds nothing when off, and the original leaves
+    // before drawing it. One with a picture of its own is drawn dark — the
+    // playfield underneath does not show that artwork, so skipping it makes the
+    // insert vanish rather than go out.
+    let mut same = light(1.0, 1.0);
+    same.image = "PLAYFIELD".into(); // resolved case-insensitively, like every name
+    assert!(!build(&same, 0.0, &site()).unwrap().drawn_when_off());
+
+    let mut own = light(1.0, 1.0);
+    own.image = "inserts_lit".into();
+    assert!(build(&own, 0.0, &site()).unwrap().drawn_when_off());
+
+    // Image mode is drawn regardless: the picture is shown as it is, and the
+    // playfield's lit copy is not the playfield.
+    let mut passthrough = light(1.0, 1.0);
+    passthrough.image = "PLAYFIELD".into();
+    passthrough.is_image_mode = true;
+    let built = build(&passthrough, 0.0, &site()).unwrap();
+    assert!(built.image_mode);
+    assert!(built.drawn_when_off());
+}
+
+#[test]
+fn a_light_lies_on_the_playfield_unless_it_names_a_wall() {
+    // `PinTable::GetSurfaceMaterial` / `GetSurfaceImage`
+    // (`pintable.cpp:5178-5207`): no name is the playfield, a wall's name is
+    // the wall's *top* material and its image, and a name that is not there
+    // falls back to the playfield with a logged error.
+    use vpin::vpx::gameitem::GameItemEnum;
+    use vpin::vpx::gameitem::wall::Wall;
+    let mut vpx = vpin::vpx::VPX::default();
+    vpx.gamedata.playfield_material = "PF mat".into();
+    vpx.gamedata.image = "PF img".into();
+    vpx.gameitems.push(GameItemEnum::Wall(Wall {
+        name: "Plastic1".into(),
+        top_material: "top".into(),
+        side_material: "side".into(),
+        image: "plastic".into(),
+        ..Wall::default()
+    }));
+    let table = site().table;
+
+    let on_playfield = Site::resolve(&vpx, "", table);
+    assert_eq!(on_playfield.material, "PF mat");
+    assert_eq!(on_playfield.image, "PF img");
+
+    let on_wall = Site::resolve(&vpx, "plastic1", table);
+    assert_eq!(on_wall.material, "top", "the top, never the side");
+    assert_eq!(on_wall.image, "plastic");
+
+    assert_eq!(Site::resolve(&vpx, "NoSuchWall", table), on_playfield);
 }

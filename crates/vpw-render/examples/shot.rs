@@ -158,6 +158,15 @@ fn main() {
             light.modulate = 0.0;
         }
     }
+    // VPW_HALO_ONLY=1 takes every insert's picture away, so it is drawn as the
+    // coloured halo it was before the lit-insert technique existed — the
+    // "before" of a before-and-after.
+    if std::env::var("VPW_HALO_ONLY").is_ok() {
+        for light in &mut scene.lights {
+            light.image.clear();
+            light.uvs.clear();
+        }
+    }
     let extract_time = t1.elapsed();
 
     // How bright the playfield's own artwork is before anything lights it.

@@ -58,7 +58,7 @@ impl TableRenderer {
             post.sampler(),
             post.reflection_view(),
         );
-        let lights = Lights::new(&gpu.device, &pipeline.light_frame_layout, hdr);
+        let lights = Lights::new(&gpu.device, &pipeline, hdr);
         Ok(Self {
             gpu,
             pipeline,
@@ -242,7 +242,8 @@ impl TableRenderer {
         ));
         self.occupied = scene.occupied();
         self.reframe();
-        self.lights.upload(&self.gpu.device, &scene.lights);
+        self.lights
+            .upload(&self.gpu.device, &self.gpu.queue, &self.pipeline, scene);
         self.dynamic = Some(DynamicParts::upload(
             &self.gpu.device,
             &self.gpu.queue,

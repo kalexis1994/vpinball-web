@@ -219,6 +219,6 @@ pub fn draw_full(
 
     // The lights go last: they add on top of what is already drawn.
     if let Some(l) = lights {
-        l.draw(&mut pass, &pipeline.light_frame_bind_group);
+        l.draw(&mut pass, &pipeline.frame_bind_group);
     }
 }

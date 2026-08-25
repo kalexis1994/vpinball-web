@@ -93,7 +93,7 @@ impl Offscreen {
             post.sampler(),
             post.reflection_view(),
         );
-        let lights = Lights::new(&device, &pipeline.light_frame_layout, hdr);
+        let lights = Lights::new(&device, &pipeline, hdr);
 
         Ok(Self {
             device,
@@ -163,7 +163,8 @@ impl Offscreen {
 
     /// Uploads the table's lit lights.
     pub fn upload_lights(&mut self, scene: &Scene) {
-        self.lights.upload(&self.device, &scene.lights);
+        self.lights
+            .upload(&self.device, &self.queue, &self.pipeline, scene);
         self.post.set_exposure(&self.queue, scene.lighting.exposure);
     }
 

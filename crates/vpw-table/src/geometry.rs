@@ -610,6 +610,7 @@ pub fn extract(vpx: &VPX) -> Scene {
                 lights.extend(crate::light::build(
                     l,
                     surface_height(&l.surface, l.center.x, l.center.y),
+                    &crate::light::Site::resolve(vpx, &l.surface, playfield),
                 ));
             }
             _ => {}

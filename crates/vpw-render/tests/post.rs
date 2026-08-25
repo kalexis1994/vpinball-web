@@ -101,6 +101,11 @@ fn one_bright_light(intensity: f32, alpha: f32) -> Scene {
         fade_down: 0.2,
         blink: vec![true],
         blink_interval: 125.0,
+        uvs: Vec::new(),
+        image: String::new(),
+        image_mode: false,
+        surface_material: "floor".into(),
+        surface_image: String::new(),
     };
 
     Scene {

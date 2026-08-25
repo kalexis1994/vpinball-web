@@ -8,6 +8,18 @@
 //! Port of `Light::RenderSetup` (`light.cpp:434-460`) for the shape and of
 //! `ClassicLightShader.hlsl:75-82` for the halo.
 //!
+//! # An insert is artwork, not a disc
+//!
+//! A classic light with an image (`IMG1`) is not a coloured halo: it is the
+//! insert's artwork, sampled at **table-space** UVs — the whole playfield maps
+//! to 0..1, `light.cpp:519-520` — lit through the material of whatever it lies
+//! on, and *then* the halo is folded into it with an overlay and a screen
+//! (`ClassicLightShader.hlsl:52-87`). Drawing such a light as a halo alone is
+//! the single most visible way a port of this renderer reads as wrong: every
+//! insert on every table becomes a flat coloured spot where the player expects
+//! to see the words on it light up. This module carries the image name, the
+//! mode and the UVs; the shader does the rest.
+//!
 //! # Almost all of them start out off
 //!
 //! The initial state comes from the file, and in a typical table nearly
@@ -28,7 +40,10 @@
 //! reads as fake.
 
 use crate::dragpoint;
+use crate::geometry::Bounds;
 use std::sync::OnceLock;
+use vpin::vpx::VPX;
+use vpin::vpx::gameitem::GameItemEnum;
 use vpw_math::{Vec2, Vec3};
 
 /// The `m_inPlayState` value that means "run the blink pattern"
@@ -77,6 +92,37 @@ pub struct Light {
     /// The outline, already triangulated, in world space.
     pub vertices: Vec<[f32; 3]>,
     pub indices: Vec<u32>,
+    /// One texture coordinate per vertex, in **table space**: the whole
+    /// playfield maps to 0..1 (`light.cpp:519-520`). Empty when there is
+    /// nothing to sample — a bulb, or a classic light with no image.
+    ///
+    /// Table space and not the outline's own: the insert's image is a picture
+    /// of the *whole playfield* with that insert lit, and the light's shape is
+    /// a window cut into it. Mapping the outline to 0..1 instead would stretch
+    /// the entire playfield into one insert.
+    pub uvs: Vec<[f32; 2]>,
+    /// `IMG1`: the insert's artwork, by image name, or empty. Only a classic
+    /// light carries one — the original throws a bulb's away before it looks
+    /// at it (`light.cpp:708`: `offTexel` is null for a bulb light). Whether
+    /// the name resolves to a picture is the renderer's question; a name that
+    /// does not is drawn as if there were none (`light.cpp:823`).
+    pub image: String,
+    /// `IMMO` ("passthrough"): the artwork is shown as it is, not lit through
+    /// the surface material (`ClassicLightShader.hlsl:60-61`, `lightingOff`).
+    /// Meaningless without [`image`](Light::image).
+    pub image_mode: bool,
+    /// The material of what the light lies on — the playfield's, or the wall's
+    /// top (`light.cpp:373`). The insert's artwork is lit *through it*
+    /// (`ClassicLightShader.hlsl:65-70`): the shader takes the texel as the
+    /// base colour and the surface's glossiness and clearcoat as its own.
+    pub surface_material: String,
+    /// The image of what the light lies on (`light.cpp:374`). It decides
+    /// whether an **unlit** insert is drawn at all: one whose artwork is the
+    /// surface's own picture adds nothing the playfield does not already show
+    /// and is skipped (`light.cpp:714`), one with a picture of its own is drawn
+    /// dark, artwork and all, because the playfield underneath does not have
+    /// it. See [`Light::drawn_when_off`].
+    pub surface_image: String,
     /// Center of the halo, in VPU. Its **z is the falloff's centre**, which is
     /// not where the outline sits: see [`build`].
     pub center: Vec3,
@@ -164,6 +210,68 @@ pub struct Light {
 /// factor and not the halo's.
 pub const INTENSITY_FACTOR: f32 = 0.02;
 
+/// What a light lies on, and the table it lies in.
+///
+/// `Light::RenderSetup` resolves the surface a light names (`SURF`) into a
+/// height, a material and an image (`light.cpp:371-374`); the height is what
+/// every part standing on something takes, and the other two belong to the
+/// classic light alone. The playfield's own when the name is empty, and a
+/// wall's top or a ramp's otherwise (`PinTable::GetSurfaceMaterial` and
+/// `GetSurfaceImage`, `pintable.cpp:5178-5207`); a name that matches nothing
+/// falls back to the playfield the way the original does, with a logged error
+/// and no other consequence.
+///
+/// The table's extent is here because the insert's texture coordinates are in
+/// **table space** (`light.cpp:499-500`), and a light cannot know that on its
+/// own.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Site {
+    /// The playfield's extent in VPU.
+    pub table: Bounds,
+    /// See [`Light::surface_material`].
+    pub material: String,
+    /// See [`Light::surface_image`].
+    pub image: String,
+}
+
+impl Site {
+    /// The playfield itself, with what the table says it is made of.
+    pub fn playfield(vpx: &VPX, table: Bounds) -> Self {
+        let g = &vpx.gamedata;
+        Site {
+            table,
+            material: g.playfield_material.clone(),
+            image: g.image.clone(),
+        }
+    }
+
+    /// The surface a light names, or the playfield when it names none or
+    /// names something that is not there (`pintable.cpp:5178-5207`).
+    pub fn resolve(vpx: &VPX, surface: &str, table: Bounds) -> Self {
+        if surface.is_empty() {
+            return Self::playfield(vpx, table);
+        }
+        vpx.gameitems
+            .iter()
+            .find_map(|item| match item {
+                // A wall's *top* material (`pintable.cpp:5187`): the light lies
+                // on top of it, and the side is what the ball hits.
+                GameItemEnum::Wall(w) if w.name.eq_ignore_ascii_case(surface) => Some(Site {
+                    table,
+                    material: w.top_material.clone(),
+                    image: w.image.clone(),
+                }),
+                GameItemEnum::Ramp(r) if r.name.eq_ignore_ascii_case(surface) => Some(Site {
+                    table,
+                    material: r.material.clone(),
+                    image: r.image.clone(),
+                }),
+                _ => None,
+            })
+            .unwrap_or_else(|| Self::playfield(vpx, table))
+    }
+}
+
 /// Converts a light from the file.
 ///
 /// **Including the ones that start out off.** A table's lamps are almost all
@@ -172,7 +280,7 @@ pub const INTENSITY_FACTOR: f32 = 0.02;
 /// that stays dark however well the rest works. What is dropped is a light with
 /// no intensity at all, which is a light that could never do anything, and a
 /// light the author hid.
-pub fn build(l: &vpin::vpx::gameitem::light::Light, surface_z: f32) -> Option<Light> {
+pub fn build(l: &vpin::vpx::gameitem::light::Light, surface_z: f32, site: &Site) -> Option<Light> {
     // `VSBL`. The original gates the whole lightmap on it (`light.cpp:700`) and
     // returns before drawing anything at all in the editor pass
     // (`light.cpp:562`), so a hidden light contributes nowhere. Tables use this
@@ -239,10 +347,41 @@ pub fn build(l: &vpin::vpx::gameitem::light::Light, surface_z: f32) -> Option<Li
     // tight spot instead of a wash.
     let center_z = surface_z + l.height.unwrap_or(0.0);
 
+    // The insert's picture. A bulb has none whatever the file says
+    // (`light.cpp:708`), and a classic light with no name has none either; the
+    // rest sample a picture of the whole playfield at the point's own place on
+    // it (`light.cpp:519-520`):
+    //
+    //     buf[t].tu = pv0->x * inv_tablewidth;
+    //     buf[t].tv = pv0->y * inv_tableheight;
+    //
+    // Divided by the extent and **not** offset by the table's origin — the
+    // original does not subtract `m_left`/`m_top`, and every table's artwork
+    // was authored against that mapping. A table whose origin is not zero is
+    // vanishingly rare, but were one to exist, "correcting" this would shift
+    // its inserts off their windows.
+    let image = if l.is_bulb_light {
+        String::new()
+    } else {
+        l.image.clone()
+    };
+    let uvs = if image.is_empty() {
+        Vec::new()
+    } else {
+        let inv_w = 1.0 / (site.table.max.x - site.table.min.x);
+        let inv_h = 1.0 / (site.table.max.y - site.table.min.y);
+        flat.iter().map(|p| [p.x * inv_w, p.y * inv_h]).collect()
+    };
+
     Some(Light {
         name: l.name.clone(),
         vertices: flat.iter().map(|p| [p.x, p.y, halo_z]).collect(),
         indices,
+        uvs,
+        image,
+        image_mode: l.is_image_mode,
+        surface_material: site.material.clone(),
+        surface_image: site.image.clone(),
         center: Vec3::new(l.center.x, l.center.y, center_z),
         falloff_radius: l.falloff_radius.max(1.0),
         falloff_power: l.falloff_power,
@@ -289,6 +428,28 @@ pub fn build(l: &vpin::vpx::gameitem::light::Light, surface_z: f32) -> Option<Li
             l.blink_interval as f32
         },
     })
+}
+
+impl Light {
+    /// Whether the light is drawn while it is off.
+    ///
+    /// The original leaves `Light::Render` at zero intensity only for a bulb
+    /// and for a classic light whose picture *is* its surface's picture and
+    /// which is not in image mode (`light.cpp:713-718`) — "assumes/requires
+    /// that the light in this kind of state is basically -exactly- the same as
+    /// the static/(un)lit playfield". Everything else is drawn dark: a classic
+    /// light with a picture of its own is drawn in that picture, lit by the
+    /// scene but not by itself, because the playfield underneath does not show
+    /// it and the table was authored counting on it being there.
+    ///
+    /// Skipping those the way the halo-only ones are skipped makes every such
+    /// insert *vanish* when the game turns it off, artwork included, instead
+    /// of going dark.
+    pub fn drawn_when_off(&self) -> bool {
+        !self.is_bulb
+            && !self.image.is_empty()
+            && (self.image_mode || !self.image.eq_ignore_ascii_case(&self.surface_image))
+    }
 }
 
 /// A lamp's colour, the way the original converts one: a divide by 255 and no
