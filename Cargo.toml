@@ -29,3 +29,9 @@ panic = "abort"
 opt-level = 3
 [profile.dev]
 opt-level = 1
+# `cargo test --workspace` builds this profile, and with full debug info plus
+# the incremental cache it comes to thirty gigabytes on this phone, rebuilt
+# every time it is cleared — which is what fills the disk. Line tables are
+# enough for a backtrace and nothing here is stepped through in a debugger.
+debug = "line-tables-only"
+incremental = false
