@@ -9,7 +9,9 @@ ported alongside.
 The goal is to run VPX tables in the browser with good performance on modest
 devices. The game only: no editor, no VR, no legacy backends.
 
-See [docs/porting-plan.md](docs/porting-plan.md) for the scope, the analysis of
+See [docs/state-of-the-port.md](docs/state-of-the-port.md) for where the port
+stands — what is emulated, how it was verified, and what is missing — and
+[docs/porting-plan.md](docs/porting-plan.md) for the scope, the analysis of
 the original code and the order of work.
 
 [vpx]: https://github.com/vpinball/vpinball
