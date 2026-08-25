@@ -31,6 +31,7 @@ struct LightData {
     // rgb = edge color, a = falloff exponent
     color2     : vec4<f32>,
     // x = how much the halo modulates rather than adds; see `fs_bulb`.
+    // y = transmission scale; see `fs_transmitted`.
     blend      : vec4<f32>,
 };
 
@@ -48,6 +49,19 @@ fn vs_main(@location(0) pos : vec3<f32>) -> VsOut {
     out.clip = frame.view_proj * vec4<f32>(pos, 1.0);
     out.world = pos;
     return out;
+}
+
+/// The halo at a point: its colour, and how much of it lands there.
+///
+/// `rgb` is the walk from the edge colour to the centre colour, `a` the
+/// attenuation times the lamp's intensity — the `atten*lightColor_intensity.w`
+/// that both of the original's light shaders build before they part ways over
+/// how to blend it.
+fn halo(world : vec3<f32>) -> vec4<f32> {
+    let len = length(light.center.xyz - world) * light.center.w;
+    let atten = pow(1.0 - saturate(len), light.color2.a);
+    let lcolor = mix(light.color2.rgb, light.color.rgb, sqrt(len));
+    return vec4<f32>(lcolor, atten * light.color.a);
 }
 
 /// The bulb halo, which meets what is under it in two ways at once.
@@ -83,12 +97,30 @@ fn fs_bulb(in : VsOut) -> @location(0) vec4<f32> {
     return vec4<f32>(lcolor * (-m * atten * light.color.a), 1.0 / m - 1.0);
 }
 
+/// The same halo, into the transmitted-light buffer.
+///
+/// That buffer answers one question — how much lamp light is arriving at this
+/// point of the playfield — and a lamp gets to answer it only as far as its own
+/// `TransmissionScale` says. The original multiplies the intensity by it for
+/// that pass and for no other (`light.cpp:801`); the pass itself refuses a lamp
+/// whose scale is zero outright (`light.cpp:600`), which is why the draw loop
+/// skips those rather than relying on a multiply by nothing.
+///
+/// Without the scale every insert on the table bleeds its full brightness onto
+/// the ball and through every translucent plastic above it, which is a table
+/// that glows from underneath everywhere at once.
+@fragment
+fn fs_transmitted(in : VsOut) -> @location(0) vec4<f32> {
+    let lit = halo(in.world);
+    let contribution = lit.a * light.blend.y;
+    return vec4<f32>(lit.rgb * contribution, saturate(contribution));
+}
+
 @fragment
 fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
-    let len = length(light.center.xyz - in.world) * light.center.w;
-    let atten = pow(1.0 - saturate(len), light.color2.a);
-    let lcolor = mix(light.color2.rgb, light.color.rgb, sqrt(len));
-    let contribution = atten * light.color.a;
+    let lit = halo(in.world);
+    let lcolor = lit.rgb;
+    let contribution = lit.a;
 
     // Linear and uncapped, like everything else the table pass writes. A halo
     // is the brightest thing on a playfield and the first to overshoot, which

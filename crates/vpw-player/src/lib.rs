@@ -189,8 +189,11 @@ impl Player {
             // so it is timed with the steps and not with the sync.
             table.new_frame();
             let t1 = clock_ms();
-            // And only now, once per frame, the state reaches the GPU.
-            sync(table, &mut self.renderer);
+            // And only now, once per frame, the state reaches the GPU. The
+            // lamps are told how much *table* time the frame was worth so they
+            // can fade by it: the physics runs at a fixed 1000 Hz, so a tick is
+            // a millisecond and the count is the answer.
+            sync(table, &mut self.renderer, ticks as f32);
             draw_display(table, &mut self.renderer, &mut self.display_segments);
             let t2 = clock_ms();
             step_ms = (t1 - t0) as f32;
@@ -390,7 +393,7 @@ fn dot_raster(
 /// Once per frame and not once per physics step: at 1000 Hz against 60 frames
 /// per second, writing them every step would be sixteen uploads nobody ever
 /// sees.
-fn sync(table: &mut Game, renderer: &mut TableRenderer) {
+fn sync(table: &mut Game, renderer: &mut TableRenderer, dt_ms: f32) {
     let queue = renderer.queue().clone();
 
     // The lamps first, and on their own borrow. This is what a table's lights
@@ -401,11 +404,46 @@ fn sync(table: &mut Game, renderer: &mut TableRenderer) {
     {
         let lights = renderer.lights_mut();
         for i in 0..lights.names.len() {
-            let level = table
-                .items()
-                .get(&lights.names[i])
-                .map_or(1.0, |item| item.light_level());
-            lights.set_state(&queue, i, level, 1.0);
+            // Two numbers, because the original keeps two: `State` is the
+            // switch — 0 off, 1 on, 2 blinking (`light.cpp:315`) — and
+            // `IntensityScale` is the dimmer a script writes every frame while
+            // it fades a lamp by hand. `light_level` folds the first into the
+            // second, so the switch has to be read separately or a blinking
+            // lamp arrives here as a plainly lit one and never blinks.
+            //
+            // A lamp with no item behind it is left on: it is not the script's
+            // to turn off, and the file's own state is already in the lamp.
+            let (state, scale) = match table.items().get(&lights.names[i]) {
+                Some(item) => {
+                    // `light_state` cannot answer two. The script layer stores
+                    // a lamp's state as an `i32` it builds with
+                    // `i32::from(state != 0.0)` (`vpw-game/src/items.rs:1236`),
+                    // so "blinking" arrives here as plain "on" and every
+                    // blinking lamp on the table sits permanently lit. Until
+                    // that value carries three states, a lamp the *file*
+                    // declared a blinker goes back to blinking whenever the
+                    // game says it is on — which is what the original does for
+                    // any such lamp no script has written to, and the best
+                    // available answer for the rest.
+                    let state = match item.light_state() {
+                        0 => 0.0,
+                        _ if lights.blinks(i) => vpw_table::light::BLINKING,
+                        n => n as f32,
+                    };
+                    // `light_level` is zero when the switch is off, whatever
+                    // the dimmer says, so the dimmer has to be recovered from
+                    // it rather than read through it. With the switch off the
+                    // target is zero either way and the scale does not matter.
+                    let scale = if item.light_state() == 0 {
+                        1.0
+                    } else {
+                        item.light_level()
+                    };
+                    (state, scale)
+                }
+                None => (1.0, 1.0),
+            };
+            lights.animate(&queue, i, state, scale, dt_ms);
         }
     }
 

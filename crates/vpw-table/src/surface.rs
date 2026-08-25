@@ -104,10 +104,18 @@ fn side(wall: &vpin::vpx::gameitem::wall::Wall, points: &[Point]) -> Mesh {
     }
 }
 
+/// One vertex of a wall's side.
+///
+/// The y of the normal is **negated**, which the original does on all four
+/// vertices of every side quad and does not explain (`surface.cpp:574`, and
+/// again at `:578`, `:582`, `:586`). Whatever the reason — the outline's
+/// winding, or the y axis running toward the player — leaving it out is not a
+/// silent difference: every wall on the table takes its specular highlight
+/// from the wrong side, so a light in front of a wall lights the back of it.
 fn vertex(p: Vec3, z: f32, n: Vec2, u: f32, v: f32) -> Vertex {
     Vertex {
         pos: [p.x, p.y, z],
-        normal: [n.x, n.y, 0.0],
+        normal: [n.x, -n.y, 0.0],
         uv: [u, v],
     }
 }

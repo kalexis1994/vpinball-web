@@ -22,6 +22,9 @@ pub struct Game {
     pub sound: Sound,
     /// What is on its auxiliary connector. See [`crate::board::Boards`].
     pub boards: crate::board::Boards,
+    /// Where in RAM this game keeps the flag that says the flippers are live.
+    /// See [`crate::board::Board::fast_flip_addr`].
+    pub fast_flips: Option<u16>,
 }
 
 /// The five images a Stern sound board is built from.
@@ -52,6 +55,11 @@ const GAMES: &[Game] = &[Game {
         aux_solenoids: true,
         leds: true,
     },
+    // `MACHINE_INIT(se3)` gives every one of this generation the same address
+    // — "It appears all systems of se3 generation are the same... :)"
+    // (`se.c:292`) — but it is still a per-game fact, found by hand, so it is
+    // listed per game here rather than assumed.
+    fast_flips: Some(0x0004),
 }];
 
 /// Looks a game up by set name, without regard to case.

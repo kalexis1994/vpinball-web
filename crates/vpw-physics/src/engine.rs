@@ -176,6 +176,13 @@ pub enum Event {
         /// compared against.
         speed: f32,
     },
+    /// A ball left a shape that reports comings and goings.
+    ///
+    /// Only the kicker produces this: `kicker.cpp:1189` is the one place in the
+    /// whole original where something that is not a trigger fires
+    /// `DISPID_HitEvents_Unhit`. A saucer is a switch, and a switch that closes
+    /// and never opens leaves a ROM firing its eject coil at an empty hole.
+    Unhit { shape: usize, ball: usize },
     /// A slingshot's solenoid fired.
     ///
     /// Separate from [`Event::Hit`] because the original makes it separate:
@@ -230,6 +237,10 @@ pub struct Engine {
     /// list of their own for the same reason the movers do: so a step does not
     /// have to walk a table's three thousand shapes to touch four.
     bumpers: Vec<usize>,
+    /// The kickers, for the same reason again: after every step each one has to
+    /// be asked whether the ball it was holding has finally left the hole, and
+    /// that question is not worth walking three thousand shapes for.
+    kickers: Vec<usize>,
     pub balls: Vec<Ball>,
     /// The zones that report. They do not collide with anything, so they do
     /// not go into the tree.
@@ -267,6 +278,7 @@ impl Engine {
         let mut unbounded = Vec::new();
         let mut movers = Vec::new();
         let mut bumpers = Vec::new();
+        let mut kickers = Vec::new();
         for (i, s) in shapes.iter().enumerate() {
             match s.bbox() {
                 Some(bbox) => entries.push(Entry { bbox, index: i }),
@@ -281,6 +293,9 @@ impl Engine {
             if matches!(s, Shape::Bumper(_)) {
                 bumpers.push(i);
             }
+            if matches!(s, Shape::Kicker(_)) {
+                kickers.push(i);
+            }
         }
 
         Self {
@@ -290,6 +305,7 @@ impl Engine {
             unbounded,
             movers,
             bumpers,
+            kickers,
             balls: Vec::new(),
             triggers: Vec::new(),
             events: Vec::new(),
@@ -343,7 +359,8 @@ impl Engine {
         match self.shapes.get_mut(index) {
             Some(Shape::Bumper(b)) => b.enabled = on,
             Some(Shape::Kicker(k)) => k.enabled = on,
-            Some(Shape::Gate(g)) => g.enabled = on,
+            // A gate has more to put back than a flag: see `Gate::set_collidable`.
+            Some(Shape::Gate(g)) => g.set_collidable(on),
             Some(Shape::Spinner(sp)) => sp.enabled = on,
             _ => {
                 if self.disabled.len() < self.shapes.len() {
@@ -379,22 +396,35 @@ impl Engine {
         if k.captured.is_some() {
             return;
         }
-        let (center, z_low) = (k.circle.center, k.circle.z_low);
-        k.captured = Some(ball);
-        if let Some(b) = self.balls.get_mut(ball) {
-            b.pos = Vec3::new(center.x, center.y, z_low + b.radius);
-            b.vel = Vec3::ZERO;
-            b.angular_momentum = Vec3::ZERO;
-            b.locked = true;
+        let (izq, der) = self.shapes.split_at_mut(shape);
+        let _ = izq;
+        if let Some(Shape::Kicker(k)) = der.first_mut()
+            && let Some(b) = self.balls.get_mut(ball)
+        {
+            k.hold(b, ball);
         }
     }
 
     /// Lets a kicker's ball go with the given velocity, as `Kick` does.
     pub fn release_from_kicker(&mut self, shape: usize, velocity: Vec3) {
+        self.kick_from(shape, velocity, Vec3::ZERO);
+    }
+
+    /// The same, nudging the ball by `offset` first.
+    ///
+    /// `KickXYZ` adds its three numbers to the ball's position before it lets
+    /// go (`kicker.cpp:748-750`, where the original credits "brian's
+    /// suggestion"). It is how a table gets a ball out of a saucer that is
+    /// buried under a ramp: kick it along the ramp's floor rather than into the
+    /// underside of it.
+    pub fn kick_from(&mut self, shape: usize, velocity: Vec3, offset: Vec3) {
         let Some(Shape::Kicker(k)) = self.shapes.get_mut(shape) else {
             return;
         };
         let Some(ball) = k.captured else { return };
+        if let Some(b) = self.balls.get_mut(ball) {
+            b.pos += offset;
+        }
         let (izq, der) = self.shapes.split_at_mut(shape);
         let _ = izq;
         if let Some(Shape::Kicker(k)) = der.first_mut()
@@ -432,6 +462,11 @@ impl Engine {
                     Some(c) if c > ball => Some(c - 1),
                     other => other,
                 };
+                // The ball it is waiting to see leave has to move with it, or
+                // the kicker would fire an `Unhit` for whichever ball inherits
+                // the index — most often the next one served into that very
+                // hole.
+                k.renumber_after_removing(ball);
             }
         }
         for t in &mut self.triggers {
@@ -572,6 +607,16 @@ impl Engine {
         }
     }
 
+    /// The same number, for a caller outside the engine.
+    ///
+    /// The original's `rand_mt_m11()`. A kicker's `Kick` uses it to scatter the
+    /// angle it fires at (`kicker.cpp:727`), and that lives in the game's item
+    /// layer rather than in here — but it has to draw from **this** generator
+    /// and not from the system's, for the reason below.
+    pub fn random_m11(&mut self) -> f32 {
+        self.next_random()
+    }
+
     /// A number in -1..1 for the scatter.
     ///
     /// It is a generator of our own and not the system's on purpose: the
@@ -642,6 +687,7 @@ impl Engine {
         }
 
         self.check_triggers();
+        self.check_kickers();
 
         // The bumper rings, after the cycle: if a bumper fired on this step,
         // the ring has to start dropping on this step.
@@ -680,6 +726,34 @@ impl Engine {
                         ball: b,
                         crossing,
                     });
+                }
+            }
+        }
+    }
+
+    /// Looks at which kicker has just let its ball go past the rim.
+    ///
+    /// After the cycle and for the same reason as [`Engine::check_triggers`]:
+    /// what matters is where the ball ended the step, not where it was halfway
+    /// through it. The original reaches the same place from the collision
+    /// instead — the second time a ball crosses the hole's circle it takes the
+    /// "exiting kickers volume" branch (`kicker.cpp:1187`) — but a kicker stops
+    /// answering hit tests while it holds a ball, so a port that waited for a
+    /// collision would never get one.
+    fn check_kickers(&mut self) {
+        for &s in &self.kickers {
+            if !self.reports_hits(s) {
+                continue;
+            }
+            let Some(Shape::Kicker(kicker)) = self.shapes.get_mut(s) else {
+                continue;
+            };
+            if kicker.captured.is_some() {
+                continue; // still holding it: it has not gone anywhere
+            }
+            for (b, ball) in self.balls.iter().enumerate() {
+                if kicker.check_exit(b, ball) {
+                    self.events.push(Event::Unhit { shape: s, ball: b });
                 }
             }
         }
@@ -856,8 +930,19 @@ impl Engine {
                 // itself below, and only when its solenoid fires. In the
                 // original its `Collide` replaces the plain segment's rather
                 // than adding to it, so it never reports a plain hit.
+                // A kicker is left out for the same reason: it reports its hit
+                // only when it actually takes the ball (`kicker.cpp:1157`, the
+                // `FireGroupEvent` inside the `hitEvent` branch). A ball that
+                // rolls over the lip of a hole it does not fall into has not
+                // hit anything a table wants to hear about, and announcing it
+                // would pulse a saucer's switch every time a ball crossed it.
                 let is_slingshot = matches!(self.shapes[s], Shape::Slingshot(_));
-                if !is_slingshot && self.reports_hits(s) && self.balls[i].fires_event() {
+                let is_kicker = matches!(self.shapes[s], Shape::Kicker(_));
+                if !is_slingshot
+                    && !is_kicker
+                    && self.reports_hits(s)
+                    && self.balls[i].fires_event()
+                {
                     let speed = -coll.hit_normal.dot(self.balls[i].vel);
                     self.events.push(Event::Hit {
                         shape: s,
@@ -870,6 +955,7 @@ impl Engine {
                 // The slingshot resolves its own hit: first it kicks and then
                 // it bounces.
                 let mut solenoid_fired = false;
+                let mut kicker_took_it = false;
                 match &mut self.shapes[s] {
                     Shape::Slingshot(sling) => {
                         solenoid_fired = sling.collide(&mut self.balls[i], &coll, scatter);
@@ -878,9 +964,12 @@ impl Engine {
                         bumper.collide(&mut self.balls[i], &coll, scatter);
                     }
                     Shape::Kicker(kicker) => {
-                        // A kicker first tries to capture; if the ball comes in
-                        // very high, it behaves like an ordinary edge.
-                        if !kicker.try_capture(&mut self.balls[i], i) {
+                        // A kicker first offers the ball to the hole; if it
+                        // comes in very high, the hole behaves like an ordinary
+                        // edge.
+                        let took = kicker.take_ball(&mut self.balls[i], i);
+                        kicker_took_it = took != crate::parts::KickerHit::Passed;
+                        if !kicker_took_it {
                             let material = kicker.circle.material;
                             let ball = &mut self.balls[i];
                             ball.collide_3d_wall(coll.hit_normal, &material, &coll, scatter);
@@ -921,6 +1010,22 @@ impl Engine {
                 // and asks the repeat filter last (`collideex.cpp:88`).
                 if solenoid_fired && self.reports_hits(s) && self.balls[i].fires_event() {
                     self.events.push(Event::Slingshot { shape: s, ball: i });
+                }
+                // The kicker's hit, which only exists when the hole took the
+                // ball. The repeat filter is skipped on purpose: the original
+                // does not run it either here — it calls `FireGroupEvent`
+                // directly rather than `FireHitEvent` (`kicker.cpp:1157`) — and
+                // it must not, because a ball that came to rest in a saucer has
+                // not moved a quarter of a unit since the last event and the
+                // filter would swallow the one report the table is waiting for.
+                if kicker_took_it && self.reports_hits(s) {
+                    self.events.push(Event::Hit {
+                        shape: s,
+                        ball: i,
+                        // A kicker has no threshold: the hole either takes the
+                        // ball or it does not.
+                        speed: f32::INFINITY,
+                    });
                 }
             }
 

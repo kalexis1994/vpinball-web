@@ -120,6 +120,7 @@ fn main() {
         println!("  emission        {:?}", scene.lighting.emission);
         println!("  exposure        {}", scene.lighting.exposure);
         println!("  bloom strength  {}", scene.lighting.bloom_strength);
+        println!("  physics         {:?}", scene.physics);
         println!("  env scale       {}", scene.lighting.env_scale);
         println!("  light range     {}", scene.lighting.range);
         println!("  global emission {}", vpx.gamedata.global_emission_scale);

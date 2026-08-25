@@ -20,7 +20,8 @@ struct GpuLight {
     color: [f32; 4],
     /// rgb = edge color, a = falloff exponent
     color2: [f32; 4],
-    /// x = how much the halo modulates rather than adds.
+    /// x = how much the halo modulates rather than adds, y = how much of it
+    /// reaches the transmitted-light buffer.
     blend: [f32; 4],
 }
 
@@ -34,18 +35,79 @@ pub struct Light {
     /// off many times a second and rebuilding its buffers for that would be
     /// absurd.
     uniform: wgpu::Buffer,
-    /// Full brightness, before the state scales it.
-    intensity: f32,
-    /// 0 off, 1 on. A lamp at zero is skipped rather than drawn black: a
-    /// table has hundreds and most of them are off most of the time.
-    state: f32,
+    /// Exactly what is in the uniform, so a change can be written without
+    /// rebuilding the parts that did not move.
+    data: GpuLight,
+    /// The two colours as the file gives them, before the incandescent fader
+    /// tints them by the filament's temperature. Kept because that tint is a
+    /// *ratio* applied to the originals every frame, and folding it into
+    /// `data` would compound it.
+    base_color: [f32; 3],
+    base_color2: [f32; 3],
+    /// The lamp itself: the level it is showing, where in the blink pattern it
+    /// is, how hot its filament is. See `vpw_table::light::Lamp`.
+    lamp: vpw_table::light::Lamp,
     /// Whether this one blends as a bulb rather than as a flat additive disc.
     bulb: bool,
+    /// `TRMS`. Zero keeps the lamp out of the transmitted-light pass entirely
+    /// (`light.cpp:600`).
+    transmission: f32,
+    /// Whether the **file** declared this one a blinker. See
+    /// [`Lights::blinks`].
+    blinking: bool,
+}
+
+/// Which of the three draws a call is making. They differ in the blend, in
+/// whether they test depth, and in which lights they take.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Which {
+    /// A flat additive disc, depth-tested: the classic insert.
+    Classic,
+    /// The modulating halo of a bulb light, depth-tested.
+    Bulb,
+    /// Into the transmitted-light buffer, no depth, bulbs only.
+    Transmitted,
+}
+
+impl Light {
+    /// Pushes whatever the lamp has just changed into the uniform.
+    ///
+    /// Two shapes of write, because the common one is tiny. A lamp that only
+    /// got brighter has moved one float, and a table has hundreds of lamps; a
+    /// lamp on the incandescent fader has also changed colour, since the tint
+    /// is a function of its filament's temperature (`light.cpp:723-735`), and
+    /// that is the two colours either side of the intensity — so the three
+    /// travel together.
+    fn write(&mut self, queue: &wgpu::Queue) {
+        let intensity = self.lamp.level();
+        let tint = self.lamp.tint();
+        self.data.color[3] = intensity;
+        if tint == [1.0; 3] {
+            queue.write_buffer(
+                &self.uniform,
+                std::mem::offset_of!(GpuLight, color) as u64 + 3 * 4,
+                bytemuck::bytes_of(&intensity),
+            );
+            return;
+        }
+        for (i, t) in tint.iter().enumerate() {
+            self.data.color[i] = self.base_color[i] * t;
+            self.data.color2[i] = self.base_color2[i] * t;
+        }
+        // `color` and `color2` are adjacent, so one write covers both.
+        let at = std::mem::offset_of!(GpuLight, color) as u64;
+        queue.write_buffer(
+            &self.uniform,
+            at,
+            bytemuck::cast_slice(&[self.data.color, self.data.color2]),
+        );
+    }
 }
 
 pub struct Lights {
     pub pipeline: wgpu::RenderPipeline,
-    /// The same, with no depth test, for the transmitted-light pass.
+    /// The same shape with no depth test and the transmission scale folded in,
+    /// for the transmitted-light pass.
     flat: wgpu::RenderPipeline,
     /// A bulb light's halo, which modulates as well as adds. See `fs_bulb`.
     bulb: wgpu::RenderPipeline,
@@ -97,7 +159,7 @@ impl Lights {
             }],
         })];
 
-        let make = |name: &str, depth: Option<wgpu::DepthStencilState>| {
+        let make = |name: &str, entry: &str, depth: Option<wgpu::DepthStencilState>| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(name),
                 layout: Some(&pipeline_layout),
@@ -109,7 +171,7 @@ impl Lights {
                 },
                 fragment: Some(wgpu::FragmentState {
                     module: &shader,
-                    entry_point: Some("fs_main"),
+                    entry_point: Some(entry),
                     targets: &[Some(wgpu::ColorTargetState {
                         format: color_format,
                         // Additive: the light **adds** to what is already there.
@@ -196,6 +258,7 @@ impl Lights {
 
         let pipeline = make(
             "vpw-lights",
+            "fs_main",
             Some(wgpu::DepthStencilState {
                 format: crate::pipeline::DEPTH_FORMAT,
                 depth_write_enabled: Some(false),
@@ -204,7 +267,7 @@ impl Lights {
                 bias: Default::default(),
             }),
         );
-        let flat = make("vpw-lights-flat", None);
+        let flat = make("vpw-lights-flat", "fs_transmitted", None);
 
         Self {
             pipeline,
@@ -222,6 +285,10 @@ impl Lights {
         self.lights = lights
             .iter()
             .map(|l| {
+                // The lamp starts where the file leaves it — lit if the file
+                // says lit — rather than at zero with a fade to climb out of.
+                let lamp = vpw_table::light::Lamp::new(l);
+                let tint = lamp.tint();
                 let data = GpuLight {
                     center: [
                         l.center.x,
@@ -229,12 +296,17 @@ impl Lights {
                         l.center.z,
                         1.0 / l.falloff_radius.max(1.0),
                     ],
-                    color: [l.color[0], l.color[1], l.color[2], l.intensity * l.state],
-                    blend: [l.modulate, 0.0, 0.0, 0.0],
+                    color: [
+                        l.color[0] * tint[0],
+                        l.color[1] * tint[1],
+                        l.color[2] * tint[2],
+                        lamp.level(),
+                    ],
+                    blend: [l.modulate, l.transmission_scale, 0.0, 0.0],
                     color2: [
-                        l.color2[0],
-                        l.color2[1],
-                        l.color2[2],
+                        l.color2[0] * tint[0],
+                        l.color2[1] * tint[1],
+                        l.color2[2] * tint[2],
                         l.falloff_power.max(0.1),
                     ],
                 };
@@ -264,38 +336,72 @@ impl Lights {
                         }],
                     }),
                     uniform,
-                    intensity: l.intensity,
-                    state: l.state,
-                    bulb: l.modulate > 0.0,
+                    data,
+                    base_color: l.color,
+                    base_color2: l.color2,
+                    lamp,
+                    bulb: l.is_bulb,
+                    transmission: l.transmission_scale,
+                    blinking: l.blinking,
                 }
             })
             .collect();
     }
 
-    /// Turns a lamp on, off, or part way.
+    /// Turns a lamp on, off, or part way, with no fade at all.
     ///
-    /// `scale` is the script's `IntensityScale`, which a table uses to dim a
-    /// lamp rather than switch it — fading one out over a few frames is how a
-    /// modern table makes a bulb look like a bulb instead of a switch.
+    /// `state` is the original's `m_inPlayState` — 0 off, 1 on,
+    /// `vpw_table::light::BLINKING` for the pattern, or any level in between
+    /// from a 10.8 table — and `scale` is the script's `IntensityScale`, which
+    /// a table uses to dim a lamp rather than switch it.
     ///
-    /// Writes nothing when the value has not changed, which is almost always:
-    /// a table has hundreds of lamps and a handful change on any given frame.
+    /// For a caller with no clock to offer. Everything drawing a table should
+    /// use [`Lights::animate`] instead: the fade is not decoration, it is what
+    /// separates a bulb from a switch.
     pub fn set_state(&mut self, queue: &wgpu::Queue, index: usize, state: f32, scale: f32) {
         let Some(light) = self.lights.get_mut(index) else {
             return;
         };
-        let wanted = (state * scale).clamp(0.0, 1.0);
-        if (wanted - light.state).abs() < 1e-4 {
-            return;
+        if light.lamp.snap(state, scale) {
+            light.write(queue);
         }
-        light.state = wanted;
-        // Only the fourth component of `color` carries the brightness, so that
-        // is the only part that has to travel.
-        queue.write_buffer(
-            &light.uniform,
-            std::mem::offset_of!(GpuLight, color) as u64 + 3 * 4,
-            bytemuck::bytes_of(&(light.intensity * wanted)),
-        );
+    }
+
+    /// One frame of a lamp's life: `Light::UpdateAnimation`, `light.cpp:299`.
+    ///
+    /// `dt_ms` is how much **table** time the frame was worth. The fade, the
+    /// blink pattern and the filament all run off it, so a fade that keeps
+    /// going while the physics is stopped would drift away from the game it
+    /// belongs to.
+    ///
+    /// Writes nothing when nothing moved, which is almost always: a table has
+    /// hundreds of lamps and a handful change on any given frame.
+    pub fn animate(
+        &mut self,
+        queue: &wgpu::Queue,
+        index: usize,
+        state: f32,
+        scale: f32,
+        dt_ms: f32,
+    ) {
+        let Some(light) = self.lights.get_mut(index) else {
+            return;
+        };
+        if light.lamp.update(state, scale, dt_ms) {
+            light.write(queue);
+        }
+    }
+
+    /// Whether the file declared lamp `index` a blinker.
+    ///
+    /// For a caller whose source of lamp states cannot say so itself. The
+    /// original keeps one number, `m_inPlayState`, and two is the value that
+    /// means "run the pattern" (`light.cpp:315`) — but a port whose script
+    /// layer stores the state as on-or-off has thrown that value away by the
+    /// time it gets here, and every blinking lamp on the table sits
+    /// permanently lit. This is what such a caller can fall back on.
+    pub fn blinks(&self, index: usize) -> bool {
+        self.lights.get(index).is_some_and(|l| l.blinking)
     }
 
     pub fn is_empty(&self) -> bool {
@@ -312,42 +418,46 @@ impl Lights {
     /// a classic one is added flat on top. The original switches the same two
     /// sets of render states for the same reason (`light.cpp:817` and `:827`).
     pub fn draw(&self, pass: &mut wgpu::RenderPass<'_>, frame: &wgpu::BindGroup) {
-        self.draw_with(pass, &self.pipeline, frame);
-        self.draw_with(pass, &self.bulb, frame);
+        self.draw_with(pass, &self.pipeline, Which::Classic, frame);
+        self.draw_with(pass, &self.bulb, Which::Bulb, frame);
     }
 
     /// The same, into a pass with no depth buffer.
     pub fn draw_flat(&self, pass: &mut wgpu::RenderPass<'_>, frame: &wgpu::BindGroup) {
-        self.draw_with(pass, &self.flat, frame);
+        self.draw_with(pass, &self.flat, Which::Transmitted, frame);
     }
 
     fn draw_with(
         &self,
         pass: &mut wgpu::RenderPass<'_>,
         pipeline: &wgpu::RenderPipeline,
+        which: Which,
         frame: &wgpu::BindGroup,
     ) {
         if self.lights.is_empty() {
             return;
         }
-        // Whether this run is drawing the bulbs or the classic ones. The flat
-        // pipeline, which the transmitted-light pass uses, draws everything:
-        // that buffer is a picture of where the lamp light is, and the original
-        // forces the additive blend there too (`light.cpp:830`).
-        let only = match () {
-            () if std::ptr::eq(pipeline, &self.bulb) => Some(true),
-            () if std::ptr::eq(pipeline, &self.pipeline) => Some(false),
-            () => None,
-        };
         pass.set_pipeline(pipeline);
         pass.set_bind_group(0, frame, &[]);
         for l in &self.lights {
-            if only.is_some_and(|bulb| l.bulb != bulb) {
+            let takes = match which {
+                Which::Classic => !l.bulb,
+                Which::Bulb => l.bulb,
+                // The transmitted-light buffer takes bulb lights and only bulb
+                // lights, and only those with something to transmit: the
+                // original leaves `Light::Render` before it draws anything at
+                // all otherwise (`light.cpp:600`). A classic insert is artwork
+                // lit from behind and it has no business shining *through* the
+                // plastics above it or onto the ball — put every light in here
+                // and the whole table glows from underneath.
+                Which::Transmitted => l.bulb && l.transmission > 0.0,
+            };
+            if !takes {
                 continue;
             }
             // A lamp that is off contributes nothing but still costs a draw
             // call, and a table has hundreds of them with a handful lit.
-            if l.state <= 0.0 {
+            if l.lamp.level() <= 0.0 {
                 continue;
             }
             pass.set_bind_group(1, &l.bind_group, &[]);

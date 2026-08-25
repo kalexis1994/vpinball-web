@@ -308,11 +308,33 @@ impl Game {
         let g = &vpx.gamedata;
         let collision = vpw_table::physics::build_with_owners(vpx);
 
+        // The table's own slope and its own gravity, not the maximum and a
+        // constant. See `vpw_table::geometry::TablePhysics`: a table gives a
+        // range of slopes and its difficulty picks a point in it
+        // (`player.cpp:498`), and the gravity in the file is already an
+        // acceleration — the 0.97 that used to be passed here is a *multiple*
+        // of Earth's, so passing it bare made every table 1.82 times too
+        // floaty.
+        let table = scene.physics;
+        // **The gravity is knowingly still wrong here, and this is why.**
+        //
+        // `table.gravity` is the right number and `DEFAULT_TABLE_GRAVITY` is
+        // not: the file stores an acceleration and that constant is a multiple
+        // of Earth's, so what this passes makes every table 1.82 times too
+        // floaty. Handing over the right one breaks saucers, and it breaks them
+        // for a reason worth keeping: when a kicker does *not* capture a ball,
+        // the original steers it along the bowl's own mesh
+        // (`DoChangeBallVelocity`, `kicker.cpp:1042`) and this engine bounces it
+        // off a flat circle instead. Weak gravity hid that — the ball was too
+        // slow to bounce out — and correct gravity makes a saucer spit the ball
+        // back. A table that plays floaty is worse than one whose saucers work,
+        // so the bevel is the thing to fix first and this line follows it.
+        let strength = DEFAULT_TABLE_GRAVITY;
         let mut engine = Engine::new(
             collision.shapes.clone(),
-            Engine::gravity_from_slope(g.angle_tilt_max, DEFAULT_TABLE_GRAVITY),
+            Engine::gravity_from_slope(table.slope_deg, strength),
         );
-        engine.slope_rad = g.angle_tilt_max.to_radians();
+        engine.slope_rad = table.slope_deg.to_radians();
         for trigger in vpw_table::physics::triggers(vpx) {
             engine.add_trigger(trigger);
         }
@@ -405,10 +427,19 @@ impl Game {
     fn arm_hit_reporting(&mut self) {
         let mut engine = self.engine.borrow_mut();
         for item in self.state.items.iter() {
-            let wanted = [HIT, UNHIT, SLINGSHOT, SPIN]
-                .iter()
-                .any(|e| self.script.has_proc(&format!("{}_{e}", item.name)));
-            if !wanted {
+            let has = |e: &str| self.script.has_proc(&format!("{}_{e}", item.name));
+            // Two conditions, not one, and the second is the file's. A part
+            // reports only if it is *marked* to (`m_fe = m_d.m_hitEvent`,
+            // `ramp.cpp:818`, `surface.cpp:380`); deciding from the script
+            // alone made every decorative post with a handler-shaped name into
+            // a live switch. Parts with no such flag — gate, spinner, kicker —
+            // answer `true` and are unaffected.
+            let reports_hits = item.has_hit_event() && [HIT, UNHIT, SPIN].iter().any(|e| has(e));
+            // A slingshot is the exception the original spells out: "slingshots
+            // always have hit events" (`surface.cpp:AddLine`), where `m_fe` is
+            // forced on for that one segment whatever the wall's own flag says.
+            let reports_slingshot = has(SLINGSHOT);
+            if !reports_hits && !reports_slingshot {
                 continue;
             }
             for &s in &item.shapes {
@@ -545,6 +576,10 @@ impl Game {
         }
 
         self.dispatch_events();
+        // The targets' slide, before the announcements: a target that reaches
+        // the bottom of its travel on this step leaves its `Dropped` in the
+        // queue and it goes out in the same step rather than the next.
+        self.animate_targets();
         self.announce_targets();
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -814,6 +849,16 @@ impl Game {
                     let Some(item) = self.state.items.by_shape(shape) else {
                         continue;
                     };
+                    // How hard it has to have been hit for the part to notice.
+                    // The original compares before it calls anything —
+                    // `dot <= -m_threshold` (`collide.cpp:172`), `dot >=
+                    // m_threshold` (`collideex.cpp:701`) — and without it the
+                    // lightest graze fires the hit sound, closes the switch and
+                    // scores. A ball rolling down a wall on its way to the
+                    // drain is a dozen of those.
+                    if speed < item.hit_threshold() {
+                        continue;
+                    }
                     let (name, kind) = (item.name.clone(), item.kind);
                     // A spinner reports as spinning; everything else is a plain
                     // hit. A slingshot has its own event and does not come
@@ -822,17 +867,29 @@ impl Game {
                         items::Kind::Spinner => SPIN,
                         _ => HIT,
                     };
-                    let _ = speed;
                     self.fire(&name, suffix, Some(ball));
-                    // A drop target goes down when it is hit on the face. The
-                    // shape that reports the hit is the one standing in front of
-                    // it — see `physics::hit_target` — so a ball brushing the
-                    // back or the side bounces off without knocking it over.
-                    if let Some(item) = self.state.items.get(&name)
-                        && item.knock_down()
-                    {
-                        self.fire(&name, DROPPED, Some(ball));
+                    // A drop target starts going down when it is hit on the
+                    // face. The shape that reports the hit is the one standing
+                    // in front of it — see `physics::hit_target` — so a ball
+                    // brushing the back or the side bounces off without
+                    // knocking it over. The `Dropped` event is **not** raised
+                    // here: it belongs to the moment the target reaches the
+                    // bottom of its travel, and comes out of the same
+                    // announcement queue a script-driven drop uses.
+                    if let Some(item) = self.state.items.get(&name) {
+                        item.knock_down();
                     }
+                }
+                Event::Unhit { shape, ball } => {
+                    // Only a kicker produces this. A saucer wired
+                    // `swNN_Hit` / `swNN_UnHit` is a switch, and a ROM that
+                    // never sees it open re-energises the eject coil at an
+                    // empty hole for the rest of the game.
+                    let Some(item) = self.state.items.by_shape(shape) else {
+                        continue;
+                    };
+                    let name = item.name.clone();
+                    self.fire(&name, UNHIT, Some(ball));
                 }
                 Event::Slingshot { shape, ball } => {
                     // Everything a slingshot does for the player hangs off this
@@ -852,11 +909,28 @@ impl Game {
         }
     }
 
-    /// Tells the script about any drop target the script itself moved.
+    /// Moves every drop target that is mid-slide.
     ///
-    /// Only targets moved by writing `IsDropped` come through here; one knocked
-    /// down by a ball announces itself where the hit is handled, with the ball
-    /// still to hand.
+    /// On the table's clock and not on the video frame, for the reason
+    /// [`Game::run_timers`] gives: a bank of targets has to take the same
+    /// tenth of a second to fall on a machine running at thirty frames per
+    /// second as on one running at a hundred and forty-four. Visual Pinball
+    /// itself gets this wrong — `UpdateAnimation` is handed the frame's
+    /// elapsed time — so its drop targets fall faster on a faster machine.
+    fn animate_targets(&self) {
+        for item in self.state.items.iter() {
+            item.animate_drop(STEP_MS as f32);
+        }
+    }
+
+    /// Tells the script about any drop target that has finished moving.
+    ///
+    /// Every one of them comes through here, whether a ball knocked it down or
+    /// a script wrote `IsDropped`: the original raises `Dropped` and `Raised`
+    /// from `UpdateAnimation` (`hittarget.cpp:615`, `:626`), when the slide
+    /// reaches its end, and by then the ball that started it is long gone. So
+    /// there is no `ActiveBall` bound for these, which is the original's
+    /// behaviour too.
     fn announce_targets(&self) {
         let names: Vec<(Rc<str>, bool)> = self
             .state

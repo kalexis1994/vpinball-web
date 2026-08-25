@@ -76,6 +76,26 @@ impl SoundBoard {
         }
     }
 
+    /// SSTO, the one line the sound board answers the CPU board on.
+    ///
+    /// Bit 1 of the status byte at `$3700`. It is P4 of the AT91's parallel
+    /// port — "P4 Connected to SST0 line -> bit 6 of U202" (`desound.c:817`),
+    /// which the CPU board's `dmdstatus_r` shifts into place (`se.c:753`).
+    pub fn sst0(&self) -> bool {
+        self.board.pio.data & 0x10 != 0
+    }
+
+    /// PLIN, the byte the sound board puts on the CPU board's `$3500`.
+    ///
+    /// Eight parallel port lines in two runs — P16 to P20 and P23 to P25 —
+    /// gathered into one byte (`arm_port_w`, `desound.c:838`). Named for a
+    /// plasma display the Whitestar design never got: "ironically not used for
+    /// Plasma info, but Sound Info" (`se.c:760`).
+    pub fn plin(&self) -> u8 {
+        let pins = self.board.pio.data;
+        (((pins & 0x001f_0000) >> 16) | ((pins & 0x0380_0000) >> 18)) as u8
+    }
+
     /// What the board has been up to: fast interrupts asked for, and the four
     /// read counters — command bytes, command words, sample bytes, sample words.
     pub fn diagnostics(&self) -> (u64, [u64; 4], u32, u32) {

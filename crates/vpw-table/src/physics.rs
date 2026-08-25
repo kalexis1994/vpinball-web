@@ -473,7 +473,17 @@ fn bumper(b: &vpin::vpx::gameitem::bumper::Bumper, vpx: &VPX, out: &mut Vec<Shap
         return;
     }
     let base_z = surface_height(&vpx.gameitems, &b.surface, b.center.x, b.center.y);
-    let m = find_material(vpx, "");
+    // `Bumper::PhysicSetup` (`bumper.cpp:204`) sets exactly one physical number
+    // on the circle it builds, `m_scatter = ANGTORAD(m_d.m_scatter)`, and leaves
+    // the rest at the collider's defaults. Reading the table's material for the
+    // other three is the port's own choice and is kept; dropping `BSCT` on the
+    // floor was not a choice — a bumper is where a table asks for the most
+    // scatter it asks for anywhere, because a ball that came off one along a
+    // repeatable line would make the same shot land the same way every time.
+    let m = PhysMaterial {
+        scatter: b.scatter.unwrap_or(0.0).to_radians(),
+        ..find_material(vpx, "")
+    };
 
     let circle = HitCircle {
         center: Vec2::new(b.center.x, b.center.y),
@@ -483,6 +493,11 @@ fn bumper(b: &vpin::vpx::gameitem::bumper::Bumper, vpx: &VPX, out: &mut Vec<Shap
         material: m,
     };
     let mut bumper = Bumper::new(circle, b.force, b.threshold);
+    // The bumper's own `HAHE`. It decides whether the coil fires at all, not
+    // only whether the script hears about it — see `Bumper::hit_event`. The
+    // editor's default is on, which is also what a file too old to carry the
+    // tag was saved with (`Settings_properties.inl:917`).
+    bumper.hit_event = b.hit_event.unwrap_or(true);
     // How far the ring drops on a hit: whatever the table declares plus half
     // the bumper's height. The speed comes in units per millisecond.
     bumper.ring_speed = b.ring_speed;
@@ -531,11 +546,9 @@ fn kicker(k: &vpin::vpx::gameitem::kicker::Kicker, vpx: &VPX, out: &mut Vec<Shap
         z_high: base_z + height,
         material: find_material(vpx, &k.material),
     };
-    out.push(Shape::Kicker(Kicker::new(
-        circle,
-        k.hit_accuracy,
-        k.legacy_mode,
-    )));
+    out.push(Shape::Kicker(
+        Kicker::new(circle, k.hit_accuracy, k.legacy_mode).with_fall_through(k.fall_through),
+    ));
 }
 
 /// A gate (`Gate::PhysicSetup`, `gate.cpp:291`).
@@ -551,9 +564,15 @@ fn kicker(k: &vpin::vpx::gameitem::kicker::Kicker, vpx: &VPX, out: &mut Vec<Shap
 /// The gate's angles come in **radians** in the `.vpx` (the spinner's come in
 /// degrees; it is an asymmetry of the format, not an oversight).
 fn gate(g: &vpin::vpx::gameitem::gate::Gate, vpx: &VPX, out: &mut Vec<Shape>) {
-    if !g.is_collidable {
-        return;
-    }
+    // A gate that is not collidable still **exists**, and building nothing for
+    // it was wrong twice over. `Gate::PhysicSetup` (`gate.cpp:322-333`) always
+    // creates the leaf and, on a one-way gate, the blocking segment beside it;
+    // the flag only ends up on the leaf, as `m_phitgate->m_enabled =
+    // m_d.m_collidable`. A script that later writes `Collidable = True` — or
+    // `Open = False`, which restores the leaf to that same value — has
+    // something to switch back on. Skipping the build left it with nothing, and
+    // left the drawing code, which pairs meshes with shapes by order, one short
+    // for every gate after it.
     let base_z = surface_height(&vpx.gameitems, &g.surface, g.center.x, g.center.y);
     let (sn, cs) = g.rotation.to_radians().sin_cos();
     let half = g.length * 0.5;
@@ -575,7 +594,7 @@ fn gate(g: &vpin::vpx::gameitem::gate::Gate, vpx: &VPX, out: &mut Vec<Shape>) {
         )));
     }
 
-    out.push(Shape::Gate(Gate::new(
+    let mut leaf = Gate::new(
         PivotAxis {
             center,
             length: g.length,
@@ -588,7 +607,18 @@ fn gate(g: &vpin::vpx::gameitem::gate::Gate, vpx: &VPX, out: &mut Vec<Shape>) {
         },
         g.gravity_factor.unwrap_or(0.25),
         g.two_way,
-    )));
+    );
+    // The file's `GCOL`. It is kept beside `enabled` rather than folded into it
+    // because `Open = False` puts the leaf back to *this* and not to whatever a
+    // script last wrote (`gate.cpp:753`). Note that the blocking segment above
+    // is left switched on either way: the original never gives it the flag at
+    // build time, only `put_Collidable` and `put_Open` ever touch it. It is a
+    // strange asymmetry to copy, and copying it is the point — a table that
+    // ships a non-collidable one-way gate is relying on the ball still not
+    // getting back through it.
+    leaf.collidable = g.is_collidable;
+    leaf.enabled = g.is_collidable;
+    out.push(Shape::Gate(leaf));
 
     if g.show_bracket {
         for side in [1.0, -1.0] {
@@ -950,7 +980,27 @@ fn ramp(r: &vpin::vpx::gameitem::ramp::Ramp, vpx: &VPX, out: &mut Vec<Shape>) {
     if n < 2 {
         return;
     }
-    let material = find_material(vpx, &r.material);
+    // The **physics** material, not the visual one (`Ramp::SetupHitObject`,
+    // `ramp.cpp:799-810`). `r.material` is what the ramp is painted with, and a
+    // table sets it for how the wood looks; how the ball behaves on it comes
+    // either from `m_szPhysicsMaterial` or from the ramp's own four numbers,
+    // exactly as it does for a wall. Passing the visual one meant a ramp took
+    // the elasticity of whatever chrome or plastic it was skinned in, which is
+    // most visible on a habitrail: the ball rattles down it instead of running.
+    //
+    // A deliberate departure in one detail: the original never touches
+    // elasticity falloff for a ramp — the surface's version of this function
+    // sets it and the ramp's does not — so the collider keeps its default of
+    // zero even when a physics material declares one. Passing zero for the
+    // override branch matches that; the named-material branch takes the
+    // material's, which is the shared helper's behaviour and closer to what the
+    // table's author asked for than dropping the number would be.
+    let material = material(
+        vpx,
+        r.physics_material.as_deref(),
+        r.overwrite_physics.unwrap_or(false),
+        (r.elasticity, 0.0, r.friction, r.scatter),
+    );
 
     // How tall the side walls are. A flat ramp says so itself; the wire kinds
     // carry the numbers the original hard-codes for them, which are there so
@@ -1503,5 +1553,111 @@ mod target_tests {
 
     fn blank_table() -> VPX {
         VPX::default()
+    }
+}
+
+#[cfg(test)]
+mod part_tests {
+    use super::*;
+    use vpin::vpx::gameitem::vertex2d::Vertex2D;
+
+    fn blank_table() -> VPX {
+        VPX::default()
+    }
+
+    /// A gate at the origin, one-way and with a bracket, so it makes one of
+    /// each shape the builder can make.
+    fn a_gate() -> vpin::vpx::gameitem::gate::Gate {
+        vpin::vpx::gameitem::gate::Gate {
+            name: "g".into(),
+            center: Vertex2D { x: 0.0, y: 0.0 },
+            length: 60.0,
+            height: 40.0,
+            rotation: 0.0,
+            two_way: false,
+            show_bracket: true,
+            is_collidable: true,
+            angle_min: 0.0,
+            angle_max: std::f32::consts::FRAC_PI_2,
+            ..vpin::vpx::gameitem::gate::Gate::default()
+        }
+    }
+
+    fn built(g: &vpin::vpx::gameitem::gate::Gate) -> Vec<Shape> {
+        let mut out = Vec::new();
+        gate(g, &blank_table(), &mut out);
+        out
+    }
+
+    /// A gate the file says is not collidable is still built.
+    ///
+    /// `Gate::PhysicSetup` (`gate.cpp:322-333`) creates the leaf and the
+    /// blocking segment whatever the flag says and only puts the flag on the
+    /// leaf. Building nothing leaves a script that later writes
+    /// `Collidable = True` with nothing to switch on — and, because the drawing
+    /// side pairs meshes with shapes by order, leaves every gate after it in
+    /// the file borrowing the wrong one's angle.
+    #[test]
+    fn a_gate_that_does_not_collide_is_still_built() {
+        let mut g = a_gate();
+        g.is_collidable = false;
+        let shapes = built(&g);
+
+        let leaf = shapes.iter().find_map(|s| match s {
+            Shape::Gate(g) => Some(g),
+            _ => None,
+        });
+        let leaf = leaf.expect("the leaf is built either way");
+        assert!(!leaf.enabled, "but it is switched off");
+        assert!(!leaf.collidable, "and it remembers that the file said so");
+
+        // The blocking segment is still there **and still on**, which is the
+        // original's own asymmetry: nothing gives it the flag at build time.
+        let blocking = shapes
+            .iter()
+            .filter(|s| matches!(s, Shape::Line(_)))
+            .count();
+        assert_eq!(blocking, 1, "a one-way gate keeps its blocking segment");
+    }
+
+    /// A two-way gate has no blocking segment at all: it lets the ball through
+    /// from both sides, which is the whole difference between the two kinds.
+    #[test]
+    fn a_two_way_gate_has_no_blocking_segment() {
+        let mut g = a_gate();
+        g.two_way = true;
+        let shapes = built(&g);
+        assert!(!shapes.iter().any(|s| matches!(s, Shape::Line(_))));
+        assert!(shapes.iter().any(|s| matches!(s, Shape::Gate(_))));
+    }
+
+    /// A bumper's scatter comes from the file, not from the table's default.
+    ///
+    /// `bumper.cpp:204` sets exactly one physical number on the circle it
+    /// builds, and this is it. A bumper is where a table asks for the most
+    /// scatter it asks for anywhere: without it the same shot off the same
+    /// bumper lands in the same place every time.
+    #[test]
+    fn a_bumpers_scatter_comes_from_the_file() {
+        let b = vpin::vpx::gameitem::bumper::Bumper {
+            name: "b".into(),
+            center: Vertex2D { x: 0.0, y: 0.0 },
+            radius: 45.0,
+            scatter: Some(9.0),
+            hit_event: Some(false),
+            ..vpin::vpx::gameitem::bumper::Bumper::default()
+        };
+        let mut out = Vec::new();
+        bumper(&b, &blank_table(), &mut out);
+
+        let Some(Shape::Bumper(built)) = out.first() else {
+            panic!("a bumper should build a bumper");
+        };
+        assert!(
+            (built.circle.material.scatter - 9.0f32.to_radians()).abs() < 1e-6,
+            "the scatter should be the file's nine degrees in radians, it is {}",
+            built.circle.material.scatter
+        );
+        assert!(!built.hit_event, "and `HAHE` reaches the coil");
     }
 }

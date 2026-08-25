@@ -231,17 +231,42 @@ impl Hardware {
         }
     }
 
-    fn switch_closed(&self, number: u8) -> bool {
+    /// Whether a switch is closed, by the number the script uses.
+    ///
+    /// The number is signed because the two families disagree about what a
+    /// negative one means, and each answers for itself. See [`Hardware::door`].
+    fn switch_closed(&self, number: i32) -> bool {
         match self {
-            Self::S11(b) => b.switch_closed(number),
+            Self::S11(b) => u8::try_from(number).is_ok_and(|n| b.switch_closed(n)),
             Self::Whitestar(b) => b.board.switches.is_closed(number),
         }
     }
 
-    fn set_switch(&mut self, number: u8, closed: bool) -> bool {
+    fn set_switch(&mut self, number: i32, closed: bool) -> bool {
         match self {
-            Self::S11(b) => b.set_switch(number, closed),
+            Self::S11(b) => u8::try_from(number).is_ok_and(|n| b.set_switch(n, closed)),
             Self::Whitestar(b) => b.board.switches.set(number, closed),
+        }
+    }
+
+    /// Whether this family reads a negative switch number as a coin-door
+    /// button of its own rather than as part of its matrix.
+    ///
+    /// A System 11 does: VPinMAME gives its four door buttons the numbers -7
+    /// to -4 because they are wired straight to the CPU board and have no
+    /// place in the matrix at all. See [`Door`].
+    ///
+    /// A Whitestar does **not**, and treating it as if it did is how its coin
+    /// door came to do nothing. Its numbering is `core_swSeq2m(n) = n + 7`
+    /// (`core.c:2108`), which is a plain offset: switches 0, -1, -2 and -3 are
+    /// the black, green and red buttons and the memory protect switch
+    /// (`se.h:70`), and they land in matrix column 0 like any other switch.
+    /// There is nothing special to route them to, and -7 to -4 are not buttons
+    /// on this board.
+    fn door(&self, number: i32) -> Option<Door> {
+        match self {
+            Self::S11(_) => Door::of(number),
+            Self::Whitestar(_) => None,
         }
     }
 
@@ -264,25 +289,25 @@ impl Hardware {
     fn diagnostic_up(&self) -> bool {
         match self {
             Self::S11(b) => b.board.diagnostic_up,
-            // Whitestar reads them as two of the dedicated switches rather than
-            // through a PIA. Bits 5 and 6 of `$3000`, active low.
-            Self::Whitestar(b) => b.board.switches.dedicated() & (1 << 6) == 0,
+            // A Whitestar's are switches with numbers, not board inputs of
+            // their own. See [`Hardware::set_diagnostic_up`].
+            Self::Whitestar(b) => b.board.switches.is_closed(vpw_ws::io::SW_RED),
         }
     }
 
     fn diagnostic_advance(&self) -> bool {
         match self {
             Self::S11(b) => b.board.diagnostic_advance,
-            Self::Whitestar(b) => b.board.switches.dedicated() & (1 << 5) == 0,
+            Self::Whitestar(b) => b.board.switches.is_closed(vpw_ws::io::SW_BLACK),
         }
     }
 
     /// The button a player uses to change a setting, which on each family is
     /// the one next to the display.
     ///
-    /// On a Whitestar that is the **red Volume button**, dedicated switch six,
-    /// which is bit five of the byte at `$3000` — the numbers are one apart and
-    /// the layout is worth quoting rather than counting (`se.c:639`):
+    /// On a Whitestar that is the **red Volume button**, which its scripts call
+    /// switch -2 (`sega.vbs:27`) and which lands in matrix column 0 at bit 5,
+    /// where `dedswitch_r` reads it (`se.c:639`):
     ///
     /// ```text
     /// D0 left flipper   D1 left EOS    D2 right flipper  D3 right EOS
@@ -291,17 +316,21 @@ impl Hardware {
     fn set_diagnostic_up(&mut self, closed: bool) {
         match self {
             Self::S11(b) => b.set_diagnostic_up(closed),
-            Self::Whitestar(b) => b.board.switches.set_dedicated(5, closed),
+            Self::Whitestar(b) => {
+                b.board.switches.set(vpw_ws::io::SW_RED, closed);
+            }
         }
     }
 
     /// The button that walks a service menu on. On a Whitestar that is the
-    /// **black Begin Test button**, dedicated switch eight. See
+    /// **black Begin Test button**, switch 0. See
     /// [`Hardware::set_diagnostic_up`] for the layout.
     fn set_diagnostic_advance(&mut self, closed: bool) {
         match self {
             Self::S11(b) => b.set_diagnostic_advance(closed),
-            Self::Whitestar(b) => b.board.switches.set_dedicated(7, closed),
+            Self::Whitestar(b) => {
+                b.board.switches.set(vpw_ws::io::SW_BLACK, closed);
+            }
         }
     }
 
@@ -437,6 +466,12 @@ impl Machine {
 
         let mut machine = vpw_ws::Whitestar::new();
         machine.board.boards = game.boards;
+        // Where this game keeps its "the flippers are live" flag. Without it
+        // solenoid 15 never comes on, and `vpmFlips` reads solenoid 15 —
+        // `GameOnSolenoid` (`sega.vbs:23`) — to decide whether a flipper key
+        // does anything at all. A table with this missing looks completely
+        // healthy and cannot be played.
+        machine.board.fast_flip_addr = game.fast_flips;
         machine.load_rom(cpu)?;
         // The display is a board of its own with its own processor and its own
         // half-megabyte ROM. A set without it still plays; it just has nothing
@@ -649,11 +684,13 @@ impl Machine {
     /// machine with nothing on it yet, which still has to be told there are
     /// balls in the trough or it will spend its life searching for them.
     pub fn set_switch(&self, number: u8, closed: bool) {
-        self.board.borrow_mut().set_switch(number, closed);
+        self.board
+            .borrow_mut()
+            .set_switch(i32::from(number), closed);
     }
 
     pub fn switch_closed(&self, number: u8) -> bool {
-        self.board.borrow().switch_closed(number)
+        self.board.borrow().switch_closed(i32::from(number))
     }
 
     /// The whole switch matrix at once, switch *n* in bit *n-1*.
@@ -664,7 +701,7 @@ impl Machine {
     pub fn switch_matrix(&self) -> u64 {
         let board = self.board.borrow();
         let mut bits = 0u64;
-        for number in 1..=64u8 {
+        for number in 1..=64i32 {
             if board.switch_closed(number) {
                 bits |= 1 << (number - 1);
             }
@@ -939,14 +976,15 @@ impl Controller {
 
     /// Reads a switch by the number a script uses.
     ///
-    /// Negative numbers are the coin door — see [`Door`].
+    /// On the families that have them, negative numbers are the coin door —
+    /// see [`Door`] and [`Hardware::door`].
     fn switch(&self, number: i32) -> bool {
         let board = self.machine.board.borrow();
-        match Door::of(number) {
+        match board.door(number) {
             Some(Door::Up) => board.diagnostic_up(),
             Some(Door::Advance) => board.diagnostic_advance(),
             Some(_) => false,
-            None => u8::try_from(number).is_ok_and(|n| board.switch_closed(n)),
+            None => board.switch_closed(number),
         }
     }
 }
@@ -1032,9 +1070,11 @@ impl Object for Controller {
                 let n = Self::number(args)?;
                 let closed = value.to_bool()?;
                 let mut board = self.machine.board.borrow_mut();
-                match Door::of(n) {
-                    // The coin door's buttons are not in the matrix; they hang
-                    // off the CPU board's own inputs.
+                match board.door(n) {
+                    // On a System 11 the coin door's buttons are not in the
+                    // matrix; they hang off the CPU board's own inputs. On a
+                    // Whitestar they are switches like any other and this arm
+                    // is never taken — see [`Hardware::door`].
                     Some(Door::Up) => board.set_diagnostic_up(closed),
                     Some(Door::Advance) => board.set_diagnostic_advance(closed),
                     // The two diagnostic buttons on the sound and CPU boards
@@ -1043,9 +1083,7 @@ impl Object for Controller {
                     // a player pressing one should not stop the table.
                     Some(_) => {}
                     None => {
-                        if let Ok(n) = u8::try_from(n) {
-                            board.set_switch(n, closed);
-                        }
+                        board.set_switch(n, closed);
                     }
                 }
                 Ok(())
@@ -1057,13 +1095,16 @@ impl Object for Controller {
     }
 }
 
-/// The coin door's buttons, which a script addresses with negative numbers.
+/// The coin door's buttons on the families that give them numbers of their own.
 ///
-/// They are not switches in the playfield matrix — they are wired straight to
-/// the CPU board, inside the coin door, where an operator can reach them and a
-/// player cannot. VPinMAME gives them negative numbers to keep them out of the
-/// matrix's numbering, and every machine library uses the same four
-/// (`s11.vbs:24`).
+/// On a System 11 they are not switches in the playfield matrix — they are
+/// wired straight to the CPU board, inside the coin door, where an operator can
+/// reach them and a player cannot. VPinMAME gives them negative numbers to keep
+/// them out of the matrix's numbering (`s11.vbs:24`).
+///
+/// Not every family works that way, so which numbers are doors is asked of the
+/// board and not of this enum — see [`Hardware::door`]. A Whitestar's coin door
+/// is part of its matrix and none of these apply to it.
 ///
 /// Without them a table's script raises on `Controller.Switch(swAdvance) = True`
 /// and takes its whole key handler with it — which is how the diagnostic keys

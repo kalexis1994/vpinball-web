@@ -96,6 +96,12 @@ fn floor_scene() -> Scene {
             reflection_strength: 0.0,
         },
         lights: Vec::new(),
+        physics: vpw_table::geometry::TablePhysics {
+            slope_deg: 6.0,
+            gravity: 1.76,
+            default_scatter_deg: 0.0,
+            difficulty: 0.0,
+        },
     }
 }
 

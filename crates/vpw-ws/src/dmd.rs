@@ -52,6 +52,10 @@ pub struct Dmd {
     /// How many frames have been produced. A host that wants to know whether
     /// the picture is moving can watch this instead of comparing pixels.
     pub frames: u64,
+    /// How many times the CPU board has pulsed this one's reset line. A
+    /// display that never resets and a display that resets constantly look the
+    /// same from outside — blank — and this is what tells them apart.
+    pub resets: u64,
 }
 
 struct Board {
@@ -173,6 +177,7 @@ impl Dmd {
             next_frame: FRAME_CYCLES,
             frame: Box::new([0; WIDTH * HEIGHT]),
             frames: 0,
+            resets: 0,
         }
     }
 
@@ -201,6 +206,24 @@ impl Dmd {
         self.cpu.reset(&mut self.board);
     }
 
+    /// The CPU board writing the command latch at `$3600`.
+    ///
+    /// `dmdlatch_w` (`se.c:725`) is three lines: the data, then `ctrl = 0`,
+    /// then `ctrl = 1`. Those are **literal** zeroes and ones, not the reset
+    /// bit preserved and the command bit toggled, and the difference is this
+    /// board's whole boot sequence. `dmdreset_w` leaves bit 1 set
+    /// (`se.c:729`); this board resets on bit 1 going *down*
+    /// (`dmd32_ctrl_w`, `dedmd.c:129`); and this is the only place it ever
+    /// does. Preserve bit 1 here and the display processor never gets its
+    /// reset pulse — it comes up on whatever banks it happened to have and
+    /// draws nothing, with no way to tell that from a board that is simply
+    /// idle.
+    pub fn latch(&mut self, data: u8) {
+        self.set_data(data);
+        self.set_ctrl(0);
+        self.set_ctrl(1);
+    }
+
     /// The command byte the CPU board is putting on the bus. `$3600`.
     pub fn set_data(&mut self, data: u8) {
         self.board.next_cmd = data;
@@ -219,6 +242,7 @@ impl Dmd {
             self.board.irq = true;
         }
         if was & 2 != 0 && data & 2 == 0 {
+            self.resets += 1;
             self.reset();
         }
         self.board.ctrl = data;

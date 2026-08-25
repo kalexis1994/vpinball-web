@@ -14,7 +14,7 @@ use vpw_physics::ball::Ball;
 use vpw_physics::constants::{DEFAULT_BALL_SIZE, DEFAULT_TABLE_GRAVITY};
 use vpw_physics::engine::{Engine, Shape};
 use vpw_physics::flipper::{Flipper, FlipperParams};
-use vpw_physics::parts::{Bumper, PivotAxis, Spinner};
+use vpw_physics::parts::{Bumper, Gate, PivotAxis, Spinner};
 use vpw_physics::plunger::{Plunger, PlungerParams};
 use vpw_physics::shapes::HitCircle;
 use vpw_physics::trigger::{Trigger, Zone};
@@ -413,6 +413,12 @@ fn the_moving_pieces_leave_the_baked_scene() {
             reflection_strength: 0.0,
         },
         lights: Vec::new(),
+        physics: vpw_table::geometry::TablePhysics {
+            slope_deg: 6.0,
+            gravity: DEFAULT_TABLE_GRAVITY,
+            default_scatter_deg: 0.0,
+            difficulty: 0.0,
+        },
     };
 
     scene.remove(&["LeftFlipper".to_string(), "Plunger (shaft)".to_string()]);
@@ -425,4 +431,68 @@ fn named_mesh(name: &str) -> vpw_table::geometry::Mesh {
     let mut m = vpw_table::ball::mesh();
     m.name = name.into();
     m
+}
+
+// ------------------------------------------------------------------ gate ---
+
+fn gate_part(two_way: bool) -> (Engine, AnimatedPart) {
+    let engine = engine_with(vec![Shape::Gate(Gate::new(
+        PivotAxis {
+            center: Vec2::new(500.0, 1000.0),
+            length: 60.0,
+            rotation_deg: 0.0,
+            height: 40.0,
+            z_low: 0.0,
+            angle_min: 0.0,
+            angle_max: std::f32::consts::FRAC_PI_2,
+            damping: 0.985,
+        },
+        0.25,
+        two_way,
+    ))]);
+    // The decomposition `animation::gates` builds: the placement in `base`, the
+    // length scale in `local`, and the leaf's angle in between.
+    let part = AnimatedPart {
+        mesh: vpw_table::ball::mesh(),
+        base: Mat4::from_translation(Vec3::new(500.0, 1040.0, 0.0)),
+        local: Mat4::from_scale(Vec3::splat(60.0)),
+        anim: Animation::Gate { shape: 0 },
+    };
+    (engine, part)
+}
+
+/// The two kinds of gate turn opposite ways for the same angle.
+///
+/// `gate.cpp:429` builds the matrix as `MatrixRotateX(twoWay ? angle : -angle)`
+/// — a sign nobody would guess from the physics, where both kinds carry the
+/// same angle in the same field. Negating both, which is what this did, sends a
+/// two-way wire through the playfield on every hit from the side the file calls
+/// positive, while the one-way one beside it swings up correctly.
+#[test]
+fn a_two_way_gate_swings_the_opposite_way_from_a_one_way_one() {
+    // A point out along the leaf, so the turn shows as a change in height.
+    let leaf = Vec3::new(0.0, 1.0, 0.0);
+    let angle = 0.6;
+
+    let (mut one_way, one_way_part) = gate_part(false);
+    let (mut two_way, two_way_part) = gate_part(true);
+    for engine in [&mut one_way, &mut two_way] {
+        let Some(Shape::Gate(g)) = engine.shape_mut(0) else {
+            panic!("the gate is shape zero");
+        };
+        g.angle = angle;
+    }
+
+    let one = place(&one_way_part, &one_way, leaf).z;
+    let two = place(&two_way_part, &two_way, leaf).z;
+
+    assert!(
+        one.abs() > 1.0,
+        "the leaf should have moved at all: {one:.3}"
+    );
+    assert!(
+        (one + two).abs() < 1e-3,
+        "the same angle should be the same turn with opposite signs, \
+         and it gives {one:.3} and {two:.3}"
+    );
 }

@@ -65,9 +65,12 @@ fn main() {
     println!("reset vector -> pc {:04x}", machine.cpu.pc);
     println!();
 
-    // The dedicated switches are the flippers and the three coin-door buttons,
-    // not a door interlock — bit 0 is the left flipper (`se.c:639`), and this
-    // line used to open it under a comment claiming otherwise.
+    // The dedicated byte at `$3000` is the three coin-door buttons and the
+    // flippers, and there is no door interlock in it at all. The flippers come
+    // from the switch matrix's column eleven rather than from this byte
+    // (`se.c:648`), so there is nothing to open here — the line is left as a
+    // marker of where a probe would press a button, not as a thing that does
+    // anything.
     machine.board.switches.set_dedicated(0, false);
     // Balls in the trough, given as switch numbers. A machine that cannot see
     // any spends its life searching for them and lights nothing.

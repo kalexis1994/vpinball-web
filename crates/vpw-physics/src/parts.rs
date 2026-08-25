@@ -22,6 +22,13 @@ pub struct Bumper {
     pub force: f32,
     /// How much velocity it has to be hit with in order to fire.
     pub threshold: f32,
+    /// The file's `HAHE`. It does **not** only decide whether the script hears
+    /// about the hit: `BumperHitCircle::Collide` (`collideex.cpp:33`) puts it
+    /// in the same condition as the threshold, so a bumper with it off does not
+    /// kick either — it is a plain round wall. A table that decorates a lane
+    /// with a dead bumper gets a post; ignoring the flag gets a live bumper
+    /// that flings the ball back out of a lane it was meant to roll down.
+    pub hit_event: bool,
     pub enabled: bool,
     /// Whether it has just fired, so the animation knows about it.
     pub hit: bool,
@@ -44,6 +51,9 @@ impl Bumper {
             circle,
             force,
             threshold,
+            // The editor's default is on (`Settings_properties.inl:917`), and
+            // it is what a file that predates the tag was saved with.
+            hit_event: true,
             enabled: true,
             hit: false,
             ring_offset: 0.0,
@@ -113,7 +123,9 @@ impl Bumper {
         let dot = coll.hit_normal.dot(ball.vel);
         ball.collide_3d_wall(coll.hit_normal, &self.circle.material, coll, scatter);
 
-        let fires = dot <= -self.threshold;
+        // `collideex.cpp:33` — one condition, not two: the kick and the event
+        // are both behind `m_d.m_hitEvent && dot <= -threshold`.
+        let fires = self.hit_event && dot <= -self.threshold;
         if fires {
             ball.vel += coll.hit_normal * self.force;
             self.hit = true;
@@ -145,12 +157,33 @@ pub struct Gate {
     pub angle_speed: f32,
     pub angle_min: f32,
     pub angle_max: f32,
+    /// The limits **as the file declares them**, which are not the same thing
+    /// as the two above.
+    ///
+    /// The original keeps the pair twice — `m_d.m_angleMin/Max` on the part and
+    /// `m_angleMin/Max` on the mover — and `SetOpenAngle` / `SetCloseAngle`
+    /// (`gate.cpp:150` and `:171`) clamp the script's number against the file's
+    /// pair before writing the mover's. Keeping only the mover's would make the
+    /// limits a ratchet: every `OpenAngle` a script wrote would narrow the range
+    /// the next one is allowed to ask for, and a gate that a table opens and
+    /// closes on a timer would close on itself.
+    pub limit_min: f32,
+    pub limit_max: f32,
     /// Already raised to `PHYS_FACTOR`: it is applied once per physics step.
     pub damping: f32,
     /// How hard gravity pulls the door back towards rest.
     pub gravity_factor: f32,
 
     pub two_way: bool,
+    /// The file's `GCOL`, and **not** the same as [`Gate::enabled`].
+    ///
+    /// `Open` turns the leaf off while it is held open and puts it back to this
+    /// on the way down (`gate.cpp:747` and `:753`) — to the file's value, note,
+    /// not to whatever a script last wrote through `Collidable`, because
+    /// `put_Collidable` deliberately leaves `m_d.m_collidable` alone once the
+    /// player is running (`gate.cpp:840-857`). Keeping the two apart is what
+    /// makes `Open = True : Open = False` end where it started.
+    pub collidable: bool,
     /// Whether the script locked it open.
     pub open: bool,
     /// Which way it opened. It defines the sign of its limits.
@@ -190,9 +223,12 @@ impl Gate {
             angle_speed: 0.0,
             angle_min: min,
             angle_max: max,
+            limit_min: min,
+            limit_max: max,
             damping: pivot.damping.powf(PHYS_FACTOR),
             gravity_factor,
             two_way,
+            collidable: true,
             open: false,
             hit_direction: false,
             forced_move: false,
@@ -312,6 +348,140 @@ impl Gate {
             self.angle_speed -= self.angle.sin() * self.gravity_factor * (PHYS_FACTOR / 100.0);
             self.angle_speed *= self.damping;
         }
+    }
+
+    /// `Gate.Open = True` / `= False` (`Gate::put_Open`, `gate.cpp:736`).
+    ///
+    /// Setting the flag is not what opens a gate, and that was the bug: `open`
+    /// is only read by [`Gate::update_velocities`], where all it does is stop
+    /// gravity pulling the leaf shut. The leaf **also has to stop colliding**,
+    /// and it has to be kicked so it actually swings up — a gate whose script
+    /// opens it and whose angle never leaves the stop is drawn shut.
+    ///
+    /// The caller has one more thing to do that a gate cannot do for itself:
+    /// on a one-way gate the thing that stops the ball is not the leaf but a
+    /// separate rigid `LineSeg` beside it, and `gate.cpp:749` switches that off
+    /// too. Leave it on and a script that opens a gate to let the ball out gets
+    /// an invisible wall instead. See the caller in the game's item layer.
+    pub fn set_open(&mut self, open: bool) {
+        self.hit_direction = false;
+        // Back to the file's limits first: a `Move` may have narrowed them.
+        self.angle_max = self.limit_max;
+        self.angle_min = self.limit_min;
+        self.forced_move = true;
+        self.open = open;
+
+        if open {
+            self.enabled = false;
+            if self.angle < self.angle_max {
+                self.angle_speed = 0.2;
+            }
+        } else {
+            self.enabled = self.collidable;
+            if self.angle > self.angle_min {
+                self.angle_speed = -0.2;
+            }
+        }
+    }
+
+    /// `Gate.Collidable = ...` (`Gate::put_Collidable`, `gate.cpp:840`).
+    ///
+    /// The `angle_min = 0` is the original's and it is not decoration: a
+    /// collidable gate has to be able to lie flat, and a file that shipped a
+    /// non-zero closing angle would otherwise leave the leaf propped up in the
+    /// ball's way the moment a script switched collision back on.
+    pub fn set_collidable(&mut self, on: bool) {
+        self.enabled = on;
+        self.angle_max = self.limit_max;
+        self.angle_min = self.limit_min;
+        if on {
+            self.angle_min = 0.0;
+        }
+    }
+
+    /// `Gate.OpenAngle = ...` in radians (`Gate::SetOpenAngle`, `gate.cpp:150`).
+    ///
+    /// Which of the two limits it writes depends on where the new angle falls,
+    /// which looks like a mistake and is not: a gate can be built with its
+    /// limits either way round, and the original picks whichever end the value
+    /// belongs to rather than assuming.
+    pub fn set_open_angle(&mut self, angle: f32) {
+        let v = angle.clamp(self.limit_min, self.limit_max);
+        if self.angle_min < v {
+            self.angle_max = v;
+        } else {
+            self.angle_min = v;
+        }
+    }
+
+    /// `Gate.CloseAngle = ...` in radians (`Gate::SetCloseAngle`, `gate.cpp:171`).
+    pub fn set_close_angle(&mut self, angle: f32) {
+        let v = angle.clamp(self.limit_min, self.limit_max);
+        if self.angle_max > v {
+            self.angle_min = v;
+        } else {
+            self.angle_max = v;
+        }
+    }
+
+    /// `Gate.Move dir, speed, angle` (`Gate::Move`, `gate.cpp:865`).
+    ///
+    /// The original's own comment: "animate gate toward a given direction or
+    /// angle at the given speed, **disabling physics**, for graphic effects
+    /// only". So it turns the natural swing off and the collision with it —
+    /// which is why, like [`Gate::set_open`], the caller has to switch the
+    /// one-way gate's blocking segment off as well.
+    ///
+    /// `dir` is 0 to use `angle_rad`, -1 to close and +1 to open; `speed_deg`
+    /// at or below zero means the default. Returns the direction it settled on,
+    /// which is what the caller needs to know: a `Move` that resolves to "stay
+    /// where you are" must not leave the leaf drifting.
+    pub fn move_toward(&mut self, mut dir: i32, speed_deg: f32, angle_deg: f32) -> i32 {
+        self.hit_direction = false;
+        self.forced_move = true;
+        // `Move` always turns the natural swing off, and collision with it.
+        self.open = true;
+        self.enabled = false;
+
+        let speed = if speed_deg <= 0.0 {
+            0.2 // the original's default gate angle speed
+        } else {
+            speed_deg.to_radians()
+        };
+
+        let mut angle = angle_deg;
+        if dir == 0 || angle != 0.0 {
+            let target = angle.to_radians().clamp(self.limit_min, self.limit_max);
+            angle = target;
+            let da = target - self.angle;
+            dir = if da > 1.0e-5 {
+                1
+            } else if da < -1.0e-5 {
+                -1
+            } else {
+                self.angle_speed = 0.0;
+                0
+            };
+        } else {
+            angle = if dir < 0 {
+                self.limit_min
+            } else {
+                self.limit_max
+            };
+        }
+
+        if dir > 0 {
+            self.angle_max = angle;
+            if self.angle < self.angle_max {
+                self.angle_speed = speed;
+            }
+        } else if dir < 0 {
+            self.angle_min = angle;
+            if self.angle > self.angle_min {
+                self.angle_speed = -speed;
+            }
+        }
+        dir
     }
 }
 
@@ -479,9 +649,44 @@ pub struct Kicker {
     /// hole, comes to a stop on top of it and stays there, because nothing
     /// catches it and nothing tells the script it arrived.
     pub legacy_mode: bool,
+    /// The file's `FATH`: the hole has no bottom.
+    ///
+    /// `kicker.cpp:1148` reads it as `lockedInKicker = !fallThrough`, so a
+    /// fall-through kicker takes the ball out of play instead of holding it —
+    /// `kicker.cpp:1177` drops it to `zlow - radius - 5`, below the playfield,
+    /// where the table's script is expected to destroy it from the `Hit`
+    /// handler. Ignoring the flag turns a drain hole into a saucer: the ball is
+    /// grabbed and parked in plain sight for ever, and the ROM, which is
+    /// waiting for its drain switch to open again, never serves the next ball.
+    pub fall_through: bool,
     pub enabled: bool,
     /// Which ball it has inside, if it has one.
     pub captured: Option<usize>,
+    /// The ball the original would have in its volume set (`m_vpVolObjs`,
+    /// `kicker.cpp:1153`), which is not the same as the one it is holding.
+    ///
+    /// A kicker's `Hit` fires when it grabs the ball and its `Unhit` when that
+    /// ball, having been kicked back out, leaves the circle — the ball stays in
+    /// the set across the whole of the kick. That pair is a switch as far as a
+    /// ROM is concerned: a saucer wired `swNN_Hit` / `swNN_UnHit` whose `Unhit`
+    /// never comes keeps the switch closed for ever, and the ROM re-energises
+    /// the eject coil on a ball that left long ago.
+    ///
+    /// Only one, because the original holds at most one ball at a time.
+    in_volume: Option<usize>,
+}
+
+/// What a kicker did with a ball that reached it
+/// (`KickerHitCircle::DoCollide`, `kicker.cpp:1111`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KickerHit {
+    /// It rode over the top. The hole behaves as an ordinary edge and the
+    /// caller still has to bounce the ball off it.
+    Passed,
+    /// The hole took it and is holding it.
+    Captured,
+    /// It went straight through the playfield: a `FallThrough` kicker.
+    FellThrough,
 }
 
 impl Kicker {
@@ -490,9 +695,17 @@ impl Kicker {
             circle,
             hit_accuracy,
             legacy_mode,
+            fall_through: false,
             enabled: true,
             captured: None,
+            in_volume: None,
         }
+    }
+
+    /// The `FATH` flag, as the builder reads it out of the file.
+    pub fn with_fall_through(mut self, fall_through: bool) -> Self {
+        self.fall_through = fall_through;
+        self
     }
 
     pub fn hit_test(&self, ball: &Ball, dtime: f32) -> Option<CollisionEvent> {
@@ -503,36 +716,90 @@ impl Kicker {
         self.circle.hit_test_as_volume(ball, dtime)
     }
 
+    /// Whether the ball's centre is inside the hole's cylinder.
+    ///
+    /// The original asks this as a swept crossing of the circle and remembers
+    /// the answer per ball; here it is recomputed from the position every step,
+    /// which is what [`crate::trigger`] does and for the reasons set out there.
+    /// A ball that has fallen through ends up **below** `z_low`, so it leaves
+    /// the volume by the same test that a kicked one does.
+    pub fn contains(&self, ball: &Ball) -> bool {
+        let d = ball.pos.truncate() - self.circle.center;
+        ball.pos.z >= self.circle.z_low
+            && ball.pos.z <= self.circle.z_high
+            && d.length_squared() <= self.circle.radius * self.circle.radius
+    }
+
+    /// Whether the ball has just left the hole's volume, which is the kicker's
+    /// `Unhit` (`kicker.cpp:1189` — the only non-trigger `Unhit` in the whole
+    /// of the original).
+    pub fn check_exit(&mut self, ball_index: usize, ball: &Ball) -> bool {
+        if self.in_volume != Some(ball_index) || self.contains(ball) {
+            return false;
+        }
+        self.in_volume = None;
+        true
+    }
+
+    /// Keeps the ball index it is watching in step with a ball being removed.
+    pub fn renumber_after_removing(&mut self, ball: usize) {
+        self.in_volume = match self.in_volume {
+            Some(c) if c == ball => None,
+            Some(c) if c > ball => Some(c - 1),
+            other => other,
+        };
+    }
+
     /// What height the ball has to be at for the kicker to grab it.
     pub fn grab_height(&self, ball: &Ball) -> f32 {
         (self.circle.z_low + ball.radius) * self.hit_accuracy
     }
 
-    /// Tries to capture the ball. Returns `true` if it grabbed it.
+    /// Offers the ball to the hole (`kicker.cpp:1125-1184`).
     ///
-    /// The ball has to be sunk far enough into the hole: if it comes in fast
-    /// and high, it runs straight past over the edge. That is what keeps every
-    /// ball that grazes a kicker from being captured.
-    pub fn try_capture(&mut self, ball: &mut Ball, index: usize) -> bool {
+    /// The ball has to be sunk far enough into it: if it comes in fast and
+    /// high, it runs straight past over the edge. That is what keeps every ball
+    /// that grazes a kicker from being captured.
+    ///
+    /// Whether the hole then *holds* it is a second question, and the answer is
+    /// `!fall_through` (`kicker.cpp:1148`). Both answers stop the ball dead in
+    /// the middle of the hole and clear its spin; they differ in where it is
+    /// left and in whether it is frozen there.
+    pub fn take_ball(&mut self, ball: &mut Ball, index: usize) -> KickerHit {
         if self.captured.is_some() || !self.enabled {
-            return false;
+            return KickerHit::Passed;
         }
         // `kicker.cpp:1128`. A legacy kicker does not ask how high the ball is.
         if !self.legacy_mode && ball.pos.z >= self.grab_height(ball) {
-            return false; // it passes over the top
+            return KickerHit::Passed; // it passes over the top
         }
 
-        // It comes to rest in the center of the hole.
-        ball.pos = Vec3::new(
-            self.circle.center.x,
-            self.circle.center.y,
-            self.circle.z_low + ball.radius,
-        );
         ball.vel = Vec3::ZERO;
         ball.angular_momentum = Vec3::ZERO;
+        ball.pos.x = self.circle.center.x;
+        ball.pos.y = self.circle.center.y;
+
+        if self.fall_through {
+            // `kicker.cpp:1177`. Five units below the bottom of the hole, and
+            // the original explains why it is not merely cosmetic: the height
+            // test in `HitTestBasicRadius` is what stops the same hit being
+            // reported again and again while the ball drops out of sight.
+            //
+            // The ball is **not** locked, and nothing here takes it off the
+            // table: the script's `Hit` handler is what destroys it. The
+            // original calls that handler from inside this function, before
+            // moving the ball; here the event is queued and read a step later,
+            // so a fall-through ball spends one millisecond under the
+            // playfield. Nothing can reach it there and nothing draws it.
+            ball.pos.z = self.circle.z_low - ball.radius - 5.0;
+            return KickerHit::FellThrough;
+        }
+
+        ball.pos.z = self.circle.z_low + ball.radius;
         ball.locked = true;
         self.captured = Some(index);
-        true
+        self.in_volume = Some(index);
+        KickerHit::Captured
     }
 
     /// Releases the ball with a given velocity.
@@ -553,5 +820,26 @@ impl Kicker {
         // it along.
         ball.angular_momentum = Vec3::ZERO;
         self.captured = None;
+        // `in_volume` is deliberately left alone: the ball is on its way out
+        // but it is still in the hole, and the `Unhit` that tells the ROM its
+        // saucer switch has opened belongs to the moment it clears the circle,
+        // not to the moment the coil fired.
+    }
+
+    /// Puts a ball in the hole without a collision, as `CreateBall` does.
+    ///
+    /// Same bookkeeping as a capture, so the ball the script served leaves
+    /// through the same `Unhit` as one that rolled in.
+    pub fn hold(&mut self, ball: &mut Ball, index: usize) {
+        self.captured = Some(index);
+        self.in_volume = Some(index);
+        ball.pos = Vec3::new(
+            self.circle.center.x,
+            self.circle.center.y,
+            self.circle.z_low + ball.radius,
+        );
+        ball.vel = Vec3::ZERO;
+        ball.angular_momentum = Vec3::ZERO;
+        ball.locked = true;
     }
 }

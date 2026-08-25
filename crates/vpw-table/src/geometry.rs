@@ -389,6 +389,36 @@ pub struct Scene {
     /// can never light up: a table's lamps are almost all off in the file,
     /// because they are the game's lamps and the game turns them on.
     pub lights: Vec<crate::light::Light>,
+    /// What the table asks the physics for. See [`TablePhysics`].
+    pub physics: TablePhysics,
+}
+
+/// The numbers a table sets that decide how it plays.
+///
+/// Separate from the geometry because they are not geometry: they are three
+/// floats that between them decide how fast the ball runs, and getting them
+/// from the file rather than from a constant is the difference between a table
+/// that plays like itself and one that plays like every other table.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TablePhysics {
+    /// The playfield's slope in degrees, already interpolated.
+    ///
+    /// A table gives a **range** and the difficulty picks a point in it:
+    /// `slope = lerp(min, max, difficulty)` (`player.cpp:498`). Taking the
+    /// maximum alone — which is what this did — puts a table whose author
+    /// asked for six to eight and a half degrees permanently at eight and a
+    /// half. The ball is too fast for the whole game and drains too easily,
+    /// and nothing about it looks broken.
+    pub slope_deg: f32,
+    /// Gravity, in the original's units (`player.cpp:499`).
+    pub gravity: f32,
+    /// The scatter any part that does not set its own falls back to, in
+    /// degrees. `c_hardScatter = ANGTORAD(m_defaultScatter)` (`player.cpp:197`).
+    pub default_scatter_deg: f32,
+    /// How hard the table is set to play, from 0 to 1. Parts scale their own
+    /// scatter by it (`kicker.cpp:726`, `hitball.cpp:104`) and it is what
+    /// picks the slope out of the range above.
+    pub difficulty: f32,
 }
 
 impl Scene {
@@ -566,10 +596,9 @@ pub fn extract(vpx: &VPX) -> Scene {
                 ));
             }
             GameItemEnum::Flipper(f) => {
-                meshes.extend(crate::flipper::build(
-                    f,
-                    surface_height(&f.surface, f.center.x, f.center.y),
-                ));
+                let z = surface_height(&f.surface, f.center.x, f.center.y);
+                meshes.extend(crate::flipper::build(f, z));
+                meshes.extend(crate::flipper::rubber(f, z));
             }
             GameItemEnum::Trigger(t) => {
                 meshes.extend(crate::trigger::build(
@@ -639,29 +668,45 @@ pub fn extract(vpx: &VPX) -> Scene {
         playfield_image: g.image.clone(),
         playfield_material: g.playfield_material.clone(),
         lighting: lighting(vpx),
+        physics: table_physics(vpx),
         lights,
     }
 }
 
 /// The two scene lights, exactly as `Renderer.cpp:1055-1065` builds them.
+/// The table's own physics numbers. See [`TablePhysics`].
+fn table_physics(vpx: &VPX) -> TablePhysics {
+    let g = &vpx.gamedata;
+    // The original keeps the difficulty as a fraction and multiplies by a
+    // hundred only for the script (`pintable.cpp:6373`). A file that stored a
+    // percentage would put the slope far past its own maximum, so the value is
+    // clamped rather than trusted.
+    let difficulty = g.global_difficulty.clamp(0.0, 1.0);
+    TablePhysics {
+        slope_deg: g.angle_tilt_min + (g.angle_tilt_max - g.angle_tilt_min) * difficulty,
+        gravity: g.gravity,
+        default_scatter_deg: g.default_scatter,
+        difficulty,
+    }
+}
+
 fn lighting(vpx: &VPX) -> Lighting {
     let g = &vpx.gamedata;
     // The day/night scale, which multiplies the ambient, the two scene lights
     // and the environment alike (`Renderer.cpp:1037`, `:1051`, `:1063`).
     //
-    // Whose number it is depends on the table. `Renderer.cpp:398` takes the
-    // table's own only in `Mode::Table`, and a table asks for that mode by
-    // setting "overwrite global day/night"; without it the player's own light
-    // level is used, and there is no player setting here, so it is one.
+    // Always the table's, which is the mode the original starts in
+    // (`Renderer.cpp:377`: the mode is `Mode::Table` unless the *player* has
+    // ticked "override table emission scale", and there is no such setting
+    // here), and `Renderer.cpp:398` then takes `m_globalEmissionScale`
+    // unconditionally.
     //
-    // Reading this as always-the-table's would be worse than not reading it:
-    // of the two tables to hand, one asks for 0.33 and does not claim the
-    // override, and the other asks for 0.08 and does. Applying both would make
-    // a table three times darker than its author meant.
-    let global = match g.overwrite_global_day_night {
-        Some(true) => g.global_emission_scale,
-        _ => 1.0,
-    };
+    // Not gated on the file's "overwrite global day/night" flag, which is a
+    // reasonable-looking guess and wrong: the original reads that flag and
+    // throws the value away — `case FID(OGDN): reader.AsBool(); break;`
+    // (`pintable.cpp:2574`). It is a leftover the loader still has to step over
+    // to stay in sync with the stream.
+    let global = g.global_emission_scale;
     let scale = g.light_emission_scale * global;
     Lighting {
         lights: [

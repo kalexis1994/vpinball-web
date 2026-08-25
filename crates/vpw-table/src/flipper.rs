@@ -141,12 +141,21 @@ fn belongs_to(v: &Vertex, circle: &[[f32; 3]; 13]) -> bool {
         .any(|c| v.pos[0] == c[0] && v.pos[1] == c[1] && v.pos[2] == c[2])
 }
 
+/// The bat and its rubber ring.
+///
+/// **Two meshes, not one.** The original builds the same base mesh twice
+/// (`flipper.cpp:683-712`): once shrunk by the rubber's thickness, which is the
+/// bat, and once at the full radius, which is the ring — z-scaled by
+/// `rubberwidth`, lifted by `rubberheight`, and taking the second half of the
+/// texture. Shrinking the bat and never adding the ring back, which is what
+/// this did, leaves every flipper on every table visibly thinner than the one
+/// the author drew, and with no rubber on it at all.
 pub fn build(f: &vpin::vpx::gameitem::flipper::Flipper, base_z: f32) -> Option<Mesh> {
     if !f.is_visible {
         return None;
     }
     let m = meshes::get("flipperBase")?;
-    let mut vertices = m.vertices;
+    let mut vertices = m.vertices.clone();
 
     // The length between centers. `FlipperRadiusMin` lets the global difficulty
     // shorten the flipper; with no physics yet, the maximum is used.
@@ -203,6 +212,77 @@ pub fn build(f: &vpin::vpx::gameitem::flipper::Flipper, base_z: f32) -> Option<M
         transform: place * height * half_turn,
         image: f.image.clone().unwrap_or_default(),
         material: f.material.clone(),
+        visible: true,
+        kind: MeshKind::Builtin,
+    })
+}
+
+/// The rubber ring that goes round the bat.
+///
+/// The same base mesh a second time at the **full** radius — the original
+/// writes `baseRadius + m_d.m_rubberthickness`, which is where it started
+/// before [`build`] shrank it (`flipper.cpp:691`) — with its own thickness,
+/// its own height above the playfield, its own material, and the second half
+/// of the texture so that one image can carry the bat and its rubber.
+///
+/// Without it every flipper on every table is visibly thinner than the one its
+/// author drew, and has no rubber on it at all.
+pub fn rubber(f: &vpin::vpx::gameitem::flipper::Flipper, base_z: f32) -> Option<Mesh> {
+    if !f.is_visible {
+        return None;
+    }
+    let thickness = f.rubber_thickness.unwrap_or(0.0);
+    if thickness <= 0.0 {
+        return None;
+    }
+    let m = meshes::get("flipperBase")?;
+    let mut vertices = m.vertices.clone();
+
+    let length = f.flipper_radius_max.max(0.01);
+    let sine = ((f.base_radius - f.end_radius) / length).clamp(-1.0, 1.0);
+    let fix_angle_scale = sine.asin() / (PI * 0.5);
+    let base_center = Vec2::new(VERTSBASEBOTTOM[6][0], VERTSBASEBOTTOM[0][1]);
+    let tip_center = Vec2::new(VERTSTIPBOTTOM[6][0], VERTSTIPBOTTOM[0][1]);
+
+    for v in &mut vertices {
+        if belongs_to(v, &VERTSBASEBOTTOM) || belongs_to(v, &VERTSBASETOP) {
+            apply_fix(
+                v,
+                base_center,
+                -PI * 0.5,
+                f.base_radius,
+                Vec2::ZERO,
+                fix_angle_scale,
+            );
+        } else if belongs_to(v, &VERTSTIPBOTTOM) || belongs_to(v, &VERTSTIPTOP) {
+            apply_fix(
+                v,
+                tip_center,
+                PI * 0.5,
+                f.end_radius,
+                Vec2::new(0.0, length),
+                fix_angle_scale,
+            );
+        }
+        // `flipper.cpp:711`.
+        v.uv[1] += 0.5;
+    }
+
+    let half_turn = Mat4::from_rotation_z(PI);
+    let width = Mat4::from_scale(Vec3::new(1.0, 1.0, f.rubber_width.unwrap_or(0.0)));
+    let place = Mat4::from_translation(Vec3::new(
+        f.center.x,
+        f.center.y,
+        base_z + f.rubber_height.unwrap_or(0.0),
+    )) * Mat4::from_rotation_z(f.start_angle.to_radians());
+
+    Some(Mesh {
+        name: format!("{} (rubber)", f.name),
+        vertices,
+        indices: m.indices,
+        transform: place * width * half_turn,
+        image: f.image.clone().unwrap_or_default(),
+        material: f.rubber_material.clone(),
         visible: true,
         kind: MeshKind::Builtin,
     })

@@ -173,10 +173,10 @@ fn place(
 /// `bumper.cpp:536-610`. The scale in the plane is the **radius**, the vertical
 /// one is `heightScale`, and each part starts at a different height.
 pub fn bumper(b: &vpin::vpx::gameitem::bumper::Bumper, base_z: f32) -> Vec<Mesh> {
-    let matrix = |z: f32| {
+    let matrix = |z: f32, scale_xy: f32| {
         Mat4::from_translation(Vec3::new(b.center.x, b.center.y, z))
             * Mat4::from_rotation_z(b.orientation.to_radians())
-            * Mat4::from_scale(Vec3::new(b.radius, b.radius, b.height_scale))
+            * Mat4::from_scale(Vec3::new(scale_xy, scale_xy, b.height_scale))
     };
 
     let mut meshes = Vec::new();
@@ -184,7 +184,7 @@ pub fn bumper(b: &vpin::vpx::gameitem::bumper::Bumper, base_z: f32) -> Vec<Mesh>
         meshes.extend(place(
             "bumperBase",
             format!("{} (base)", b.name),
-            matrix(base_z),
+            matrix(base_z, b.radius),
             b.base_material.clone(),
             String::new(),
             MeshKind::Builtin,
@@ -195,7 +195,7 @@ pub fn bumper(b: &vpin::vpx::gameitem::bumper::Bumper, base_z: f32) -> Vec<Mesh>
         meshes.extend(place(
             "bumperSocket",
             format!("{} (socket)", b.name),
-            matrix(base_z + 5.0),
+            matrix(base_z + 5.0, b.radius),
             b.socket_material.clone(),
             String::new(),
             MeshKind::Builtin,
@@ -205,18 +205,24 @@ pub fn bumper(b: &vpin::vpx::gameitem::bumper::Bumper, base_z: f32) -> Vec<Mesh>
         meshes.extend(place(
             "bumperRing",
             format!("{} (ring)", b.name),
-            matrix(base_z),
+            matrix(base_z, b.radius),
             b.ring_material.clone().unwrap_or_default(),
             String::new(),
             MeshKind::Builtin,
         ));
     }
     if b.is_cap_visible {
-        // The cap starts right at the top: `heightScale + baseHeight`.
+        // The cap starts right at the top: `heightScale + baseHeight`, and it
+        // is the one part scaled by **twice** the radius — `scalexy =
+        // m_d.m_radius * 2.0f` in `GenerateCapMesh` (`bumper.cpp:597`) against
+        // the plain radius in the other three (`bumper.cpp:421`, `:535`,
+        // `:555`, `:576`). Scaling it like the rest sinks the mushroom inside
+        // the skirt, which reads as a bumper missing its top rather than as a
+        // bumper drawn half size.
         meshes.extend(place(
             "bumperCap",
             format!("{} (cap)", b.name),
-            matrix(base_z + b.height_scale),
+            matrix(base_z + b.height_scale, b.radius * 2.0),
             b.cap_material.clone(),
             String::new(),
             MeshKind::Builtin,

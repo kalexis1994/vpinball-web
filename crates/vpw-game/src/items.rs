@@ -139,6 +139,26 @@ struct Visual {
     /// on the next step, the same way the physics leaves its collisions in a
     /// queue rather than reaching into the interpreter.
     announce: Cell<Option<bool>>,
+    /// How far a drop target has slid out of the playfield, in VP units. Zero
+    /// is standing, `-DROP_DEPTH` is all the way down.
+    ///
+    /// It is a number and not a flag because the slide **takes time**:
+    /// `HitTarget::UpdateAnimation` (`hittarget.cpp:576`) moves it by
+    /// `dropSpeed` units per millisecond and only declares the target dropped
+    /// when it reaches the bottom. Snapping it in one frame is what a bank of
+    /// targets looks like when it is wrong: they blink out of the playfield
+    /// instead of being knocked down.
+    drop_offset: Cell<f32>,
+    /// Whether the slide is running.
+    dropping: Cell<bool>,
+    /// Which way it is going. Down on a hit, up when something raises it.
+    dropping_down: Cell<bool>,
+    /// Milliseconds still to wait before a raise starts moving.
+    ///
+    /// The original holds a timestamp and compares it against the player's
+    /// clock (`hittarget.cpp:601`); counting down is the same thing without
+    /// having to hand this module a clock it otherwise has no use for.
+    raise_wait_ms: Cell<f32>,
     /// Everything else the script sets on this part. See the module note: a
     /// member we do not model is kept rather than refused, so it at least reads
     /// back as what was written.
@@ -159,6 +179,10 @@ impl Default for Visual {
             dropped: Cell::new(false),
             drops: Cell::new(false),
             announce: Cell::new(None),
+            drop_offset: Cell::new(0.0),
+            dropping: Cell::new(false),
+            dropping_down: Cell::new(false),
+            raise_wait_ms: Cell::new(0.0),
             extra: RefCell::new(HashMap::new()),
         }
     }
@@ -221,6 +245,34 @@ pub struct Item {
     /// as separate numbers; everything else keeps the defaults and never asks.
     position: Vec3,
     size: Vec3,
+    /// How hard the ball has to arrive for a hit to count, along the collision
+    /// normal (`THRS`).
+    ///
+    /// Every part that reports hits has one and the original compares against
+    /// it before it calls the script: `dot <= -m_threshold` on a wall's segment
+    /// (`collide.cpp:172`), `dot >= m_threshold` on a ramp's or a target's
+    /// triangle (`collideex.cpp:701`, `:913`, `:1126`). Throwing the number
+    /// away means the lightest graze fires the hit sound, closes the switch and
+    /// scores: a ball trickling along a wall on its way to the drain plays the
+    /// wall's sound a dozen times.
+    threshold: f32,
+    /// Whether the part is marked to raise events at all (`HTEV` / `HAHE`).
+    ///
+    /// A `.vpx` decides this, not the script: `m_fe = m_d.m_hitEvent`
+    /// (`ramp.cpp:818`, `surface.cpp:380-385`), and a part without it is silent
+    /// however many handlers are written for it. Deciding instead from "does
+    /// the script have an `X_Hit`" inverts where the authority lies. A table's
+    /// author unticks the flag on decorative geometry *precisely* so that it
+    /// stays quiet, and a handler written against a whole collection then makes
+    /// a live switch out of every post in it.
+    hit_event: bool,
+    /// A drop target's slide speed in units per millisecond (`DRSP`) and the
+    /// pause before it comes back up in milliseconds (`RADE`).
+    drop_speed: f32,
+    raise_delay: f32,
+    /// A kicker's kick scatter, in radians, already weighted by the table's
+    /// global difficulty (`kicker.cpp:725-726`).
+    kick_scatter: f32,
     visual: Visual,
     engine: Rc<RefCell<Engine>>,
     /// Shared by every item: set whenever any timer is armed, disarmed or
@@ -293,6 +345,34 @@ impl Item {
         let engine = self.engine.borrow();
         engine.shapes().get(i).map(f)
     }
+
+    /// The first shape of a given kind this item owns.
+    ///
+    /// [`Item::shape`] takes the first one full stop, which is right for every
+    /// part that makes exactly one. A one-way gate makes several, and the leaf
+    /// is not the first: `physics::gate` pushes the blocking segment, then the
+    /// leaf, then a bracket post at each end. So asking for the first gave a
+    /// `Shape::Line`, every `Gate.Open` and `Gate.CurrentAngle` a table wrote
+    /// fell through to "no such member", and the write was quietly filed away
+    /// as an unmodelled extra where nothing would ever read it.
+    fn shape_like(&self, wanted: impl Fn(&Shape) -> bool) -> Option<usize> {
+        let engine = self.engine.borrow();
+        self.shapes
+            .iter()
+            .copied()
+            .find(|&i| engine.shapes().get(i).is_some_and(&wanted))
+    }
+
+    /// The leaf: the pass-through line that swings.
+    fn gate_leaf(&self) -> Option<usize> {
+        self.shape_like(|s| matches!(s, Shape::Gate(_)))
+    }
+
+    /// The rigid segment that stops the ball coming back the wrong way through
+    /// a **one-way** gate. A two-way gate has none, so this is `None` there.
+    fn gate_blocker(&self) -> Option<usize> {
+        self.shape_like(|s| matches!(s, Shape::Line(_)))
+    }
 }
 
 impl Object for Item {
@@ -327,7 +407,7 @@ impl Object for Item {
         let specific = match self.kind {
             Kind::Flipper => self.flipper_get(&lower),
             Kind::Kicker => self.kicker_get(&lower, args),
-            Kind::Gate => self.gate_get(&lower),
+            Kind::Gate => self.gate_get(&lower, args),
             Kind::Spinner => self.spinner_get(&lower),
             Kind::Plunger => self.plunger_get(&lower),
             Kind::Bumper => self.bumper_get(&lower),
@@ -510,14 +590,120 @@ impl Item {
         if self.visual.dropped.get() == down {
             return;
         }
+        // `put_IsDropped` (`hittarget.cpp:1180`) flips the flag **now** and
+        // then starts the slide: a target a script drops stops colliding on the
+        // instant, and one it raises collides again on the instant, whichever
+        // way the mesh happens to be travelling. Only a target the *ball*
+        // knocks over waits for the bottom — see [`Item::knock_down`].
         self.visual.dropped.set(down);
         self.visual.announce.set(Some(down));
         self.set_collidable(!down && self.visual.collidable.get());
+
+        self.visual
+            .drop_offset
+            .set(if down { 0.0 } else { -DROP_DEPTH });
+        self.visual.dropping.set(true);
+        self.visual.dropping_down.set(down);
+        // The delay is on the way **up** only, and it is what makes a bank
+        // reset look like a bank reset: the coil fires, the targets sit there
+        // for a tenth of a second and then rise together.
+        self.visual
+            .raise_wait_ms
+            .set(if down { 0.0 } else { self.raise_delay });
+        self.show_drop_offset();
+    }
+
+    /// Advances the slide by `dt_ms` of table time
+    /// (`HitTarget::UpdateAnimation`, `hittarget.cpp:576-632`).
+    ///
+    /// A stand-up target has nothing to animate: the original runs the whole of
+    /// this only for the three drop types, and gives the others a shallower
+    /// wobble that nothing in the physics or the rules can see.
+    pub fn animate_drop(&self, dt_ms: f32) {
+        if !self.visual.drops.get() || !self.visual.dropping.get() {
+            return;
+        }
+        // An invisible target does not move, and the original spells out why:
+        // "this is needed for backward compatibility since animation used to be
+        // part of rendering and would not be performed, therefore hidden drop
+        // targets would never actually drop, and old tables rely on this
+        // behavior" (`hittarget.cpp:580`). A table that hides a target to take
+        // it out of play is relying on it staying up.
+        if !self.visual.visible.get() {
+            return;
+        }
+        let going_down = self.visual.dropping_down.get();
+
+        let mut step = self.drop_speed;
+        if going_down {
+            step = -step;
+        } else if self.visual.raise_wait_ms.get() > 0.0 {
+            self.visual
+                .raise_wait_ms
+                .set(self.visual.raise_wait_ms.get() - dt_ms);
+            step = 0.0;
+        }
+
+        let mut offset = self.visual.drop_offset.get() + step * dt_ms;
+        if going_down {
+            if offset <= -DROP_DEPTH {
+                offset = -DROP_DEPTH;
+                self.visual.dropping_down.set(false);
+                self.visual.dropping.set(false);
+                // The ball's route: the flag has not been set yet, so this is
+                // where the target stops colliding and where `_Dropped` is
+                // raised. On the script's route it is already set and this does
+                // nothing, which is the original's shape too.
+                if !self.visual.dropped.get() {
+                    self.visual.dropped.set(true);
+                    self.visual.announce.set(Some(true));
+                    self.set_collidable(false);
+                }
+            }
+        } else if offset >= 0.0 {
+            offset = 0.0;
+            self.visual.dropping.set(false);
+            if self.visual.dropped.get() {
+                self.visual.dropped.set(false);
+                self.visual.announce.set(Some(false));
+                self.set_collidable(self.visual.collidable.get());
+            }
+        }
+        self.visual.drop_offset.set(offset);
+        self.show_drop_offset();
+    }
+
+    /// Puts the slide's current position where the renderer reads it from.
+    ///
+    /// The mesh does not move in the physics at all — the original only lowers
+    /// the vertices it draws with (`UpdateTarget`, `hittarget.cpp:697`) — so
+    /// this is the whole of the visible half.
+    fn show_drop_offset(&self) {
         set_placement(
             &self.visual.rot_and_tra,
             5,
-            if down { -f64::from(DROP_DEPTH) } else { 0.0 },
+            f64::from(self.visual.drop_offset.get()),
         );
+    }
+
+    /// Whether this target has a slide still running, for tests.
+    pub fn is_dropping(&self) -> bool {
+        self.visual.dropping.get()
+    }
+
+    /// How far out of the playfield this target has slid, in VP units.
+    pub fn drop_offset(&self) -> f32 {
+        self.visual.drop_offset.get()
+    }
+
+    /// The impact speed below which a hit on this part does not count.
+    pub fn hit_threshold(&self) -> f32 {
+        self.threshold
+    }
+
+    /// Whether the file marks this part as raising hit events at all.
+    pub fn has_hit_event(&self) -> bool {
+        self.hit_event
     }
 
     /// Whether this is a target that is currently down.
@@ -537,22 +723,26 @@ impl Item {
 
     /// Knocks a drop target down because a ball hit it.
     ///
-    /// Returns whether it went down, so the caller can raise the `Dropped`
-    /// event only when something actually happened. A stand-up target, or one
-    /// that is already down, returns false.
+    /// Returns whether the hit started it moving, which a stand-up target and
+    /// one that is already down or already on its way down do not.
     ///
-    /// The original reaches the same place by a longer road: the collision sets
-    /// a flag on the target, and the animation that runs on the next frame
-    /// carries it down over some tens of milliseconds and *then* declares it
-    /// dropped (`UpdateAnimation`, `hittarget.cpp:576`). The travel is
-    /// cosmetic — the colliders never move — and what the game reacts to is the
-    /// switch, which closes on the hit either way.
+    /// The hit does **not** declare the target dropped. The original sets a
+    /// flag on the target and the animation carries it down over some tens of
+    /// milliseconds before flipping `m_d.m_isDropped` and firing `Dropped`
+    /// (`hittarget.cpp:584` and `:606-618`) — so the target still collides
+    /// while it is sinking, and a ball that is leaning on it keeps being pushed
+    /// off rather than falling through the moment it is touched. The `Dropped`
+    /// event comes out of [`Item::animate_drop`] through the same announcement
+    /// queue a script-driven drop uses.
     pub fn knock_down(&self) -> bool {
         if !self.visual.drops.get() || self.visual.dropped.get() {
             return false;
         }
-        self.set_dropped(true);
-        self.visual.announce.set(None);
+        if self.visual.dropping.get() && self.visual.dropping_down.get() {
+            return false; // already on its way
+        }
+        self.visual.dropping.set(true);
+        self.visual.dropping_down.set(true);
         true
     }
 
@@ -662,35 +852,106 @@ impl Item {
         Ok(())
     }
 
-    fn gate_get(&self, name: &str) -> Result<Value> {
-        self.with_shape(|s| match s {
-            Shape::Gate(g) => match name {
-                "currentangle" => Some(Value::Double(g.angle.to_degrees().into())),
-                "open" => Some(Value::Bool(g.open)),
-                _ => None,
-            },
-            _ => None,
-        })
-        .flatten()
-        .ok_or_else(|| Error::no_such_member(name))
+    fn gate_get(&self, name: &str, args: &[Value]) -> Result<Value> {
+        // `Move dir, speed, angle` is a method, and the only one a gate has.
+        if name == "move" {
+            return self.gate_move(args).map(|()| Value::Empty);
+        }
+        let Some(i) = self.gate_leaf() else {
+            return Err(Error::no_such_member(name));
+        };
+        let engine = self.engine.borrow();
+        let Some(Shape::Gate(g)) = engine.shapes().get(i) else {
+            return Err(Error::no_such_member(name));
+        };
+        match name {
+            "currentangle" => Ok(Value::Double(g.angle.to_degrees().into())),
+            "open" => Ok(Value::Bool(g.open)),
+            // The player's live limits, not the file's (`gate.cpp:145`,
+            // `:169`): a `Move` or an earlier write may have narrowed them, and
+            // a script that reads one back expects what it set.
+            "openangle" => Ok(Value::Double(g.angle_max.to_degrees().into())),
+            "closeangle" => Ok(Value::Double(g.angle_min.to_degrees().into())),
+            _ => Err(Error::no_such_member(name)),
+        }
     }
 
     fn gate_set(&self, name: &str, value: &Value) -> Result<()> {
-        let Some(i) = self.shape() else {
+        let Some(i) = self.gate_leaf() else {
             return Err(Error::no_such_member(name));
         };
+        // Read before the engine is borrowed: both borrow it.
+        let blocker = self.gate_blocker();
         let mut engine = self.engine.borrow_mut();
         let Some(Shape::Gate(g)) = engine.shape_mut(i) else {
             return Err(Error::no_such_member(name));
         };
         match name {
             // A script holding a gate open is how a table makes a one-way
-            // passage temporarily two-way.
+            // passage temporarily two-way — or, far more often, how it lets a
+            // ball out of a lane it has just finished counting.
+            //
+            // Setting the flag was not enough. `open` is read in one place,
+            // `Gate::update_velocities`, where all it does is stop gravity
+            // pulling the leaf shut; `Gate::put_Open` (`gate.cpp:736`) also
+            // switches the leaf off, kicks it so it visibly swings, **and**
+            // switches off the blocking segment beside it. Leave that segment
+            // on and the script opens a gate onto an invisible wall.
             "open" => {
-                g.open = value.to_bool()?;
-                g.forced_move = true;
+                let open = value.to_bool()?;
+                g.set_open(open);
+                // Closing puts it back to what the *file* said, not to "on":
+                // `m_plineseg->m_enabled = m_d.m_collidable` (`gate.cpp:754`).
+                // A table that ships a gate non-collidable and opens it for a
+                // moment must not come back with a wall it never had.
+                let back_on = g.collidable;
+                if let Some(line) = blocker {
+                    engine.set_shape_enabled(line, !open && back_on);
+                }
+            }
+            // Both are in degrees on the script side and radians in the engine.
+            "openangle" => {
+                let a = (value.to_number()? as f32).to_radians();
+                g.set_open_angle(a);
+            }
+            "closeangle" => {
+                let a = (value.to_number()? as f32).to_radians();
+                g.set_close_angle(a);
             }
             _ => return Err(Error::no_such_member(name)),
+        }
+        Ok(())
+    }
+
+    /// `Gate.Move dir, speed, angle` (`Gate::Move`, `gate.cpp:865`).
+    ///
+    /// A graphics-only animation: it takes the gate out of the physics for as
+    /// long as it runs, which means the blocking segment goes with it exactly
+    /// as it does for `Open`.
+    fn gate_move(&self, args: &[Value]) -> Result<()> {
+        let Some(i) = self.gate_leaf() else {
+            return Err(Error::no_such_member("Move"));
+        };
+        let number = |n: usize| -> Result<f64> {
+            args.get(n)
+                .map(Value::to_number)
+                .transpose()
+                .map(|v| v.unwrap_or(0.0))
+        };
+        let dir = number(0)? as i32;
+        // A speed at or below zero means "the default", so an omitted argument
+        // is already the right answer.
+        let speed = number(1)? as f32;
+        let angle = number(2)? as f32;
+
+        let blocker = self.gate_blocker();
+        let mut engine = self.engine.borrow_mut();
+        let Some(Shape::Gate(g)) = engine.shape_mut(i) else {
+            return Err(Error::no_such_member("Move"));
+        };
+        g.move_toward(dir, speed, angle);
+        if let Some(line) = blocker {
+            engine.set_shape_enabled(line, false);
         }
         Ok(())
     }
@@ -757,19 +1018,24 @@ impl Item {
                 self.destroy_ball();
                 Ok(Value::Empty)
             }
-            // `Kick angle, speed [, inclination]`: the whole point of a kicker.
-            "kick" => {
-                let angle = args
-                    .first()
-                    .map(Value::to_number)
-                    .transpose()?
-                    .unwrap_or(0.0);
-                let speed = args
-                    .get(1)
-                    .map(Value::to_number)
-                    .transpose()?
-                    .unwrap_or(0.0);
-                self.kick(angle, speed)?;
+            // `Kick angle, speed [, inclination]`: the whole point of a
+            // kicker. `KickZ` and `KickXYZ` are the same call with the ball
+            // nudged first (`kicker.cpp:704`, `:762`, `:768`); tables reach for
+            // them when a saucer is buried under a ramp and the ball has to
+            // come out at the right height to clear it.
+            "kick" | "kickz" | "kickxyz" => {
+                let number = |n: usize| -> Result<f64> {
+                    args.get(n)
+                        .map(Value::to_number)
+                        .transpose()
+                        .map(|v| v.unwrap_or(0.0))
+                };
+                let offset = match name {
+                    "kickz" => Vec3::new(0.0, 0.0, number(3)? as f32),
+                    "kickxyz" => Vec3::new(number(3)? as f32, number(4)? as f32, number(5)? as f32),
+                    _ => Vec3::ZERO,
+                };
+                self.kick(number(0)?, number(1)?, number(2)?, offset)?;
                 Ok(Value::Empty)
             }
             _ => Err(Error::no_such_member(name)),
@@ -822,16 +1088,55 @@ impl Item {
         self.engine.borrow_mut().destroy_captured_ball(i);
     }
 
-    /// `Kick angle, speed`: the angle is in degrees, measured from straight up
-    /// the table and turning clockwise, which is Visual Pinball's convention
-    /// and not the one a maths library would pick.
-    fn kick(&self, angle_deg: f64, speed: f64) -> Result<()> {
+    /// `KickXYZ angle, speed, inclination, x, y, z` (`kicker.cpp:704`), which
+    /// is what all three of the kicker's kicks come down to.
+    ///
+    /// The angle is in degrees, measured from straight up the table and turning
+    /// clockwise, which is Visual Pinball's convention and not the one a maths
+    /// library would pick.
+    ///
+    /// The **inclination** is what a flat vector loses. A saucer that ejects at
+    /// forty-five degrees is aiming the ball over something — a ramp entrance,
+    /// a wall, the row of targets in front of it — and the ball has to leave
+    /// with the vertical speed to clear it. `speedz = sin(inclination) * speed`
+    /// and the planar part scaled by `cos(inclination)`, so the total is what
+    /// the table asked for rather than that plus a climb.
+    fn kick(&self, angle_deg: f64, speed: f64, inclination: f64, offset: Vec3) -> Result<()> {
         let Some(i) = self.shape() else {
             return Err(Error::no_such_member("Kick"));
         };
-        let a = (angle_deg as f32).to_radians();
-        let v = Vec3::new(a.sin(), -a.cos(), 0.0) * speed as f32;
-        self.engine.borrow_mut().release_from_kicker(i, v);
+        let mut angle = (angle_deg as f32).to_radians();
+        let mut speed = speed as f32;
+
+        // "radians or degrees? if greater PI/2 assume degrees"
+        // (`kicker.cpp:721`). Tables are written both ways and the original
+        // guesses rather than picking one, so this has to guess with it.
+        let mut inclination = inclination as f32;
+        if inclination.abs() > std::f32::consts::FRAC_PI_2 {
+            inclination = inclination.to_radians();
+        }
+
+        let mut engine = self.engine.borrow_mut();
+        // The scatter (`kicker.cpp:720-728`). `rand_mt_m11()` gives -1..1 and
+        // the shaping `r * (1 - r²) * 2.59808` bends a flat distribution into
+        // one that clusters near the aimed angle and reaches the full scatter
+        // only rarely — a kick that misses by the maximum every other time
+        // would not be scatter, it would be a wobble.
+        if self.kick_scatter > 1.0e-5 {
+            let r = engine.random_m11();
+            angle += r * (1.0 - r * r) * 2.59808 * self.kick_scatter;
+        }
+
+        let speed_z = inclination.sin() * speed;
+        // Only when it is aimed **upwards**: the original leaves the planar
+        // speed alone for a downward kick, so a table that fires a ball down a
+        // hole does not lose the length of the shot as well.
+        if speed_z > 0.0 {
+            speed *= inclination.cos();
+        }
+
+        let v = Vec3::new(angle.sin() * speed, -angle.cos() * speed, speed_z);
+        engine.kick_from(i, v, offset);
         Ok(())
     }
 
@@ -938,9 +1243,19 @@ impl Items {
                 ));
                 visual.collidable.set(t.is_collidable);
                 // A table can be saved with a bank already knocked down.
+                // `RenderSetup` (`hittarget.cpp:557`) puts such a target at the
+                // bottom of its travel before the first frame is drawn, and
+                // `DoHitTest` skips a dropped target's colliders, so it neither
+                // shows nor blocks. Setting only the flag, which is what this
+                // did, left it standing on screen and solid to the ball.
                 visual.dropped.set(t.is_dropped);
+                if t.is_dropped {
+                    visual.drop_offset.set(-DROP_DEPTH);
+                    set_placement(&visual.rot_and_tra, 5, -f64::from(DROP_DEPTH));
+                }
             }
 
+            let (hit_event, threshold) = hit_rules(item);
             let entry = Rc::new(Item {
                 name: name.clone(),
                 kind,
@@ -950,10 +1265,19 @@ impl Items {
                 timer: item_timer(item),
                 position: item_position(item),
                 size: item_size(item),
+                hit_event,
+                threshold,
+                drop_speed: drop_speed(item),
+                raise_delay: raise_delay(item),
+                kick_scatter: kick_scatter(vpx, item),
                 visual,
                 engine: engine.clone(),
                 timers_changed: dirty.clone(),
             });
+            // A target the file saved knocked down does not collide.
+            if entry.visual.dropped.get() {
+                entry.set_collidable(false);
+            }
             // A part the file saved switched off. The shape exists either way —
             // see `physics::kicker` for why — so the state is applied here,
             // through the same switch a script would use.
@@ -1045,6 +1369,90 @@ impl Items {
     pub fn by_trigger(&self, trigger: usize) -> Option<&Rc<Item>> {
         self.all.iter().find(|i| i.trigger == Some(trigger))
     }
+}
+
+/// Whether a part raises hit events, and how hard it has to be hit.
+///
+/// The two are read together because the original reads them together: the
+/// `hitEvent` flag is what puts the part's address on the collider (`m_fe`) and
+/// the threshold is what the impact speed is measured against once it is there.
+/// A part with no flag never reports, whatever the speed.
+///
+/// The parts that are not listed are the ones the original gives neither of:
+/// a gate, a spinner, a kicker and a trigger always report, so they get `true`
+/// and a threshold of zero. The defaults for the two `Option` fields are the
+/// editor's, which is also what a file too old to carry the tag was saved with
+/// (`Settings_properties.inl:1205`, `:1206`).
+fn hit_rules(item: &vpin::vpx::gameitem::GameItemEnum) -> (bool, f32) {
+    use vpin::vpx::gameitem::GameItemEnum as G;
+    match item {
+        G::Wall(w) => (w.hit_event, w.threshold),
+        G::Ramp(r) => (r.hit_event.unwrap_or(false), r.threshold.unwrap_or(2.0)),
+        // A rubber has no threshold field at all: `Rubber::SetupHitObject`
+        // hard-codes it, with the original's own comment beside it saying so —
+        // "hard coded threshold for now" (`rubber.cpp:609`).
+        G::Rubber(r) => (r.hit_event, 2.0),
+        G::Primitive(p) => (p.hit_event, p.threshold),
+        G::HitTarget(t) => (t.use_hit_event, t.threshold),
+        // A bumper's pair is read by the physics itself, because there the flag
+        // gates the kick and not only the report (`collideex.cpp:33`). It is
+        // repeated here so the event layer agrees with the coil.
+        G::Bumper(b) => (b.hit_event.unwrap_or(true), b.threshold),
+        _ => (true, 0.0),
+    }
+}
+
+/// A drop target's slide speed, in units per millisecond (`DRSP`).
+fn drop_speed(item: &vpin::vpx::gameitem::GameItemEnum) -> f32 {
+    match item {
+        // A deliberate departure: a file that says zero is taken as the
+        // editor's default rather than at its word. The original would believe
+        // it, and a target whose slide advances by zero per millisecond never
+        // reaches the bottom — so it never sets `IsDropped`, never fires
+        // `Dropped` and never stops colliding. On a ROM table that is a bank
+        // that can never be completed, from one bad number, silently.
+        vpin::vpx::gameitem::GameItemEnum::HitTarget(t) if t.drop_speed > 0.0 => t.drop_speed,
+        vpin::vpx::gameitem::GameItemEnum::HitTarget(_) => 0.2,
+        _ => 0.0,
+    }
+}
+
+/// How long a raised target waits before it starts coming up (`RADE`), in
+/// milliseconds. The editor's default is a tenth of a second.
+fn raise_delay(item: &vpin::vpx::gameitem::GameItemEnum) -> f32 {
+    match item {
+        vpin::vpx::gameitem::GameItemEnum::HitTarget(t) => t.raise_delay.unwrap_or(100) as f32,
+        _ => 0.0,
+    }
+}
+
+/// A kicker's kick scatter in radians, weighted by the table's difficulty.
+///
+/// `kicker.cpp:725-726`:
+///
+/// ```cpp
+/// float scatterAngle = (m_d.m_scatter < 0.0f) ? c_hardScatter : ANGTORAD(m_d.m_scatter);
+/// scatterAngle *= m_ptable->m_globalDifficulty;
+/// ```
+///
+/// A negative `KSCT` means "use the table's own default scatter", which is
+/// `c_hardScatter = ANGTORAD(m_defaultScatter)` (`player.cpp:197`). The
+/// difficulty weighting is the reason a table set to its easiest ejects the
+/// same way every time and one set hard does not: at difficulty zero the whole
+/// term vanishes, which is the default and therefore the common case.
+fn kick_scatter(vpx: &VPX, item: &vpin::vpx::gameitem::GameItemEnum) -> f32 {
+    let vpin::vpx::gameitem::GameItemEnum::Kicker(k) = item else {
+        return 0.0;
+    };
+    let base = if k.scatter < 0.0 {
+        vpx.gamedata.default_scatter
+    } else {
+        k.scatter
+    };
+    // The original keeps the difficulty as a fraction and only multiplies by a
+    // hundred for the script (`pintable.cpp:6373`); a file that stored a
+    // percentage would otherwise scale the scatter a hundredfold.
+    base.to_radians() * vpx.gamedata.global_difficulty.clamp(0.0, 1.0)
 }
 
 fn item_name(item: &vpin::vpx::gameitem::GameItemEnum) -> &str {

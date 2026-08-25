@@ -8,7 +8,7 @@ use vpw_math::{Vec2, Vec3};
 use vpw_physics::ball::Ball;
 use vpw_physics::collision::{CollisionEvent, Material};
 use vpw_physics::constants::DEFAULT_BALL_SIZE;
-use vpw_physics::parts::{Bumper, Gate, Kicker, PivotAxis, Spinner};
+use vpw_physics::parts::{Bumper, Gate, Kicker, KickerHit, PivotAxis, Spinner};
 use vpw_physics::shapes::HitCircle;
 
 const R: f32 = DEFAULT_BALL_SIZE;
@@ -463,9 +463,9 @@ fn a_kicker_captures_a_ball_that_falls_inside() {
     let mut b = Ball::new(Vec3::new(5.0, 5.0, 10.0), R); // nicely sunk in
     b.vel = Vec3::new(3.0, 0.0, -2.0);
 
-    let grabbed = k.try_capture(&mut b, 0);
+    let grabbed = k.take_ball(&mut b, 0);
 
-    assert!(grabbed, "it should capture it");
+    assert_eq!(grabbed, KickerHit::Captured, "it should capture it");
     assert!(b.locked, "and the ball comes to a stop");
     assert_eq!(b.vel, Vec3::ZERO);
     assert_eq!(k.captured, Some(0));
@@ -481,7 +481,11 @@ fn a_ball_that_passes_over_the_top_is_not_captured() {
     let mut b = Ball::new(Vec3::new(0.0, 0.0, 200.0), R);
     b.vel = Vec3::new(50.0, 0.0, 0.0);
 
-    assert!(!k.try_capture(&mut b, 0), "it passes over the top");
+    assert_eq!(
+        k.take_ball(&mut b, 0),
+        KickerHit::Passed,
+        "it passes over the top"
+    );
     assert!(!b.locked);
 }
 
@@ -491,8 +495,12 @@ fn a_kicker_with_a_ball_inside_does_not_capture_another() {
     let mut a = Ball::new(Vec3::new(0.0, 0.0, 10.0), R);
     let mut b = Ball::new(Vec3::new(0.0, 0.0, 10.0), R);
 
-    assert!(k.try_capture(&mut a, 0));
-    assert!(!k.try_capture(&mut b, 1), "it already has one inside");
+    assert_eq!(k.take_ball(&mut a, 0), KickerHit::Captured);
+    assert_eq!(
+        k.take_ball(&mut b, 1),
+        KickerHit::Passed,
+        "it already has one inside"
+    );
     assert!(!b.locked);
     // And it stops detecting hits while it is busy.
     assert!(k.hit_test(&b, 1.0).is_none());
@@ -502,11 +510,195 @@ fn a_kicker_with_a_ball_inside_does_not_capture_another() {
 fn releasing_puts_the_ball_back_in_play() {
     let mut k = Kicker::new(circle(30.0, 0.3), 0.7, false);
     let mut b = Ball::new(Vec3::new(0.0, 0.0, 10.0), R);
-    k.try_capture(&mut b, 0);
+    k.take_ball(&mut b, 0);
 
     k.release(&mut b, Vec3::new(0.0, -100.0, 0.0));
 
     assert!(!b.locked, "it moves again");
     assert!(b.vel.y < 0.0, "with the velocity it was given");
     assert_eq!(k.captured, None, "and the kicker is free again");
+}
+
+// ---------------------------------------------- what the file switches on ---
+
+/// A bumper the table marks as having no hit event is a round post.
+///
+/// The flag does not merely silence the script: `BumperHitCircle::Collide`
+/// (`collideex.cpp:33`) puts it in the same condition as the threshold, so the
+/// coil never fires either. Reading it as "report or not" leaves a decorative
+/// bumper flinging the ball back out of a lane it was meant to roll down.
+#[test]
+fn a_bumper_with_no_hit_event_bounces_the_ball_but_does_not_kick_it() {
+    let mut dead = Bumper::new(circle(45.0, 0.5), 20.0, 1.0);
+    dead.hit_event = false;
+    let mut b = incoming_ball(-30.0);
+    let before = b.vel.length();
+
+    let fired = dead.collide(&mut b, &contact(), 0.0);
+
+    assert!(!fired, "the coil should not fire");
+    assert!(
+        b.vel.length() < before,
+        "and it should come off no faster than it arrived: {before:.1} -> {:.1}",
+        b.vel.length()
+    );
+}
+
+/// `Gate.Open = True` has to do three things, and setting a flag is one.
+///
+/// `Gate::put_Open` (`gate.cpp:736`) also switches the leaf off and gives it an
+/// angular speed so it swings. Without the speed the gate is drawn shut for as
+/// long as the script holds it open, and without the leaf going quiet it still
+/// stops the ball.
+#[test]
+fn opening_a_gate_switches_the_leaf_off_and_starts_it_swinging() {
+    let mut g = gate(false);
+    assert!(g.enabled, "it starts collidable");
+
+    g.set_open(true);
+
+    assert!(g.open);
+    assert!(!g.enabled, "an open gate does not collide");
+    assert!(g.angle_speed > 0.0, "and it swings up");
+    assert!(g.forced_move, "under the script's control, not a ball's");
+
+    // Left to itself it reaches the stop and stays there, because gravity is
+    // switched off while it is held open.
+    for _ in 0..2000 {
+        g.update_velocities();
+        g.update_displacements(1.0);
+    }
+    assert!(
+        (g.angle - g.angle_max).abs() < 1e-3,
+        "it should be standing at its open limit, it is at {}",
+        g.angle
+    );
+}
+
+/// And closing it puts the leaf back to what the **file** said.
+///
+/// Not to whatever a script last wrote through `Collidable`: `put_Collidable`
+/// deliberately leaves `m_d.m_collidable` alone once the player is running, so
+/// `Open = False` restores the file's value (`gate.cpp:753`).
+#[test]
+fn closing_a_gate_puts_the_leaf_back_to_what_the_file_declared() {
+    let mut g = gate(false);
+    g.collidable = false; // a file that ships the gate non-collidable
+    g.enabled = false;
+
+    g.set_open(true);
+    // Let it get off the stop first: `put_Open(false)` only kicks the leaf
+    // downwards `if (m_angle > m_angleMin)` (`gate.cpp:757`), so a gate opened
+    // and closed in the same breath has nowhere to swing back from.
+    for _ in 0..200 {
+        g.update_velocities();
+        g.update_displacements(1.0);
+    }
+    assert!(g.angle > g.angle_min, "it is off its stop");
+
+    g.set_open(false);
+
+    assert!(!g.open);
+    assert!(
+        !g.enabled,
+        "the file said it does not collide, and it does not"
+    );
+    assert!(g.angle_speed < 0.0, "it swings back down");
+}
+
+/// `OpenAngle` and `CloseAngle` are clamped against the file's limits.
+///
+/// Against the file's and not against the live pair (`gate.cpp:150`, `:171`).
+/// Clamping against the live pair would make the limits a ratchet: every write
+/// would narrow what the next one is allowed to ask for, and a gate a table
+/// works on a timer would close on itself.
+#[test]
+fn a_gates_angles_are_clamped_against_the_limits_the_file_declared() {
+    let mut g = gate(false);
+    let max = g.angle_max;
+
+    g.set_open_angle(10.0); // far past the limit
+    assert!(
+        (g.angle_max - max).abs() < 1e-6,
+        "clamped to the file's maximum"
+    );
+
+    g.set_open_angle(max * 0.5);
+    assert!(
+        (g.angle_max - max * 0.5).abs() < 1e-6,
+        "and narrowed on request"
+    );
+
+    // The file's pair is untouched, so it can be widened again.
+    g.set_open_angle(max);
+    assert!((g.angle_max - max).abs() < 1e-6, "and widened again");
+}
+
+/// `Move` takes the gate out of the physics for as long as it runs.
+#[test]
+fn moving_a_gate_turns_its_collision_and_its_natural_swing_off() {
+    let mut g = gate(false);
+
+    let dir = g.move_toward(1, 90.0, 0.0);
+
+    assert_eq!(dir, 1);
+    assert!(!g.enabled, "a moved gate does not collide");
+    assert!(g.open, "and gravity does not pull it back");
+    assert!(g.angle_speed > 0.0);
+}
+
+/// A fall-through kicker is a hole, not a saucer.
+///
+/// `kicker.cpp:1148` reads `FATH` as `lockedInKicker = !fallThrough`, and
+/// `:1177` drops the ball to `zlow - radius - 5`. Holding it instead parks the
+/// ball in plain sight for ever, and the ROM waiting for its drain switch to
+/// open never serves the next one.
+#[test]
+fn a_fall_through_kicker_drops_the_ball_below_the_playfield() {
+    let mut k = Kicker::new(circle(30.0, 0.3), 0.7, false).with_fall_through(true);
+    let mut b = Ball::new(Vec3::new(5.0, 5.0, 10.0), R);
+    b.vel = Vec3::new(3.0, 0.0, -2.0);
+
+    let outcome = k.take_ball(&mut b, 0);
+
+    assert_eq!(outcome, KickerHit::FellThrough);
+    assert!(!b.locked, "it is not held");
+    assert_eq!(k.captured, None, "and the hole is not holding anything");
+    assert!(
+        b.pos.z < k.circle.z_low,
+        "it is under the playfield, it is at z {}",
+        b.pos.z
+    );
+    assert_eq!(b.vel, Vec3::ZERO);
+    // And it is out of the hole's volume, so it raises no `Unhit` later.
+    assert!(!k.contains(&b));
+}
+
+/// A saucer is a switch: it closes when the ball arrives and opens when the
+/// ball has gone.
+///
+/// `kicker.cpp:1189` is the only place in the whole original where something
+/// that is not a trigger fires `Unhit`. A ROM whose saucer is wired
+/// `swNN_Hit` / `swNN_UnHit` and never sees the second one keeps the switch
+/// closed for ever and re-energises the eject coil at an empty hole.
+#[test]
+fn a_kicker_reports_the_ball_leaving_but_not_before_it_has_left() {
+    let mut k = Kicker::new(circle(30.0, 0.3), 0.7, false);
+    let mut b = Ball::new(Vec3::new(0.0, 0.0, 10.0), R);
+    assert_eq!(k.take_ball(&mut b, 0), KickerHit::Captured);
+
+    assert!(
+        !k.check_exit(0, &b),
+        "sitting in the hole is not leaving it"
+    );
+
+    k.release(&mut b, Vec3::new(0.0, -100.0, 0.0));
+    assert!(
+        !k.check_exit(0, &b),
+        "nor is the instant the coil fires: the ball is still in the hole"
+    );
+
+    b.pos.y = -200.0; // well clear of it
+    assert!(k.check_exit(0, &b), "now it has gone");
+    assert!(!k.check_exit(0, &b), "and it only says so once");
 }

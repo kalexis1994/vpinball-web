@@ -19,7 +19,27 @@ pub const PHYS_FACTOR: f32 = (PHYSICS_STEPTIME_S / DEFAULT_STEPTIME_S) as f32;
 
 // --- Table defaults ----------------------------------------------------------
 
+/// What a table's gravity setting defaults to, as a **multiple of Earth's**.
+///
+/// `m_Gravity = 0.97f * GRAVITYCONST` (`pintable.cpp:3833`), and the file
+/// stores the product, not this. So this number is not an acceleration and
+/// must never be handed to anything that wants one — see
+/// [`DEFAULT_TABLE_GRAVITY_VPU`].
 pub const DEFAULT_TABLE_GRAVITY: f32 = 0.97;
+
+/// The same, as the acceleration the ball actually falls at, in VPU per VP
+/// time unit squared.
+///
+/// The original's `SetGravity(slope, strength)` (`PhysicsEngine.cpp:104`) takes
+/// the product and nothing else. Handing it the bare 0.97 instead — which is
+/// what this port did — makes every table on earth 1.82 times too floaty, and
+/// the arithmetic says so plainly: a ball dropped fifty VP units, which is one
+/// ball diameter, or twenty-seven millimetres, takes 101 ms at 0.97 and 75 ms
+/// at this. Seventy-five is what a real one takes.
+///
+/// A table's own number is read from the file and used in preference; this is
+/// only what a table that does not say gets.
+pub const DEFAULT_TABLE_GRAVITY_VPU: f32 = DEFAULT_TABLE_GRAVITY * GRAVITYCONST;
 pub const DEFAULT_TABLE_CONTACTFRICTION: f32 = 0.075;
 pub const DEFAULT_TABLE_SCATTERANGLE: f32 = 0.5;
 pub const DEFAULT_TABLE_ELASTICITY: f32 = 0.25;

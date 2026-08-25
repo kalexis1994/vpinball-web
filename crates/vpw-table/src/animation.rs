@@ -26,8 +26,7 @@
 //! file's gameitems exactly once, pushing shapes as it goes, so the nth
 //! `Shape::Flipper` is the nth flipper in the file — of those that passed the
 //! physics filter, which is not the same as the drawing one. A disabled flipper
-//! produces no shape but may have a visible mesh, and neither does a gate
-//! without collision.
+//! produces no shape but may still have a visible mesh.
 //!
 //! That is why each kind filters the gameitems with **the same predicate the
 //! physics uses** before pairing them up, and only then decides whether it is
@@ -127,9 +126,18 @@ impl AnimatedPart {
                 _ => Mat4::IDENTITY,
             },
             // The physics angle grows towards the side the ball pushes the gate
-            // from, and in the mesh's frame that is a **negative** turn in x.
+            // from, and on a one-way gate that is a **negative** turn in x.
+            //
+            // A two-way one turns the other way: `gate.cpp:429` builds the
+            // matrix as `MatrixRotateX(twoWay ? angle : -angle)`. It is not a
+            // sign convention anyone would guess from the physics, and the
+            // difference shows: a two-way wire's angle swings either side of
+            // zero, so negating it dips the leaf **below** the playfield on
+            // every hit from the side the file calls positive.
             Animation::Gate { shape: i } => match shape(i) {
-                Some(Shape::Gate(g)) => Mat4::from_rotation_x(-g.angle),
+                Some(Shape::Gate(g)) => {
+                    Mat4::from_rotation_x(if g.two_way { g.angle } else { -g.angle })
+                }
                 _ => Mat4::IDENTITY,
             },
             Animation::Spinner { shape: i } => match shape(i) {
@@ -326,8 +334,14 @@ fn moving_rubbers(vpx: &VPX, out: &mut Vec<AnimatedPart>) {
 
 fn gates(vpx: &VPX, shapes: &[Shape], out: &mut Vec<AnimatedPart>) {
     let shape_indices = indices_of(shapes, |s| matches!(s, Shape::Gate(_)));
+    // Every gate in the file, with no filter: `physics::gate` builds a leaf for
+    // each one whether it collides or not, and this pairing is by order. It
+    // used to skip the non-collidable ones on both sides, which agreed with
+    // itself but not with the original — and a table's decorative gate was
+    // drawn nailed shut while the collidable one after it in the file borrowed
+    // its angle.
     let items = vpx.gameitems.iter().filter_map(|i| match i {
-        GameItemEnum::Gate(g) if g.is_collidable => Some(g),
+        GameItemEnum::Gate(g) => Some(g),
         _ => None,
     });
 

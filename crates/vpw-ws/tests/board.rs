@@ -148,6 +148,7 @@ fn the_coils_are_four_bytes_of_them() {
     let mut b = Board::new();
     b.write(0x2001, 0b0000_0001);
     b.write(0x2003, 0b1000_0000);
+    b.solenoids.end_sweep(false);
     assert!(b.solenoids.is_on(1));
     assert!(b.solenoids.is_on(32));
     assert!(!b.solenoids.is_on(2));
@@ -165,6 +166,77 @@ fn a_pulse_shorter_than_a_frame_is_still_reported() {
     assert_eq!(b.solenoids.live(), 0, "it is over");
     assert_eq!(b.solenoids.take_seen() & 0b10, 0b10, "it still happened");
     assert_eq!(b.solenoids.take_seen(), 0, "and only once");
+}
+
+/// The half of that which was missing: the accumulator existed and nothing
+/// closed a sweep on it, so what a script read was the live latch and a coil
+/// pulse that fell between two polls simply never happened. Pop bumpers,
+/// kickers and the trough eject that fire "sometimes" are all this.
+#[test]
+fn a_coil_that_pulsed_between_sweeps_is_what_the_script_reads() {
+    let mut b = Board::new();
+    b.write(0x2001, 0b0000_0010); // coil 2 on
+    b.write(0x2001, 0b0000_0000); // and off again, in the same sweep
+    assert_eq!(b.solenoids.live(), 0, "the latch has already forgotten");
+    assert!(!b.solenoids.is_on(2), "and no sweep has closed yet");
+
+    b.solenoids.end_sweep(false);
+    assert!(b.solenoids.is_on(2), "the sweep saw it");
+    b.solenoids.end_sweep(false);
+    assert!(!b.solenoids.is_on(2), "and the next one does not repeat it");
+}
+
+/// `se_solenoid_w` (`se.c:666`) pulls the top two bits of `$2000` — coils 16
+/// and 15 — out of the word entirely and reports them as solenoids 45 and 47.
+/// A table's script drives its flippers from those numbers and would otherwise
+/// be watching two coils that mean nothing to it.
+#[test]
+fn the_flipper_power_coils_are_moved_to_forty_five_and_forty_seven() {
+    let mut b = Board::new();
+    b.write(0x2000, 0b1100_0000);
+    b.solenoids.end_flipper_window();
+    b.solenoids.end_sweep(false);
+
+    assert!(b.solenoids.is_on(45), "bit 7 is coil 16, the right flipper");
+    assert!(b.solenoids.is_on(47), "bit 6 is coil 15, the left flipper");
+    // And the two hold outputs the board does not have answer for their power
+    // outputs, which is what `core_getSol` does (`core.c:2209`) and what the
+    // script actually watches: `sLRFlipper` is 46 and `sLLFlipper` is 48.
+    assert!(b.solenoids.is_on(46));
+    assert!(b.solenoids.is_on(48));
+    // They are gone from the thirty-two: `sols &= 0xffff3fff`.
+    assert!(!b.solenoids.is_on(15));
+    assert!(!b.solenoids.is_on(16));
+    assert_eq!(b.solenoids.live() & 0xc000, 0);
+    // But a ROM reading the port back is told what it wrote (`se.c:680`).
+    assert_eq!(b.read(0x2000), 0b1100_0000);
+}
+
+/// Solenoid 15 is free because the left flipper's power output moved to 47,
+/// and the original reuses it for the fast-flips flag — a byte of CPU RAM the
+/// game sets while the flippers are live (`se.c:185`). `sega.vbs:23` calls it
+/// `GameOnSolenoid`, and `vpmFlips` polls it to decide whether a flipper key
+/// does anything at all, so a machine without it plays perfectly and cannot be
+/// flipped.
+#[test]
+fn solenoid_fifteen_is_the_fast_flips_flag() {
+    let mut b = Board::new();
+    b.fast_flip_addr = Some(0x0004);
+    b.write(0x0004, 0);
+    assert!(!b.fast_flips());
+    b.solenoids.end_sweep(b.fast_flips());
+    assert!(!b.solenoids.is_on(15));
+
+    b.write(0x0004, 192); // what the games are found to write
+    assert!(b.fast_flips());
+    b.solenoids.end_sweep(b.fast_flips());
+    assert!(b.solenoids.is_on(15));
+
+    // A game whose address nobody has looked up gets nothing rather than a
+    // guess, which is what the original does with `fastflipaddr == 0`.
+    let mut b = Board::new();
+    b.write(0x0004, 192);
+    assert!(!b.fast_flips());
 }
 
 #[test]
@@ -245,14 +317,103 @@ fn the_coin_slots_land_where_the_script_library_says() {
 }
 
 #[test]
-fn sixty_four_switches_and_no_more() {
+fn the_numbering_reaches_below_one_and_above_sixty_four() {
+    // `core_swSeq2m(n) = n + 7` (`core.c:2108`) is a plain offset, not a range
+    // check, and both ends of what it reaches are switches a table uses: the
+    // coin door below and the cabinet's flipper buttons above. A matrix that
+    // holds only 1 to 64 drops all of them, silently, and what that costs is a
+    // machine you cannot flip, cannot give a service credit and cannot get
+    // into the service menu.
     let mut b = Board::new();
     assert!(b.switches.set(1, true));
     assert!(b.switches.set(64, true));
-    assert!(!b.switches.set(0, true), "there is no switch zero");
-    assert!(!b.switches.set(65, true), "the matrix stops at sixty-four");
+    assert!(b.switches.set(0, true), "switch zero is the black button");
+    assert!(b.switches.set(-3, true), "and -3 is memory protect");
+    assert!(b.switches.set(84, true), "84 is the left flipper button");
     assert!(b.switches.is_closed(1));
     assert!(b.switches.is_closed(64));
+    assert!(b.switches.is_closed(0));
+    assert!(b.switches.is_closed(-3));
+    assert!(b.switches.is_closed(84));
+    // Twelve columns of eight, offset by seven: -7 to 88 and nothing else.
+    assert!(!b.switches.set(-8, true));
+    assert!(!b.switches.set(89, true));
+}
+
+/// The flipper buttons, which is the item this whole numbering exists for.
+///
+/// They are switches 81 to 84 in the cabinet column, `CORE_FLIPPERSWCOL`
+/// (`core.h:334`), and `dedswitch_r` folds that column into the low five bits
+/// of `$3000` with its low nybble **reversed** (`se.c:648`).
+#[test]
+fn the_flipper_buttons_arrive_in_the_dedicated_byte() {
+    // `sega.vbs:36`: swLRFlip 82, swLLFlip 84, swURFlip 81, swULFlip 83.
+    // `se.c:641`: D0 left flipper, D1 left EOS, D2 right flipper, D3 right EOS.
+    for (number, bit) in [(84, 0), (83, 1), (82, 2), (81, 3)] {
+        let mut b = Board::new();
+        assert!(b.switches.set(number, true), "switch {number} exists");
+        assert_eq!(
+            b.read(0x3000),
+            !(1u8 << bit),
+            "switch {number} should be bit {bit} of $3000, active low"
+        );
+    }
+    let mut b = Board::new();
+    assert_eq!(b.read(0x3000), 0xff, "nothing pressed is all ones");
+}
+
+/// The three buttons behind the coin door and the memory protect switch, which
+/// `sega.vbs` numbers 0, -1, -2 and -3 (`se.h:70`). They are not a special case
+/// in the board — `n + 7` puts them in column 0 at bits 7 down to 4, which is
+/// exactly where `dedswitch_r` reads them.
+#[test]
+fn the_coin_doors_buttons_are_switches_zero_and_below() {
+    for (number, bit) in [(0, 7), (-1, 6), (-2, 5)] {
+        let mut b = Board::new();
+        assert!(b.switches.set(number, true));
+        assert_eq!(
+            b.read(0x3000),
+            !(1u8 << bit),
+            "switch {number} should be bit {bit} of $3000"
+        );
+    }
+    // Memory protect is the fourth of them and the one the port does not
+    // report: bit 4 is "unused" in the dedicated byte (`se.c:641`).
+    let mut b = Board::new();
+    assert!(b.switches.set(-3, true));
+    assert!(b.switches.memory_protect());
+    assert_eq!(b.read(0x3000), 0xff, "it is not one of the buttons");
+}
+
+/// `core_getSwCol` (`core.c:2122`) walks to the **lowest** set bit and returns
+/// that column alone. ORing every selected column instead reports switches on
+/// columns the ROM is not looking at, which during the switch test reads as
+/// targets hitting themselves.
+#[test]
+fn a_strobe_with_several_bits_selects_only_the_lowest() {
+    let mut b = Board::new();
+    b.switches.set(1, true); // column 1, bit 0
+    b.switches.set(9, true); // column 2, bit 0
+    b.write(0x3300, 0b0000_0011);
+    assert_eq!(
+        b.read(0x3400),
+        !0b0000_0001,
+        "columns 1 and 2 both selected answers column 1"
+    );
+    b.write(0x3300, 0b0000_0010);
+    assert_eq!(b.read(0x3400), !0b0000_0001, "column 2 on its own");
+}
+
+#[test]
+fn a_zero_strobe_answers_column_one_and_not_all_open() {
+    // `core_getSwCol` starts its walk at column 1 and only moves off it when
+    // there is a bit to move for, so a zero strobe reads column 1 rather than
+    // an open matrix. It matters at power-up, before the ROM has written a
+    // strobe at all.
+    let mut b = Board::new();
+    b.switches.set(1, true);
+    b.write(0x3300, 0);
+    assert_eq!(b.read(0x3400), !0b0000_0001);
 }
 
 #[test]
@@ -277,11 +438,13 @@ fn the_solenoid_bytes_are_not_in_address_order() {
     // ones rather than none.
     let mut b = Board::new();
     b.write(0x2001, 1);
+    b.solenoids.end_sweep(false);
     assert!(b.solenoids.is_on(1), "$2001 bit 0 is coil 1");
     assert!(!b.solenoids.is_on(9));
 
     let mut b = Board::new();
     b.write(0x2000, 1);
+    b.solenoids.end_sweep(false);
     assert!(b.solenoids.is_on(9), "$2000 bit 0 is coil 9");
     assert!(!b.solenoids.is_on(1));
 }
@@ -345,4 +508,106 @@ fn the_general_illumination_relay_is_on_when_the_bit_is_low() {
     assert!(b.gi_relay, "bit low is the relay closed");
     b.write(0x200b, 0x01);
     assert!(!b.gi_relay);
+}
+
+// ------------------------------------------------------ the rest of the ports ---
+
+/// `dip_r` answers the **complement** of the switches (`se.c:659`). Reading
+/// them straight through is invisible on a board with none set — both give
+/// `0xff` — and reverses every country setting the moment one is.
+#[test]
+fn the_dip_port_answers_the_complement_of_the_switches() {
+    let mut b = Board::new();
+    assert_eq!(b.dips, 0x00, "an untouched board has none of them on");
+    assert_eq!(b.read(0x3100), 0xff);
+    b.dips = 0b0000_0101;
+    assert_eq!(b.read(0x3100), 0b1111_1010);
+}
+
+/// `$3406` and `$3407` are lamp columns 10 and 11 — lamps 81 to 96 — whatever
+/// the "general illumination" in the memory map says: `gilamp_w` writes
+/// `tmpLampMatrix[10 + offset]` (`se.c:628`). Keeping them in a byte no lamp
+/// reader sees leaves a game's last two banks of lamps dark for ever.
+#[test]
+fn the_ports_at_3406_are_lamp_columns_and_not_general_illumination() {
+    let mut b = Board::new();
+    b.write(0x3406, 0b0000_0101);
+    b.write(0x3407, 0b1000_0000);
+    assert!(b.lamps.is_lit(81), "column 10 row 1 is lamp 81");
+    assert!(b.lamps.is_lit(83));
+    assert!(!b.lamps.is_lit(82));
+    assert!(b.lamps.is_lit(96), "column 11 row 8 is lamp 96");
+    // And the ROM reads them back out of the same place (`gilamp_r`).
+    assert_eq!(b.read(0x3406), 0b0000_0101);
+    assert_eq!(b.read(0x3407), 0b1000_0000);
+    // Latched, not strobed: the original never clears columns 10 and up
+    // between sweeps (`se.c:161`).
+    b.lamps.end_window();
+    b.lamps.end_window();
+    assert!(b.lamps.is_lit(81));
+}
+
+/// `auxboard_r` (`se.c:775`) answers `0x40` while DSTB — bit 5 of the strobe
+/// latch at `$200b` — is low, which is the Tournament Serial Board's DUART
+/// saying it is ready. A game with no TSIB never pulls DSTB low, so on the
+/// games here this only ever shows up at power-up, when the latch is zero.
+#[test]
+fn the_aux_port_answers_the_duart_while_dstb_is_low() {
+    let mut b = Board::new();
+    b.write(0x2006, 0x5a);
+    assert_eq!(b.read(0x2007), 0x40, "DSTB is low out of reset");
+    b.write(0x200b, 0x20);
+    assert_eq!(b.read(0x2007), 0x5a, "DSTB high is the latch");
+}
+
+/// `ram_w` refuses writes above `0x1E00` while the coin door's memory protect
+/// switch is set (`se.c:589`). That is where the audits and the high scores
+/// live, and the switch is what stops an operator with the door open from
+/// wiping them.
+#[test]
+fn memory_protect_write_protects_the_top_of_the_nvram() {
+    let mut b = Board::new();
+    b.write(0x1e00, 0x11);
+    b.write(0x1dff, 0x22);
+    b.switches.set(-3, true); // swMemoryProtect
+    b.write(0x1e00, 0x99);
+    b.write(0x1fff, 0x99);
+    b.write(0x1dff, 0x33);
+    assert_eq!(b.read(0x1e00), 0x11, "protected");
+    assert_eq!(b.read(0x1dff), 0x33, "below the line, still writable");
+    b.switches.set(-3, false);
+    b.write(0x1e00, 0x99);
+    assert_eq!(b.read(0x1e00), 0x99);
+}
+
+/// `NVRAM_HANDLER(se)` fills a virgin CMOS with `0xff`, not zero
+/// (`se.c:1187`). The ROM checksums this, so a board that powers up all-zeroes
+/// is a board making a different decision about its own defaults than a real
+/// one would.
+#[test]
+fn a_virgin_nvram_is_all_ones() {
+    let b = Board::new();
+    assert!(b.ram().iter().all(|&v| v == 0xff));
+}
+
+/// `dmdstatus_r` is one port fed by two boards (`se.c:752`): the display's busy
+/// line and four status bits, and SSTO from the *sound* board in bit 1.
+#[test]
+fn the_status_byte_carries_the_sound_boards_ssto_line() {
+    let mut b = Board::new();
+    b.dmd_status = 0x80;
+    assert_eq!(b.read(0x3700), 0x80);
+    b.sound_sst0 = true;
+    assert_eq!(b.read(0x3700), 0x82);
+}
+
+/// `$3500` is `dmdie_r`, the sound board's PLIN latch (`se.c:763`) — named for
+/// a plasma display the design never had, and nothing to do with a DMD
+/// interrupt enable.
+#[test]
+fn the_port_at_3500_is_the_sound_boards_latch() {
+    let mut b = Board::new();
+    assert_eq!(b.read(0x3500), 0);
+    b.sound_plin = 0xa5;
+    assert_eq!(b.read(0x3500), 0xa5);
 }

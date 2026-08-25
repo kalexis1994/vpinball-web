@@ -89,11 +89,30 @@ fn one_bright_light(intensity: f32, alpha: f32) -> Scene {
         color: [1.0, 1.0, 1.0],
         color2: [1.0, 1.0, 1.0],
         state: 1.0,
+        blinking: false,
+        is_bulb: false,
+        transmission_scale: 0.5,
         modulate: 0.0,
+        // No fade: these tests render one frame and compare it against
+        // another, and a lamp that spent that frame ramping up would be
+        // measuring the ramp.
+        fader: vpw_table::light::Fader::None,
+        fade_up: 0.2,
+        fade_down: 0.2,
+        blink: vec![true],
+        blink_interval: 125.0,
     };
 
     Scene {
         meshes: vec![floor],
+        // Nothing here rolls a ball, so the numbers the table would give the
+        // physics are the engine's own.
+        physics: vpw_table::geometry::TablePhysics {
+            slope_deg: 6.0,
+            gravity: 0.0,
+            default_scatter_deg: 0.0,
+            difficulty: 0.0,
+        },
         materials: vec![vpw_table::geometry::Material {
             name: "floor".into(),
             base_color: [0.05, 0.05, 0.05],
@@ -277,10 +296,27 @@ fn the_lamp_itself_stays_lit() {
 fn a_translucent_surface_lets_the_lamp_through() {
     let Some(mut gpu) = gpu() else { return };
 
+    // A bulb light, because the transmitted-light buffer takes bulb lights and
+    // only bulb lights: the original leaves `Light::Render` before drawing
+    // anything at all for a classic one (`light.cpp:600`). A classic insert is
+    // artwork lit from behind, and light does not come *out* of the playfield
+    // where one is.
+    let bulb = |alpha| {
+        let mut scene = one_bright_light(6.0, alpha);
+        for l in &mut scene.lights {
+            l.is_bulb = true;
+            // What `build` would clamp a bulb's blend to: zero disables the
+            // blend outright (`light.cpp:830`).
+            l.modulate = 0.0001;
+            l.transmission_scale = 1.0;
+        }
+        scene
+    };
+
     // No bloom in either, so nothing but the transmission can account for a
     // difference in the ring.
-    let opaque = shoot(&mut gpu, &one_bright_light(6.0, 1.0), 0.0);
-    let clear = shoot(&mut gpu, &one_bright_light(6.0, 0.6), 0.0);
+    let opaque = shoot(&mut gpu, &bulb(1.0), 0.0);
+    let clear = shoot(&mut gpu, &bulb(0.6), 0.0);
 
     let (a, b) = (ring(&opaque), ring(&clear));
     assert!(

@@ -65,6 +65,17 @@ const FIRQ_HOLD_CYCLES: u64 = 4;
 /// thirty times a second. See [`io::Lamps`].
 pub const WINDOW_HZ: u32 = 60;
 
+/// How many of those windows make one sweep of the solenoids.
+///
+/// Four, so 15 Hz. The original runs its vblank at 120 Hz and reports the
+/// coils every `VBLANK * SE_SOLSMOOTH` = 8 of them (`se.c:57`, `se.c:181`),
+/// which is the same number arrived at from the other side. It is slow on
+/// purpose: what it reports is the **OR** of everything driven since the last
+/// one, so a coil pulse far shorter than the interval still gets seen. Report
+/// the live latch instead and the pop bumpers, the kickers and the trough
+/// eject all fire "sometimes" — whenever the pulse happens to straddle a poll.
+const SOL_WINDOWS: u64 = 4;
+
 /// A Whitestar machine.
 pub struct Whitestar {
     pub cpu: Cpu,
@@ -78,6 +89,8 @@ pub struct Whitestar {
     next_firq: u64,
     firq_until: u64,
     next_sweep: u64,
+    /// Windows closed, to tell the 60 Hz half of the sweep from the 15 Hz one.
+    windows: u64,
     /// How many FIRQs have been raised, for finding out whether the board is
     /// taking them at all.
     pub firqs: u64,
@@ -97,6 +110,7 @@ impl Whitestar {
             next_firq: u64::from(CPU_CLOCK_HZ / FIRQ_HZ),
             firq_until: 0,
             next_sweep: u64::from(CPU_CLOCK_HZ / WINDOW_HZ),
+            windows: 0,
             firqs: 0,
         }
     }
@@ -174,6 +188,7 @@ impl Whitestar {
         self.next_firq = u64::from(CPU_CLOCK_HZ / FIRQ_HZ);
         self.firq_until = 0;
         self.next_sweep = u64::from(CPU_CLOCK_HZ / WINDOW_HZ);
+        self.windows = 0;
     }
 
     pub fn cycle(&self) -> u64 {
@@ -203,6 +218,10 @@ impl Whitestar {
                 sound.send(self.board.sound_latch);
             }
             sound.catch_up(self.cycle);
+            // And it answers back on two lines the CPU board reads as ports:
+            // PLIN at `$3500` and SSTO in bit 1 of `$3700` (`se.c:734`).
+            self.board.sound_plin = sound.plin();
+            self.board.sound_sst0 = sound.sst0();
         }
 
         // The display board runs on its own 2 MHz clock, which is this one's,
@@ -212,12 +231,11 @@ impl Whitestar {
         // those are levels that survive being read a few microseconds late.
         if let Some(display) = &mut self.dmd {
             if std::mem::take(&mut self.board.dmd_data_pending) {
-                display.set_data(self.board.dmd_latch);
-                // The CPU board strobes it in with a low-then-high pulse, which
-                // is what `dmdlatch_w` does (`se.c:725`).
-                display.set_ctrl(self.board.dmd_ctrl & !1);
-                display.set_ctrl(self.board.dmd_ctrl | 1);
-                self.board.dmd_ctrl |= 1;
+                // Data, then the control lines to a literal 0 and a literal 1.
+                // See [`dmd::Dmd::latch`] — the literals are what gives the
+                // display board its one reset pulse.
+                display.latch(self.board.dmd_latch);
+                self.board.dmd_ctrl = 1;
             }
             if let Some(ctrl) = self.board.dmd_ctrl_pending.take() {
                 display.set_ctrl(ctrl);
@@ -231,6 +249,17 @@ impl Whitestar {
         // fraction of it read as lit at all. See [`WINDOW_HZ`].
         if self.cycle >= self.next_sweep {
             self.board.lamps.end_window();
+            // The flipper power outputs get their own window at this rate, and
+            // the other thirty-two coils one every four (`se.c:177`). Two
+            // clocks and not one because a flipper reported at 15 Hz is a
+            // flipper nobody can aim, while a coil reported at 60 Hz is one
+            // whose pulses a script polling at 20 Hz would keep missing.
+            self.board.solenoids.end_flipper_window();
+            self.windows += 1;
+            if self.windows.is_multiple_of(SOL_WINDOWS) {
+                let fast_flips = self.board.fast_flips();
+                self.board.solenoids.end_sweep(fast_flips);
+            }
             self.next_sweep += u64::from(CPU_CLOCK_HZ / WINDOW_HZ);
         }
 

@@ -273,7 +273,7 @@ fn a_ball_crossing_reports_an_entry_and_an_exit() {
             Event::Trigger { crossing, .. } => Some(crossing),
             // Nothing here asks for hit reports, so there are none of those
             // and none from a slingshot either.
-            Event::Hit { .. } | Event::Slingshot { .. } => None,
+            Event::Hit { .. } | Event::Unhit { .. } | Event::Slingshot { .. } => None,
         }));
     }
 
@@ -343,7 +343,7 @@ fn the_event_says_which_trigger_and_which_ball() {
         .take_events()
         .filter_map(|ev| match ev {
             Event::Trigger { trigger, ball, .. } => Some((trigger, ball)),
-            Event::Hit { .. } | Event::Slingshot { .. } => None,
+            Event::Hit { .. } | Event::Unhit { .. } | Event::Slingshot { .. } => None,
         })
         .collect();
     events.sort_unstable();

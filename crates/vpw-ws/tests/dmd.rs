@@ -96,3 +96,30 @@ fn the_dots_have_four_levels_and_start_dark() {
         "an unloaded board is dark"
     );
 }
+
+/// The one reset the display board ever gets, and where it comes from.
+///
+/// `dmdlatch_w` writes the data and then drives the control lines to a literal
+/// `0` and a literal `1` (`se.c:725`). The zero is what clears bit 1, which
+/// `dmdreset_w` had left set, and bit 1 falling is what resets this board. A
+/// port that preserves bit 1 — the obvious reading, since the command lives in
+/// bit 0 — sends every command perfectly and never once resets the processor.
+#[test]
+fn the_command_latch_drops_the_reset_line_on_its_way_past() {
+    let mut d = Dmd::new();
+    // `dmdreset_w` with a non-zero byte: bit 1 up, and nothing has happened.
+    d.set_ctrl(0x02);
+    assert_eq!(d.resets, 0, "asserting reset is not resetting");
+
+    d.latch(0x42);
+    assert_eq!(d.resets, 1, "the first command after it pulses reset");
+    assert!(d.busy(), "and the command still goes in");
+
+    // Only the first: bit 1 is down now and stays down until the CPU board
+    // asserts it again.
+    d.latch(0x43);
+    assert_eq!(d.resets, 1);
+    d.set_ctrl(0x02);
+    d.latch(0x44);
+    assert_eq!(d.resets, 2);
+}
