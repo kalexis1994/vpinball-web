@@ -496,3 +496,48 @@ fn a_two_way_gate_swings_the_opposite_way_from_a_one_way_one() {
          and it gives {one:.3} and {two:.3}"
     );
 }
+
+/// A flipper is two meshes and **both** of them turn.
+///
+/// The rubber ring is built separately from the bat, so it needs its own
+/// animated part or it is left behind at the rest angle while the bat swings
+/// out from under it — a black ring sitting on the playfield with nothing in
+/// it. And because the static scene drops a mesh by matching its name against
+/// the animated ones (`geometry::Scene::remove`), a ring nobody animates is
+/// also drawn twice: once as scenery and once as the thing that moves.
+#[test]
+fn a_flippers_rubber_turns_with_its_bat() {
+    let path = std::path::Path::new("../../web/debug-assets/f14.vpx");
+    let Ok(bytes) = std::fs::read(path) else {
+        eprintln!("skipped: web/debug-assets/f14.vpx is missing");
+        return;
+    };
+    let Ok(vpx) = vpin::vpx::from_bytes(&bytes) else {
+        return;
+    };
+    let shapes = vpw_table::physics::build(&vpx);
+    let engine = vpw_physics::engine::Engine::new(shapes, vpw_math::Vec3::ZERO);
+    let parts = vpw_table::animation::animated_parts(&vpx, &engine);
+
+    let turning: Vec<&str> = parts
+        .iter()
+        .filter(|p| matches!(p.anim, vpw_table::animation::Animation::Flipper { .. }))
+        .map(|p| p.mesh.name.as_str())
+        .collect();
+    let rings: Vec<&&str> = turning.iter().filter(|n| n.ends_with("(rubber)")).collect();
+    assert!(!rings.is_empty(), "no flipper rubber is animated at all");
+    // Not every flipper has one — a rubber thickness of zero is a bare bat —
+    // so what has to hold is that each ring's bat is turning too.
+    for ring in &rings {
+        let bat = ring.trim_end_matches(" (rubber)");
+        assert!(turning.contains(&bat), "{ring} turns but {bat} does not");
+    }
+
+    // And nothing the animation owns is left in the scenery.
+    let mut scene = vpw_table::geometry::extract(&vpx);
+    scene.remove(&vpw_table::animation::names(&parts));
+    assert!(
+        !scene.meshes.iter().any(|m| m.name.ends_with("(rubber)")),
+        "a rubber ring was left in the static scene as well as animated"
+    );
+}

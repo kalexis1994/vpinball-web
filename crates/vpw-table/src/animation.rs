@@ -251,6 +251,32 @@ fn flippers(vpx: &VPX, shapes: &[Shape], out: &mut Vec<AnimatedPart>) {
             local,
             anim: Animation::Flipper { shape },
         });
+
+        // The rubber ring turns with the bat, and saying so is not optional:
+        // it is a second mesh, and a second mesh that nobody animates is a
+        // black ring left behind at the rest angle while the bat swings out
+        // from under it. Its own thickness and its own height above the
+        // playfield, neither of which is the bat's (`flipper.cpp:706`).
+        let Some(mut ring) =
+            crate::flipper::rubber(f, surface_height(vpx, &f.surface, f.center.x, f.center.y))
+        else {
+            continue;
+        };
+        let ring_base = Mat4::from_translation(Vec3::new(
+            f.center.x,
+            f.center.y,
+            surface_height(vpx, &f.surface, f.center.x, f.center.y)
+                + f.rubber_height.unwrap_or(0.0),
+        ));
+        let ring_local = Mat4::from_scale(Vec3::new(1.0, 1.0, f.rubber_width.unwrap_or(0.0)))
+            * Mat4::from_rotation_z(PI);
+        ring.transform = ring_base * Mat4::from_rotation_z(f.start_angle.to_radians()) * ring_local;
+        out.push(AnimatedPart {
+            mesh: ring,
+            base: ring_base,
+            local: ring_local,
+            anim: Animation::Flipper { shape },
+        });
     }
 }
 
