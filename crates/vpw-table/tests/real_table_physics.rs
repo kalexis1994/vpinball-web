@@ -619,29 +619,61 @@ fn the_physics_of_a_real_table_runs_much_faster_than_real_time() {
     // faster than it is able to, so a real regression still shows up in it.
     let steps = 10_000; // ten seconds of table
     let simulated = steps as f64 / 1000.0;
-    let mut factor: f64 = 0.0;
+
+    // Measured against a control, and **paired in time with it**.
+    //
+    // An absolute threshold measures the machine and not the code, and on a
+    // phone that is not a small effect: the same binary answers anywhere from
+    // 129x to 942x here depending on what the governor feels like, so a fixed
+    // floor fails about a third of the time for reasons that have nothing to
+    // do with the physics. That is the kind of red build people learn to
+    // ignore, which is worse than no test at all.
+    //
+    // So what has to hold is a **ratio**: how much table time one unit of
+    // arithmetic buys. The two have to be measured next to each other, not one
+    // after all the others — a control taken at the end samples whatever the
+    // governor is doing by then, which is how a first attempt at this still
+    // spread three to one. Timed back to back inside the same round, a machine
+    // that is slow is slow for both and it cancels.
+    //
+    // Best of five, for the reason above: nothing can make either loop run
+    // faster than it is able to, so the fastest round is the least polluted
+    // one and a real regression still shows up in it.
+    let mut best: f64 = 0.0;
     for _ in 0..5 {
-        // A fresh ball each time, or the later samples are measuring one that
-        // has already come to rest and are timing a cheaper loop than the
-        // first. The engine is rebuilt with it: the shapes are cloned rather
-        // than rebuilt from the file, so this is the ball's cost and not the
-        // parser's.
+        let at = std::time::Instant::now();
+        let mut acc = 0u64;
+        for i in 0..20_000_000u64 {
+            acc = acc.wrapping_mul(6364136223846793005).wrapping_add(i);
+        }
+        std::hint::black_box(acc);
+        let control = at.elapsed().as_secs_f64();
+
+        // A fresh ball each round, or the later ones are timing a ball that has
+        // already come to rest and a cheaper loop than the first. The engine is
+        // rebuilt with it: the shapes are cloned rather than read again, so this
+        // is the ball's cost and not the parser's.
         let mut e = Engine::new(shapes.clone(), gravity);
         e.slope_rad = g.angle_tilt_max.to_radians();
         e.add_ball(Ball::new(start, DEFAULT_BALL_SIZE));
 
-        let t = std::time::Instant::now();
+        let at = std::time::Instant::now();
         for _ in 0..steps {
             e.step();
         }
-        let real = t.elapsed().as_secs_f64();
-        factor = factor.max(simulated / real.max(1e-9));
+        let real = at.elapsed().as_secs_f64();
+        best = best.max(simulated / real.max(1e-9) * control);
     }
 
-    eprintln!("{simulated}s of table, best of five: {factor:.0}x real time");
+    eprintln!("{simulated}s of table: {best:.0}x real time per control second");
+    // The regression this was written for — a version that walked the table's
+    // three thousand shapes on every sub-cycle to move eight rotating pieces —
+    // cost twelve times more. Half of the lowest reading seen on a good machine
+    // still catches that with room to spare.
     assert!(
-        factor > 250.0,
-        "only {factor:.1}x real time; there should be margin to spare"
+        best > 12.0,
+        "only {best:.1}x real time per control second; the loop got more \
+         expensive relative to this machine"
     );
 }
 
@@ -888,19 +920,35 @@ fn the_popper_puts_the_ball_on_its_ramp_and_not_in_a_corner() {
     );
     engine.slope_rad = g.angle_tilt_max.to_radians();
 
-    // Where `Kicker::CreateSizedBallWithMass` leaves it: the surface height,
-    // plus the radius that `Player::CreateBall` adds (`player.cpp`).
+    // Served and kicked the way the table does it, rather than dropped in with
+    // a velocity. It matters now that a kicker knows which balls are inside it:
+    // `CreateBall` puts the ball in the hole **and into the hole's volume set**
+    // (`kicker.cpp:1153`, reached with `newBall` true), and `Kick` leaves it in
+    // that set on the way out. A ball merely placed at the middle of a kicker
+    // is one the hole has not dealt with, and it gets taken on the next step —
+    // which is what the original does too (`collide.cpp:277-287`) and what this
+    // test used to hide by never going through the serve.
+    let shape = engine
+        .shapes()
+        .iter()
+        .position(|s| {
+            matches!(s, vpw_physics::engine::Shape::Kicker(k)
+                if (k.circle.center.x - kicker.center.x).abs() < 0.01
+                    && (k.circle.center.y - kicker.center.y).abs() < 0.01)
+        })
+        .expect("sw24a builds a kicker");
+
     let start = Vec3::new(
         kicker.center.x,
         kicker.center.y,
         surface + DEFAULT_BALL_SIZE,
     );
-    let mut ball = Ball::new(start, DEFAULT_BALL_SIZE);
+    let ball = engine.add_ball(Ball::new(start, DEFAULT_BALL_SIZE));
+    engine.capture_ball(shape, ball);
     // `Kick 270, 28`: the angle is degrees from straight up the table, turning
     // clockwise, so the velocity is `(sin a, -cos a)` (`kicker.cpp:749`).
     let a: f32 = 270f32.to_radians();
-    ball.vel = Vec3::new(a.sin(), -a.cos(), 0.0) * 28.0;
-    engine.add_ball(ball);
+    engine.release_from_kicker(shape, Vec3::new(a.sin(), -a.cos(), 0.0) * 28.0);
 
     for _ in 0..6000 {
         engine.step();

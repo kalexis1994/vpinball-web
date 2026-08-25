@@ -95,9 +95,13 @@ def main():
             if len(vals_i) == size(mi.group(2)):
                 indices = vals_i
                 break
+        # A mesh with no index array is not a broken one. `kickerHitMesh.h` is
+        # a point cloud on purpose: nothing ever draws it, and the only thing
+        # the original asks of it is "which vertex is nearest the ball, and
+        # what is its normal" (`kicker.cpp:1047`). Skipping those, which is
+        # what this did, left the one mesh the physics needs out of the blob.
         if indices is None:
-            print(f"  skipped {file.name}: no index array")
-            continue
+            indices = []
 
         offset_v = len(blob)
         for v in vals:

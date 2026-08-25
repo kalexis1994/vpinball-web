@@ -731,28 +731,81 @@ impl Engine {
         }
     }
 
-    /// Looks at which kicker has just let its ball go past the rim.
+    /// Settles up with every kicker at the end of the step.
     ///
-    /// After the cycle and for the same reason as [`Engine::check_triggers`]:
-    /// what matters is where the ball ended the step, not where it was halfway
-    /// through it. The original reaches the same place from the collision
-    /// instead — the second time a ball crosses the hole's circle it takes the
-    /// "exiting kickers volume" branch (`kicker.cpp:1187`) — but a kicker stops
-    /// answering hit tests while it holds a ball, so a port that waited for a
-    /// collision would never get one.
+    /// Two things, and both are the original's `m_vpVolObjs` bookkeeping seen
+    /// from the other side — see [`crate::parts::Kicker::contains`] for why a
+    /// kicker needs a standing test as well as a swept one.
+    ///
+    /// A ball that is **inside** a hole and not in its set is one the hole has
+    /// not dealt with: the original reports that as a hit at time zero
+    /// (`collide.cpp:277-287`) and runs the whole of `DoCollide` on it. That is
+    /// what catches a ball put down on a saucer, and what keeps working on one
+    /// that has rolled in and is loitering — steering it down the bowl, step
+    /// after step, until it is low enough to be taken.
+    ///
+    /// A ball that is in the set and **no longer inside** has gone, and that is
+    /// the kicker's `Unhit` (`kicker.cpp:1189`).
+    ///
+    /// After the cycle, for the same reason as [`Engine::check_triggers`]: what
+    /// matters is where the ball ended the step.
     fn check_kickers(&mut self) {
-        for &s in &self.kickers {
-            if !self.reports_hits(s) {
-                continue;
+        for k in 0..self.kickers.len() {
+            let s = self.kickers[k];
+
+            // Arrivals first. Split off so the ball and the kicker can be held
+            // mutably at once.
+            for b in 0..self.balls.len() {
+                let Some(Shape::Kicker(kicker)) = self.shapes.get(s) else {
+                    continue;
+                };
+                if !kicker.enabled
+                    || kicker.captured.is_some()
+                    || kicker.touched(b)
+                    || kicker.has_ball(b)
+                    || self.balls[b].locked
+                    || !kicker.contains(&self.balls[b])
+                {
+                    continue;
+                }
+                // The circle's normal at the ball, which is what the swept test
+                // would have handed over. Straight up for a ball dead in the
+                // middle, where there is no direction to speak of.
+                let centre = kicker.circle.center;
+                let flat = self.balls[b].pos.truncate() - centre;
+                let normal = if flat.length_squared() > 1.0e-8 {
+                    let n = flat.normalize();
+                    Vec3::new(n.x, n.y, 0.0)
+                } else {
+                    Vec3::Z
+                };
+
+                let (left, right) = self.shapes.split_at_mut(s);
+                let _ = left;
+                let Some(Shape::Kicker(kicker)) = right.first_mut() else {
+                    continue;
+                };
+                let took = kicker.take_ball(&mut self.balls[b], b, normal);
+                if took != crate::parts::KickerHit::Passed && self.reports_hits(s) {
+                    self.events.push(Event::Hit {
+                        shape: s,
+                        ball: b,
+                        speed: f32::INFINITY,
+                    });
+                }
             }
+
+            // Then departures, and the step's slate wiped.
+            let reports = self.reports_hits(s);
             let Some(Shape::Kicker(kicker)) = self.shapes.get_mut(s) else {
                 continue;
             };
+            kicker.end_step();
             if kicker.captured.is_some() {
                 continue; // still holding it: it has not gone anywhere
             }
             for (b, ball) in self.balls.iter().enumerate() {
-                if kicker.check_exit(b, ball) {
+                if kicker.check_exit(b, ball) && reports {
                     self.events.push(Event::Unhit { shape: s, ball: b });
                 }
             }
@@ -964,26 +1017,17 @@ impl Engine {
                         bumper.collide(&mut self.balls[i], &coll, scatter);
                     }
                     Shape::Kicker(kicker) => {
-                        // A kicker first offers the ball to the hole; if it
-                        // comes in very high, the hole behaves like an ordinary
-                        // edge.
-                        let took = kicker.take_ball(&mut self.balls[i], i);
+                        // A kicker resolves the whole hit itself, both ways
+                        // round: it either takes the ball or steers it across
+                        // the bowl (`DoChangeBallVelocity`). Neither is a wall
+                        // bounce — a hole made out of `collide_3d_wall` is a
+                        // post — so nothing else happens to the ball here, and
+                        // the scatter this shape would have used goes unspent.
+                        let took = kicker.take_ball(&mut self.balls[i], i, coll.hit_normal);
                         kicker_took_it = took != crate::parts::KickerHit::Passed;
-                        if !kicker_took_it {
-                            let material = kicker.circle.material;
-                            let ball = &mut self.balls[i];
-                            ball.collide_3d_wall(coll.hit_normal, &material, &coll, scatter);
-
-                            // `kicker.cpp:1134`, and the original calls it an
-                            // ugly hack too: a ball rolling over the lip of a
-                            // kicker it is not going to fall into loses nearly
-                            // all its speed to the bevel and stops there. Give
-                            // it back what it had.
-                            if ball.vel.length_squared() < 0.2 * 0.2 {
-                                ball.vel = ball.old_vel;
-                            }
-                            ball.old_vel = ball.vel;
-                        }
+                        // The end-of-step sweep must not act on this ball
+                        // again: it has had its millisecond.
+                        kicker.mark_touched(i);
                     }
                     // Gate and spinner are **pass-through**: the ball carries
                     // straight on without being deflected and the only thing

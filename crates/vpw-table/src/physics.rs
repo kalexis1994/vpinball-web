@@ -547,7 +547,12 @@ fn kicker(k: &vpin::vpx::gameitem::kicker::Kicker, vpx: &VPX, out: &mut Vec<Shap
         material: find_material(vpx, &k.material),
     };
     out.push(Shape::Kicker(
-        Kicker::new(circle, k.hit_accuracy, k.legacy_mode).with_fall_through(k.fall_through),
+        Kicker::new(circle, k.hit_accuracy, k.legacy_mode)
+            .with_fall_through(k.fall_through)
+            // The bowl a ball that is not taken rolls across
+            // (`kicker.cpp:171-182`). Empty for a legacy kicker, which never
+            // reaches the code that reads it.
+            .with_hit_mesh(crate::builtin::kicker_hit_mesh(k, base_z)),
     ));
 }
 

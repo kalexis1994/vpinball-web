@@ -662,18 +662,41 @@ pub struct Kicker {
     pub enabled: bool,
     /// Which ball it has inside, if it has one.
     pub captured: Option<usize>,
-    /// The ball the original would have in its volume set (`m_vpVolObjs`,
-    /// `kicker.cpp:1153`), which is not the same as the one it is holding.
+    /// Which balls the hole counts as being inside it, one per bit.
     ///
-    /// A kicker's `Hit` fires when it grabs the ball and its `Unhit` when that
-    /// ball, having been kicked back out, leaves the circle — the ball stays in
-    /// the set across the whole of the kick. That pair is a switch as far as a
-    /// ROM is concerned: a saucer wired `swNN_Hit` / `swNN_UnHit` whose `Unhit`
-    /// never comes keeps the switch closed for ever, and the ROM re-energises
-    /// the eject coil on a ball that left long ago.
+    /// The original's `m_vpVolObjs`, which it keeps on the **ball** as the set
+    /// of volumes that ball is in; asked from this side it is the same
+    /// question. A `u64` is plenty, for the reason [`crate::trigger::Trigger`]
+    /// gives: no table has sixty-four balls at once.
     ///
-    /// Only one, because the original holds at most one ball at a time.
-    in_volume: Option<usize>,
+    /// It does two jobs, and both are the original's.
+    ///
+    /// A ball joins the set when the hole **takes** it (`kicker.cpp:1153`) and
+    /// leaves it when it clears the circle, which is one step later than the
+    /// coil fired. That pair is a switch as far as a ROM is concerned: a saucer
+    /// wired `swNN_Hit` / `swNN_UnHit` whose `Unhit` never comes keeps the
+    /// switch closed for ever, and the ROM re-energises the eject coil on a
+    /// ball that left long ago.
+    ///
+    /// And a ball that is inside the circle while **not** in the set is one the
+    /// hole has not dealt with yet, which `HitTestBasicRadius` reports as a hit
+    /// at time zero (`collide.cpp:277-287`, "ball inside and no hit set"). That
+    /// is not a corner case: it is how a hole gets a ball that was put down on
+    /// top of it, and how it keeps working on one that is loitering in it.
+    inside: u64,
+    /// Which balls the collision cycle has already dealt with this step.
+    ///
+    /// Cleared at the end of every step. Without it the swept test and the
+    /// end-of-step sweep would both act on the same ball in the same
+    /// millisecond — see [`Kicker::contains`] for why there are two.
+    touched: u64,
+    /// The bowl, as `(position, normal)` per vertex: position placed on the
+    /// table, normal in the mesh's own frame.
+    ///
+    /// See `builtin::kicker_hit_mesh`. It is what makes a kicker a funnel
+    /// rather than a disc, and an empty one means "leave the ball alone",
+    /// which is the legacy case and the original's `idx == ~0u`.
+    pub hit_mesh: Vec<(Vec3, Vec3)>,
 }
 
 /// What a kicker did with a ball that reached it
@@ -698,13 +721,21 @@ impl Kicker {
             fall_through: false,
             enabled: true,
             captured: None,
-            in_volume: None,
+            inside: 0,
+            touched: 0,
+            hit_mesh: Vec::new(),
         }
     }
 
     /// The `FATH` flag, as the builder reads it out of the file.
     pub fn with_fall_through(mut self, fall_through: bool) -> Self {
         self.fall_through = fall_through;
+        self
+    }
+
+    /// The bowl the ball rolls on. See [`Kicker::hit_mesh`].
+    pub fn with_hit_mesh(mut self, mesh: Vec<(Vec3, Vec3)>) -> Self {
+        self.hit_mesh = mesh;
         self
     }
 
@@ -718,9 +749,30 @@ impl Kicker {
 
     /// Whether the ball's centre is inside the hole's cylinder.
     ///
-    /// The original asks this as a swept crossing of the circle and remembers
-    /// the answer per ball; here it is recomputed from the position every step,
-    /// which is what [`crate::trigger`] does and for the reasons set out there.
+    /// # Why a kicker is tested twice
+    ///
+    /// [`Kicker::hit_test`] is a swept crossing of the circle and this is a
+    /// plain "is it in there now", and the engine runs both: the swept one
+    /// inside the collision cycle, this one at the end of the step.
+    ///
+    /// The original needs both too, and for the same two reasons. The swept
+    /// test is what catches a ball moving fast enough to cross the whole hole
+    /// within one step — a drain kicker takes balls at thirty units per
+    /// millisecond and a saucer is thirty units across, so a test that only
+    /// looked at where the ball ended up would let one straight through. And
+    /// the standing test is `collide.cpp:277-287`, the branch that fires a hit
+    /// at time zero when the ball is inside the circle and not yet in the
+    /// hole's volume set: without it a ball that is *put down* on a kicker, or
+    /// that rolls in and stalls without ever crossing the rim while
+    /// approaching, is never seen at all.
+    ///
+    /// That second case is not exotic. It is what a table does when it serves a
+    /// ball into a saucer, and it is what a ball does when it drifts a few
+    /// units off the middle of a hole and rolls back: the port's swept test
+    /// discards a receding ball (see `HitCircle::hit_test_as_volume`, which
+    /// keeps `direction` on and says why), so the rim is never crossed inbound
+    /// and nothing ever fires.
+    ///
     /// A ball that has fallen through ends up **below** `z_low`, so it leaves
     /// the volume by the same test that a kicked one does.
     pub fn contains(&self, ball: &Ball) -> bool {
@@ -730,29 +782,135 @@ impl Kicker {
             && d.length_squared() <= self.circle.radius * self.circle.radius
     }
 
+    /// Whether the hole counts this ball as being inside it.
+    pub fn has_ball(&self, ball_index: usize) -> bool {
+        ball_index < 64 && self.inside & (1 << ball_index) != 0
+    }
+
     /// Whether the ball has just left the hole's volume, which is the kicker's
     /// `Unhit` (`kicker.cpp:1189` — the only non-trigger `Unhit` in the whole
     /// of the original).
     pub fn check_exit(&mut self, ball_index: usize, ball: &Ball) -> bool {
-        if self.in_volume != Some(ball_index) || self.contains(ball) {
+        if !self.has_ball(ball_index) || self.contains(ball) {
             return false;
         }
-        self.in_volume = None;
+        self.inside &= !(1u64 << ball_index);
         true
     }
 
-    /// Keeps the ball index it is watching in step with a ball being removed.
-    pub fn renumber_after_removing(&mut self, ball: usize) {
-        self.in_volume = match self.in_volume {
-            Some(c) if c == ball => None,
-            Some(c) if c > ball => Some(c - 1),
-            other => other,
+    /// Marks the ball as dealt with for the rest of this step. See
+    /// [`Kicker::touched`].
+    pub fn mark_touched(&mut self, ball_index: usize) {
+        if ball_index < 64 {
+            self.touched |= 1u64 << ball_index;
+        }
+    }
+
+    pub fn touched(&self, ball_index: usize) -> bool {
+        ball_index < 64 && self.touched & (1 << ball_index) != 0
+    }
+
+    /// Forgets this step's bookkeeping, ready for the next one.
+    pub fn end_step(&mut self) {
+        self.touched = 0;
+    }
+
+    /// Keeps the balls it is watching in step with one being removed.
+    pub fn renumber_after_removing(&mut self, ball_index: usize) {
+        if ball_index >= 64 {
+            return;
+        }
+        let squeeze = |mask: u64| {
+            let below = mask & ((1u64 << ball_index) - 1);
+            // Nothing can sit above the last slot, and shifting by 64 is not a
+            // shift.
+            let above = if ball_index == 63 {
+                0
+            } else {
+                mask >> (ball_index + 1)
+            };
+            below | (above << ball_index)
         };
+        self.inside = squeeze(self.inside);
+        self.touched = squeeze(self.touched);
     }
 
     /// What height the ball has to be at for the kicker to grab it.
     pub fn grab_height(&self, ball: &Ball) -> f32 {
         (self.circle.z_low + ball.radius) * self.hit_accuracy
+    }
+
+    /// Steers the ball along the bowl (`DoChangeBallVelocity`,
+    /// `kicker.cpp:1042`).
+    ///
+    /// This is what a kicker does to a ball that is over it but too high to be
+    /// taken, and it is **not** a wall bounce. The port used to reflect the
+    /// ball off the circle's normal, which points outwards in the plane: a hole
+    /// built out of that is a post, and it flings the ball back out the way it
+    /// came. The original instead finds the nearest vertex of the hit mesh,
+    /// takes *that* vertex's normal — which on a shallow bowl tilts inwards and
+    /// downwards — and applies `dot * hitnorm` with no elasticity at all, plus
+    /// friction. The ball is pushed **into** the hole, loses a little speed to
+    /// the rim, and comes round again lower until the height test takes it.
+    ///
+    /// It only became visible with the gravity fixed. Under-strength gravity
+    /// left the ball too slow to escape even a flat disc, so a saucer worked by
+    /// accident; at the right acceleration it arrives with enough energy to be
+    /// spat straight back out, and a machine re-serves the same shot for ever.
+    ///
+    /// Two oddities are the original's and are kept:
+    ///
+    /// - `surfP` and the projection that builds `tangent` use the **circle's**
+    ///   normal, the one passed in, while the impulse and the rest of the
+    ///   tangent use the **mesh's**. Mixing the two looks like a slip, but it
+    ///   is what ships and what every table was tuned against.
+    /// - the friction coefficient is hard-coded to `0.3` and ignores the
+    ///   kicker's material.
+    fn change_ball_velocity(&self, ball: &mut Ball, hit_normal: Vec3) {
+        // The nearest vertex of the bowl. An empty mesh is the original's
+        // `idx == ~0u`: it changes nothing about the ball at all.
+        let Some((_, hitnorm)) = self
+            .hit_mesh
+            .iter()
+            .min_by(|a, b| {
+                let da = (ball.pos - a.0).length_squared();
+                let db = (ball.pos - b.0).length_squared();
+                da.total_cmp(&db)
+            })
+            .copied()
+        else {
+            return;
+        };
+
+        let dot = -ball.vel.dot(hitnorm);
+        let reaction_impulse = ball.mass * dot.abs();
+
+        let surf_p = hit_normal * -ball.radius;
+        let surf_vel = ball.surface_velocity(surf_p);
+        // `tangent = surfVel - surfVel.Dot(hitnormal) * hitnorm` — the dot is
+        // against the circle's normal and the vector is the mesh's. See above.
+        let mut tangent = surf_vel - hitnorm * surf_vel.dot(hit_normal);
+
+        // Along the normal, so it makes no torque. No elasticity term: the
+        // bowl does not bounce the ball, it redirects it.
+        ball.vel += hitnorm * dot;
+
+        const FRICTION: f32 = 0.3;
+        let tangent_sp_sq = tangent.length_squared();
+        if tangent_sp_sq > 1e-6 {
+            tangent /= tangent_sp_sq.sqrt();
+            let vt = surf_vel.dot(tangent);
+
+            let cross = surf_p.cross(tangent);
+            let kt = 1.0 / ball.mass + tangent.dot((cross / ball.inertia()).cross(surf_p));
+
+            // The Coulomb cone, same as everywhere else.
+            let max_fric = FRICTION * reaction_impulse;
+            let jt = (-vt / kt).clamp(-max_fric, max_fric);
+            if jt.is_finite() {
+                ball.apply_surface_impulse(cross * jt, tangent * jt);
+            }
+        }
     }
 
     /// Offers the ball to the hole (`kicker.cpp:1125-1184`).
@@ -765,13 +923,27 @@ impl Kicker {
     /// `!fall_through` (`kicker.cpp:1148`). Both answers stop the ball dead in
     /// the middle of the hole and clear its spin; they differ in where it is
     /// left and in whether it is frozen there.
-    pub fn take_ball(&mut self, ball: &mut Ball, index: usize) -> KickerHit {
+    pub fn take_ball(&mut self, ball: &mut Ball, index: usize, hit_normal: Vec3) -> KickerHit {
         if self.captured.is_some() || !self.enabled {
             return KickerHit::Passed;
         }
         // `kicker.cpp:1128`. A legacy kicker does not ask how high the ball is.
         if !self.legacy_mode && ball.pos.z >= self.grab_height(ball) {
-            return KickerHit::Passed; // it passes over the top
+            // Over the hole and riding too high to be taken. It is **not** a
+            // bounce: the ball rolls on across the bowl, and what steers it is
+            // the bowl's own surface (`kicker.cpp:1133`).
+            self.change_ball_velocity(ball, hit_normal);
+
+            // `kicker.cpp:1134`, and the original calls it an ugly hack too: a
+            // ball rolling over the lip of a kicker it is not going to fall
+            // into loses nearly all its speed to the bevel and stops there.
+            // Give it back what it had. It belongs to this branch and to no
+            // other — it is the tail of the same `if`.
+            if ball.vel.length_squared() < 0.2 * 0.2 {
+                ball.vel = ball.old_vel;
+            }
+            ball.old_vel = ball.vel;
+            return KickerHit::Passed;
         }
 
         ball.vel = Vec3::ZERO;
@@ -798,7 +970,7 @@ impl Kicker {
         ball.pos.z = self.circle.z_low + ball.radius;
         ball.locked = true;
         self.captured = Some(index);
-        self.in_volume = Some(index);
+        self.inside |= 1u64 << (index.min(63));
         KickerHit::Captured
     }
 
@@ -820,7 +992,7 @@ impl Kicker {
         // it along.
         ball.angular_momentum = Vec3::ZERO;
         self.captured = None;
-        // `in_volume` is deliberately left alone: the ball is on its way out
+        // The volume set is deliberately left alone: the ball is on its way out
         // but it is still in the hole, and the `Unhit` that tells the ROM its
         // saucer switch has opened belongs to the moment it clears the circle,
         // not to the moment the coil fired.
@@ -832,7 +1004,7 @@ impl Kicker {
     /// through the same `Unhit` as one that rolled in.
     pub fn hold(&mut self, ball: &mut Ball, index: usize) {
         self.captured = Some(index);
-        self.in_volume = Some(index);
+        self.inside |= 1u64 << (index.min(63));
         ball.pos = Vec3::new(
             self.circle.center.x,
             self.circle.center.y,

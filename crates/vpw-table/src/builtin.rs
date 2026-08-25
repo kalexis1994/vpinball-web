@@ -375,6 +375,54 @@ pub fn spinner(s: &vpin::vpx::gameitem::spinner::Spinner, base_z: f32) -> Vec<Me
     meshes
 }
 
+/// The kicker's **hit** mesh: the bowl the ball rolls on, in table space.
+///
+/// It is not the mesh anyone sees. `kickerHitMesh.h` is a point cloud with no
+/// index array at all — nothing draws it — and the only question the original
+/// ever asks of it is "which of these 216 vertices is nearest the ball, and
+/// what is its normal" (`DoChangeBallVelocity`, `kicker.cpp:1047`). That is
+/// what turns a kicker from a flat disc into a funnel: a ball that is over the
+/// hole but riding too high to be taken gets pushed along the bowl's own
+/// surface, down towards the middle, instead of bouncing off a vertical wall.
+///
+/// Positions come back **placed** — scaled by `radius * 0.8` and moved onto the
+/// kicker (`kicker.cpp:172-181`) — and normals come back **as they are in the
+/// mesh**. That asymmetry is the original's and it is deliberate on its part:
+/// the scale is uniform, so it would not change a normal's direction anyway,
+/// and `DoChangeBallVelocity` indexes the raw array for the normal while
+/// searching the transformed one for the position.
+///
+/// Only a **modern** kicker has one. In legacy mode the original never builds
+/// it (`kicker.cpp:171`), and it never needs it: a legacy kicker grabs whatever
+/// touches it, so the "over it but not taken" case that this exists for cannot
+/// arise. Returns an empty vector there, which is exactly the `idx == ~0u` the
+/// original falls into — and it means "change nothing about the ball".
+pub fn kicker_hit_mesh(k: &vpin::vpx::gameitem::kicker::Kicker, base_z: f32) -> Vec<(Vec3, Vec3)> {
+    if k.legacy_mode {
+        return Vec::new();
+    }
+    let Some(mesh) = meshes::get("kickerHit") else {
+        return Vec::new();
+    };
+    // `const float rad = phitcircle->radius * 0.8f` (`kicker.cpp:173`). That
+    // radius is the collider's, which in legacy mode is the shrunken one — but
+    // this is only ever reached when it is not, so it is the file's radius.
+    let rad = k.radius * 0.8;
+    mesh.vertices
+        .iter()
+        .map(|v| {
+            (
+                Vec3::new(
+                    v.pos[0] * rad + k.center.x,
+                    v.pos[1] * rad + k.center.y,
+                    v.pos[2] * rad + base_z,
+                ),
+                Vec3::new(v.normal[0], v.normal[1], v.normal[2]),
+            )
+        })
+        .collect()
+}
+
 /// Kicker: the visible part of the hole.
 pub fn kicker(k: &vpin::vpx::gameitem::kicker::Kicker, base_z: f32) -> Option<Mesh> {
     use vpin::vpx::gameitem::kicker::KickerType;

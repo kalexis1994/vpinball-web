@@ -43,7 +43,7 @@ use std::rc::Rc;
 
 use vpw_math::Vec3;
 use vpw_physics::ball::Ball;
-use vpw_physics::constants::{DEFAULT_BALL_SIZE, DEFAULT_TABLE_GRAVITY, PHYSICS_STEPTIME_S};
+use vpw_physics::constants::{DEFAULT_BALL_SIZE, DEFAULT_TABLE_GRAVITY_VPU, PHYSICS_STEPTIME_S};
 use vpw_physics::engine::{Engine, Event, Shape};
 use vpw_physics::trigger::Crossing;
 use vpw_table::animation::AnimatedPart;
@@ -316,20 +316,26 @@ impl Game {
         // of Earth's, so passing it bare made every table 1.82 times too
         // floaty.
         let table = scene.physics;
-        // **The gravity is knowingly still wrong here, and this is why.**
+        // The file's own `GRAV`, which is already an acceleration:
+        // `m_Gravity = 0.97f * GRAVITYCONST` (`pintable.cpp:3833`) is what gets
+        // stored, so it is the product and not the 0.97. Passing the bare
+        // multiple, which is what this used to do, ran every table at 1/1.82 of
+        // its weight — a ball dropped one diameter took 101 ms instead of 75,
+        // and nothing about it looked broken, it just played floaty.
         //
-        // `table.gravity` is the right number and `DEFAULT_TABLE_GRAVITY` is
-        // not: the file stores an acceleration and that constant is a multiple
-        // of Earth's, so what this passes makes every table 1.82 times too
-        // floaty. Handing over the right one breaks saucers, and it breaks them
-        // for a reason worth keeping: when a kicker does *not* capture a ball,
-        // the original steers it along the bowl's own mesh
-        // (`DoChangeBallVelocity`, `kicker.cpp:1042`) and this engine bounces it
-        // off a flat circle instead. Weak gravity hid that — the ball was too
-        // slow to bounce out — and correct gravity makes a saucer spit the ball
-        // back. A table that plays floaty is worse than one whose saucers work,
-        // so the bevel is the thing to fix first and this line follows it.
-        let strength = DEFAULT_TABLE_GRAVITY;
+        // The fallback is the same product, for a file that stores zero.
+        //
+        // This line waited on `DoChangeBallVelocity` (`kicker.cpp:1042`), and
+        // that is worth remembering rather than deleting: weak gravity was
+        // holding a saucer together. The port used to bounce an uncaptured ball
+        // off the kicker's circle as if it were a wall, and at the right
+        // acceleration the ball arrives with enough energy to be spat back out
+        // of one. It only worked because the ball was too slow to escape.
+        let strength = if table.gravity > 0.0 {
+            table.gravity
+        } else {
+            DEFAULT_TABLE_GRAVITY_VPU
+        };
         let mut engine = Engine::new(
             collision.shapes.clone(),
             Engine::gravity_from_slope(table.slope_deg, strength),

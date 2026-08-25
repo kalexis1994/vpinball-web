@@ -8,6 +8,7 @@ use vpw_math::{Vec2, Vec3};
 use vpw_physics::ball::Ball;
 use vpw_physics::collision::{CollisionEvent, Material};
 use vpw_physics::constants::DEFAULT_BALL_SIZE;
+use vpw_physics::engine::{Engine, Event, Shape};
 use vpw_physics::parts::{Bumper, Gate, Kicker, KickerHit, PivotAxis, Spinner};
 use vpw_physics::shapes::HitCircle;
 
@@ -463,7 +464,7 @@ fn a_kicker_captures_a_ball_that_falls_inside() {
     let mut b = Ball::new(Vec3::new(5.0, 5.0, 10.0), R); // nicely sunk in
     b.vel = Vec3::new(3.0, 0.0, -2.0);
 
-    let grabbed = k.take_ball(&mut b, 0);
+    let grabbed = k.take_ball(&mut b, 0, Vec3::Z);
 
     assert_eq!(grabbed, KickerHit::Captured, "it should capture it");
     assert!(b.locked, "and the ball comes to a stop");
@@ -482,7 +483,7 @@ fn a_ball_that_passes_over_the_top_is_not_captured() {
     b.vel = Vec3::new(50.0, 0.0, 0.0);
 
     assert_eq!(
-        k.take_ball(&mut b, 0),
+        k.take_ball(&mut b, 0, Vec3::Z),
         KickerHit::Passed,
         "it passes over the top"
     );
@@ -495,9 +496,9 @@ fn a_kicker_with_a_ball_inside_does_not_capture_another() {
     let mut a = Ball::new(Vec3::new(0.0, 0.0, 10.0), R);
     let mut b = Ball::new(Vec3::new(0.0, 0.0, 10.0), R);
 
-    assert_eq!(k.take_ball(&mut a, 0), KickerHit::Captured);
+    assert_eq!(k.take_ball(&mut a, 0, Vec3::Z), KickerHit::Captured);
     assert_eq!(
-        k.take_ball(&mut b, 1),
+        k.take_ball(&mut b, 1, Vec3::Z),
         KickerHit::Passed,
         "it already has one inside"
     );
@@ -510,7 +511,7 @@ fn a_kicker_with_a_ball_inside_does_not_capture_another() {
 fn releasing_puts_the_ball_back_in_play() {
     let mut k = Kicker::new(circle(30.0, 0.3), 0.7, false);
     let mut b = Ball::new(Vec3::new(0.0, 0.0, 10.0), R);
-    k.take_ball(&mut b, 0);
+    k.take_ball(&mut b, 0, Vec3::Z);
 
     k.release(&mut b, Vec3::new(0.0, -100.0, 0.0));
 
@@ -659,7 +660,7 @@ fn a_fall_through_kicker_drops_the_ball_below_the_playfield() {
     let mut b = Ball::new(Vec3::new(5.0, 5.0, 10.0), R);
     b.vel = Vec3::new(3.0, 0.0, -2.0);
 
-    let outcome = k.take_ball(&mut b, 0);
+    let outcome = k.take_ball(&mut b, 0, Vec3::Z);
 
     assert_eq!(outcome, KickerHit::FellThrough);
     assert!(!b.locked, "it is not held");
@@ -685,7 +686,7 @@ fn a_fall_through_kicker_drops_the_ball_below_the_playfield() {
 fn a_kicker_reports_the_ball_leaving_but_not_before_it_has_left() {
     let mut k = Kicker::new(circle(30.0, 0.3), 0.7, false);
     let mut b = Ball::new(Vec3::new(0.0, 0.0, 10.0), R);
-    assert_eq!(k.take_ball(&mut b, 0), KickerHit::Captured);
+    assert_eq!(k.take_ball(&mut b, 0, Vec3::Z), KickerHit::Captured);
 
     assert!(
         !k.check_exit(0, &b),
@@ -701,4 +702,151 @@ fn a_kicker_reports_the_ball_leaving_but_not_before_it_has_left() {
     b.pos.y = -200.0; // well clear of it
     assert!(k.check_exit(0, &b), "now it has gone");
     assert!(!k.check_exit(0, &b), "and it only says so once");
+}
+
+/// A kicker that does not take the ball steers it **down into** the hole
+/// rather than throwing it back out.
+///
+/// `DoChangeBallVelocity` (`kicker.cpp:1042`) finds the nearest vertex of the
+/// kicker's hit mesh and applies that vertex's normal with no elasticity at
+/// all. The port used to reflect the ball off the **circle's** normal instead,
+/// which points outwards in the plane and carries the material's elasticity —
+/// a hole built out of that is a post. This test puts the two side by side,
+/// because the difference between them is the whole bug.
+///
+/// It went unnoticed only because gravity was 1.82 times too weak: the ball
+/// never arrived fast enough to escape even a flat disc. At the right
+/// acceleration a saucer re-served the same shot for ever.
+#[test]
+fn a_ball_arriving_over_a_kicker_is_steered_into_it_and_not_thrown_back() {
+    // A patch of bowl standing in for the mesh: one vertex on the near rim
+    // whose normal tilts inwards and upwards, which is what `kickerHitMesh`
+    // carries all the way round (`{ -0.736, -0.408, -0.071, 0.389, 0.298,
+    // 0.872 }` and its 215 siblings — every position is met by a normal
+    // pointing back towards the middle).
+    let rim_normal = Vec3::new(-0.5, 0.0, 0.866).normalize();
+    let mut k = Kicker::new(circle(30.0, 0.3), 0.7, false)
+        .with_hit_mesh(vec![(Vec3::new(25.0, 0.0, 0.0), rim_normal)]);
+
+    // Arriving across the rim, heading for the middle, riding too high to be
+    // taken on this pass.
+    let approach = Vec3::new(-30.0, 0.0, 0.0);
+    let mut b = Ball::new(Vec3::new(20.0, 0.0, 200.0), R);
+    b.vel = approach;
+
+    // The circle's own normal points outwards, against the ball: that is the
+    // one the old path bounced off.
+    let outwards = Vec3::X;
+    assert_eq!(k.take_ball(&mut b, 0, outwards), KickerHit::Passed);
+
+    assert!(
+        b.vel.x < 0.0,
+        "it should still be heading into the hole, not back out: {}",
+        b.vel.x
+    );
+    assert!(
+        b.vel.x > approach.x,
+        "the rim takes speed out of it: {} -> {}",
+        approach.x,
+        b.vel.x
+    );
+    assert!(
+        b.vel.z < 0.0,
+        "and the bowl's normal carries it downwards, into the hole: {}",
+        b.vel.z
+    );
+
+    // What a wall would have done to the very same ball, for contrast.
+    let mut wall = Ball::new(Vec3::new(20.0, 0.0, 200.0), R);
+    wall.vel = approach;
+    wall.collide_3d_wall(outwards, &circle(30.0, 0.3).material, &contact(), 0.0);
+    assert!(
+        wall.vel.x > 0.0,
+        "the old path threw it straight back out, which is what this is not: {}",
+        wall.vel.x
+    );
+}
+
+/// A legacy kicker has no bowl, and then nothing happens to the ball at all.
+///
+/// The original builds the mesh only for a modern kicker (`kicker.cpp:171`) and
+/// falls out of `DoChangeBallVelocity` on `idx == ~0u`. It never needs it: a
+/// legacy kicker grabs whatever touches it, so the case this exists for cannot
+/// come up.
+#[test]
+fn a_kicker_with_no_bowl_leaves_the_ball_exactly_as_it_was() {
+    let mut k = Kicker::new(circle(30.0, 0.3), 0.7, false);
+    let mut b = Ball::new(Vec3::new(20.0, 0.0, 200.0), R);
+    b.vel = Vec3::new(30.0, 0.0, 0.0);
+
+    assert_eq!(k.take_ball(&mut b, 0, Vec3::X), KickerHit::Passed);
+
+    assert_eq!(b.vel, Vec3::new(30.0, 0.0, 0.0));
+}
+
+/// A ball standing on a kicker is taken, even though it never crossed the rim.
+///
+/// This is `collide.cpp:277-287` — "ball inside and no hit set" — and it is not
+/// a corner case. A table serves a ball by putting it down in a saucer, and a
+/// ball that drifts a few units off the middle of a hole and rolls back never
+/// crosses the rim inbound at all: the port's swept test throws away a receding
+/// ball, so nothing fires and the hole quietly does nothing.
+///
+/// It stayed hidden while gravity was too weak. At 1/1.82 of its weight a ball
+/// dropped on a saucer coasted far enough off-centre to leave the circle and
+/// come back in, tripping the swept test on the way; at the right acceleration
+/// it turns round inside the hole and the rim is never crossed.
+#[test]
+fn a_ball_standing_on_a_kicker_is_taken_without_ever_crossing_the_rim() {
+    let mut kicker = Kicker::new(circle(30.0, 0.3), 0.7, true);
+    kicker.circle.center = Vec2::ZERO;
+    let mut engine = Engine::new(vec![Shape::Kicker(kicker)], Vec3::new(0.0, 0.0, -1.8));
+    engine.report_hits(0, true);
+
+    // Put down dead centre and at rest, which is what `CreateBall` does and
+    // what a ball that has just stopped rolling looks like.
+    let ball = engine.add_ball(Ball::new(Vec3::new(0.0, 0.0, 25.0), R));
+    assert_eq!(ball, 0);
+
+    engine.step();
+
+    let held = matches!(engine.shapes().first(), Some(Shape::Kicker(k)) if k.captured == Some(0));
+    assert!(held, "the hole should have taken it");
+    assert!(engine.balls[0].locked, "and the ball is held");
+
+    let events: Vec<_> = engine.take_events().collect();
+    assert!(
+        events.iter().any(|e| matches!(
+            e,
+            Event::Hit {
+                shape: 0,
+                ball: 0,
+                ..
+            }
+        )),
+        "and the table is told, or the ROM never sees its switch close: {events:?}"
+    );
+}
+
+/// And it is told once, not once per millisecond.
+///
+/// The ball sits in the hole for as long as the table leaves it there, and a
+/// switch that pulses a thousand times a second is not a switch.
+#[test]
+fn a_ball_sitting_in_a_kicker_reports_arriving_only_once() {
+    let mut kicker = Kicker::new(circle(30.0, 0.3), 0.7, true);
+    kicker.circle.center = Vec2::ZERO;
+    let mut engine = Engine::new(vec![Shape::Kicker(kicker)], Vec3::new(0.0, 0.0, -1.8));
+    engine.report_hits(0, true);
+    engine.add_ball(Ball::new(Vec3::new(0.0, 0.0, 25.0), R));
+
+    let mut hits = 0;
+    for _ in 0..200 {
+        engine.step();
+        hits += engine
+            .take_events()
+            .filter(|e| matches!(e, Event::Hit { .. }))
+            .count();
+    }
+    assert_eq!(hits, 1, "one arrival, however long it sits there");
 }
