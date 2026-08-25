@@ -6,3 +6,4 @@ node_modules
 *.vpx
 web/.env.local
 web/debug-assets/
+/sound.wav

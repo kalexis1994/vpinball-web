@@ -1289,7 +1289,10 @@ pub fn load_table(bytes: &[u8]) -> Result<SceneStats, JsValue> {
         }
 
         player.renderer.load_with_parts(&scene, table.parts());
-        sync(&mut table, &mut player.renderer);
+        // Zero milliseconds: this is the first sync of a table that has not
+        // run yet, so a lamp's fade has nothing to advance over — it should
+        // start wherever the file left it, not somewhere along a ramp.
+        sync(&mut table, &mut player.renderer, 0.0);
         let t3 = now(&window);
 
         {
