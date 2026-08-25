@@ -97,6 +97,24 @@ fn main() {
     let mut silent_runs = Vec::new();
     let mut run_of_silence = 0usize;
     for t in 0..seconds * 1000 {
+        // VPW_VOLUME_UP=<n> taps the coin door's up button n times before the
+        // coin goes in, the way an operator turns a machine up. The volume is
+        // the machine's own setting and it starts wherever a factory-fresh one
+        // starts.
+        if let Ok(v) = std::env::var("VPW_VOLUME_UP")
+            && let Ok(taps) = v.parse::<u32>()
+        {
+            for i in 0..taps {
+                press(
+                    &mut game,
+                    std::env::var("VPW_VOLUME_KEY")
+                        .unwrap_or_else(|_| "Digit8".into())
+                        .as_str(),
+                    200 + i * 200,
+                    t,
+                );
+            }
+        }
         // Two seconds to settle, a coin, then start.
         press(&mut game, "Digit5", 2_000, t);
         press(&mut game, "Digit1", 4_000, t);

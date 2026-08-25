@@ -277,17 +277,31 @@ impl Hardware {
         }
     }
 
+    /// The button a player uses to change a setting, which on each family is
+    /// the one next to the display.
+    ///
+    /// On a Whitestar that is the **red Volume button**, dedicated switch six,
+    /// which is bit five of the byte at `$3000` — the numbers are one apart and
+    /// the layout is worth quoting rather than counting (`se.c:639`):
+    ///
+    /// ```text
+    /// D0 left flipper   D1 left EOS    D2 right flipper  D3 right EOS
+    /// D4 unused         D5 Volume      D6 Service Credit D7 Begin Test
+    /// ```
     fn set_diagnostic_up(&mut self, closed: bool) {
         match self {
             Self::S11(b) => b.set_diagnostic_up(closed),
-            Self::Whitestar(b) => b.board.switches.set_dedicated(6, closed),
+            Self::Whitestar(b) => b.board.switches.set_dedicated(5, closed),
         }
     }
 
+    /// The button that walks a service menu on. On a Whitestar that is the
+    /// **black Begin Test button**, dedicated switch eight. See
+    /// [`Hardware::set_diagnostic_up`] for the layout.
     fn set_diagnostic_advance(&mut self, closed: bool) {
         match self {
             Self::S11(b) => b.set_diagnostic_advance(closed),
-            Self::Whitestar(b) => b.board.switches.set_dedicated(5, closed),
+            Self::Whitestar(b) => b.board.switches.set_dedicated(7, closed),
         }
     }
 

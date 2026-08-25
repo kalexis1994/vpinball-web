@@ -147,6 +147,32 @@ fn main() {
     }
     let extract_time = t1.elapsed();
 
+    // How bright the playfield's own artwork is before anything lights it.
+    // The number to compare a photograph against: a render much darker than
+    // the texture is a lighting fault, and one about as dark is a table that
+    // was drawn dark.
+    if std::env::var("VPW_ART").is_ok() {
+        let want = scene.playfield_image.to_ascii_lowercase();
+        for img in &vpx.images {
+            if img.name.to_ascii_lowercase() != want {
+                continue;
+            }
+            let Some(data) = img.jpeg.as_ref().map(|j| j.data.clone()) else {
+                continue;
+            };
+            if let Ok(decoded) = image::load_from_memory(&data) {
+                let rgb = decoded.to_rgb8();
+                let n = rgb.pixels().len().max(1) as f64;
+                let mean: f64 = rgb
+                    .pixels()
+                    .map(|p| (u32::from(p[0]) + u32::from(p[1]) + u32::from(p[2])) as f64 / 3.0)
+                    .sum::<f64>()
+                    / n;
+                println!("playfield art  {} is {mean:.1}/255 mean", img.name);
+            }
+        }
+    }
+
     let mut gpu = pollster::block_on(vpw_render::offscreen::Offscreen::new(width, height))
         .expect("could not initialise wgpu");
 
