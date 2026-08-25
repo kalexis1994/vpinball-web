@@ -394,6 +394,10 @@ pub struct Scene {
     /// can never light up: a table's lamps are almost all off in the file,
     /// because they are the game's lamps and the game turns them on.
     pub lights: Vec<crate::light::Light>,
+    /// Every flasher, shown or not, for the same reason as the lamps: the
+    /// game switches them, and a strobe saved off is the one about to fire.
+    /// See [`crate::flasher`].
+    pub flashers: Vec<crate::flasher::Flasher>,
     /// What the table asks the physics for. See [`TablePhysics`].
     pub physics: TablePhysics,
 }
@@ -544,6 +548,7 @@ pub fn extract(vpx: &VPX) -> Scene {
 
     let mut meshes = Vec::new();
     let mut lights = Vec::new();
+    let mut flashers = Vec::new();
 
     // The playfield plane is not in the file: it has to be generated. Unless
     // the table ships a primitive called `playfield_mesh`, which replaces it
@@ -618,6 +623,11 @@ pub fn extract(vpx: &VPX) -> Scene {
                     &crate::light::Site::resolve(vpx, &l.surface, playfield),
                 ));
             }
+            // Not a mesh: a flasher is drawn by a pass of its own, blended,
+            // with a state the script rewrites every frame. Baking it into the
+            // static scene would draw a strobe permanently on, which is the one
+            // thing a strobe never is.
+            GameItemEnum::Flasher(f) => flashers.extend(crate::flasher::build(f, playfield)),
             _ => {}
         }
 
@@ -679,6 +689,7 @@ pub fn extract(vpx: &VPX) -> Scene {
         lighting: lighting(vpx),
         physics: table_physics(vpx),
         lights,
+        flashers,
     }
 }
 

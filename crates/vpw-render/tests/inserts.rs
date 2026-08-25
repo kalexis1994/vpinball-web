@@ -164,6 +164,7 @@ fn scene(image: &str, image_mode: bool, surface_image: &str, state: f32) -> Scen
         },
         lights: vec![light],
         env_image: String::new(),
+        flashers: Vec::new(),
     }
 }
 

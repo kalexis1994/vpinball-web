@@ -176,7 +176,7 @@ impl Post {
     /// table's own value is read and used (`vpw_table::geometry::Lighting`),
     /// and it is not the rarity this comment used to claim — the one table this
     /// was first noticed on asks for 0.3, a sixth of it.
-    const DEFAULT_STRENGTH: f32 = 1.8;
+    pub const DEFAULT_STRENGTH: f32 = 1.8;
 
     pub fn new(
         device: &wgpu::Device,

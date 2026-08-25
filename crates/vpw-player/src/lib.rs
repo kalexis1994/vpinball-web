@@ -303,6 +303,10 @@ fn draw_display(table: &Game, renderer: &mut TableRenderer, last: &mut Vec<u16>)
             height,
             vpw_table::backbox::DISPLAY_PIXELS,
         ));
+        // And the same dots to any flasher the table uses as its display —
+        // which is how a 10.8 table puts the DMD on the playfield. Those draw
+        // the dots themselves, so they get the dots and not the picture.
+        renderer.set_dmd(&dots, width, height);
         return;
     }
 
@@ -446,6 +450,31 @@ fn sync(table: &mut Game, renderer: &mut TableRenderer, dt_ms: f32) {
                 None => (1.0, 1.0),
             };
             lights.animate(&queue, i, state, scale, dt_ms);
+        }
+    }
+
+    // The flashers, on the same terms: the file leaves them mostly off, and
+    // the game fires them — `core.vbs` toggles `Visible` off the solenoids
+    // (`core.vbs:2534`), a table's own script fades `IntensityScale`. The
+    // renderer skips a flasher whose numbers have not moved, so handing every
+    // one over every frame costs a comparison each.
+    {
+        let (flashers, device, queue) = renderer.flashers_mut();
+        for i in 0..flashers.names.len() {
+            let Some(item) = table.items().get(&flashers.names[i]) else {
+                continue;
+            };
+            // `LMAP`: a flasher bound to a lamp fades with it, by the ratio
+            // of the lamp's current level to its full one
+            // (`flasher.cpp:1171-1177`). The fade itself lives in the light
+            // pass, which this cannot read; the switch is here, and a lamp
+            // either side of its fade is at the switch's value. A departure,
+            // and a small one: a lightmap flasher snaps where its lamp ramps.
+            let light_scale = match flashers.light_map(i).and_then(|n| table.items().get(n)) {
+                Some(lamp) if lamp.light_state() == 0 => 0.0,
+                _ => 1.0,
+            };
+            flashers.set_state(device, queue, i, &item.flasher_state(), light_scale);
         }
     }
 

@@ -9,6 +9,7 @@ pub mod ball;
 pub mod builtin;
 pub mod controls;
 pub mod dragpoint;
+pub mod flasher;
 pub mod flipper;
 pub mod geometry;
 pub mod light;

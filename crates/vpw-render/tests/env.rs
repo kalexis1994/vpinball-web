@@ -112,6 +112,7 @@ fn floor_under(env_image: &str, images: Vec<Image>) -> Scene {
             reflection_strength: 0.0,
         },
         lights: Vec::new(),
+        flashers: Vec::new(),
         physics: vpw_table::geometry::TablePhysics {
             slope_deg: 6.0,
             gravity: 0.0,

@@ -517,7 +517,7 @@ pub fn white_texture(device: &wgpu::Device, queue: &wgpu::Queue) -> wgpu::Textur
     tex.create_view(&wgpu::TextureViewDescriptor::default())
 }
 
-fn upload_texture(
+pub(crate) fn upload_texture(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     image: &vpw_table::geometry::Image,

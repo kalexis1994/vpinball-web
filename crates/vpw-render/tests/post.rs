@@ -154,6 +154,7 @@ fn one_bright_light(intensity: f32, alpha: f32) -> Scene {
             reflection_strength: 0.0,
         },
         lights: vec![light],
+        flashers: Vec::new(),
     }
 }
 
