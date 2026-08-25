@@ -6,6 +6,7 @@
 //! anything.
 
 use crate::dynamic::DynamicParts;
+use crate::flashers::Flashers;
 use crate::lights::Lights;
 use crate::pipeline::TablePipeline;
 use crate::scene::GpuScene;
@@ -137,6 +138,7 @@ pub fn draw(
         scene,
         dynamic,
         lights,
+        None,
         |_| true,
     );
 }
@@ -151,7 +153,9 @@ pub fn draw_filtered(
     scene: &GpuScene,
     filter: impl Fn(&crate::scene::Batch) -> bool,
 ) {
-    draw_full(encoder, color, depth, pipeline, scene, None, None, filter);
+    draw_full(
+        encoder, color, depth, pipeline, scene, None, None, None, filter,
+    );
 }
 
 /// The whole pass: opaque geometry, transparent geometry and lights.
@@ -161,6 +165,14 @@ pub fn draw_filtered(
 /// early-Z of the opaque geometry, and the ball is opaque and has to be able to
 /// be covered by a ramp. Drawing them afterwards would paint the ball on top of
 /// whatever is hiding it.
+///
+/// The flashers come after everything, the lights included. The original
+/// sorts them among the other transparent draws by `depthBias - z`
+/// (`RenderPass.cpp:118`), and a flasher stands *above* the playfield — on
+/// Lord of the Rings the strobes sit between fifty and four hundred units up,
+/// and a lamp's halo lies at a tenth of one — so for nearly every pair the
+/// sort puts the lamp first and the flasher over it. Drawing the flashers before the lights instead lets a
+/// bulb's modulating blend multiply a strobe that is not under it.
 #[expect(
     clippy::too_many_arguments,
     reason = "one argument per stage of the pass"
@@ -173,6 +185,7 @@ pub fn draw_full(
     scene: &GpuScene,
     dynamic: Option<&DynamicParts>,
     lights: Option<&Lights>,
+    flashers: Option<&Flashers>,
     filter: impl Fn(&crate::scene::Batch) -> bool,
 ) {
     let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -220,5 +233,10 @@ pub fn draw_full(
     // The lights go last: they add on top of what is already drawn.
     if let Some(l) = lights {
         l.draw(&mut pass, &pipeline.light_frame_bind_group);
+    }
+
+    // And the flashers over the lot; see above for why not before the lights.
+    if let Some(f) = flashers {
+        f.draw(&mut pass, &pipeline.light_frame_bind_group);
     }
 }

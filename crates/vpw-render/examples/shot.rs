@@ -200,7 +200,35 @@ fn main() {
     let t2 = std::time::Instant::now();
     let gpu_scene = gpu.upload(&scene);
     gpu.upload_lights(&scene);
+    // VPW_NO_FLASHERS=1 leaves them out, for a photograph of what they add.
+    if std::env::var("VPW_NO_FLASHERS").is_err() {
+        gpu.upload_flashers(&scene);
+    }
     let upload_time = t2.elapsed();
+
+    // VPW_FLASHERS=1 lists them, with the state the file leaves them in.
+    if std::env::var("VPW_FLASHERS").is_ok() {
+        println!("{} flashers", scene.flashers.len());
+        for f in &scene.flashers {
+            let s = &f.state;
+            println!(
+                "  {:<16} {:?} at ({:.0}, {:.0}) h {:.0} rot {:?} alpha {:.0} {}{} A {:?} B {:?} {:?} {:.0}%",
+                f.name,
+                f.mode,
+                s.x,
+                s.y,
+                s.height,
+                s.rot,
+                s.alpha,
+                if s.visible { "shown" } else { "hidden" },
+                if s.add_blend { " additive" } else { "" },
+                s.image_a,
+                s.image_b,
+                s.filter,
+                s.filter_amount
+            );
+        }
+    }
 
     // Something on the machine's head, so a photograph shows the display the
     // way a player would see it. VPW_SAY=text picks what it says.

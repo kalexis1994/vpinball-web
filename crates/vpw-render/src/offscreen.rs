@@ -7,6 +7,7 @@
 
 use crate::camera::Camera;
 use crate::dynamic::DynamicParts;
+use crate::flashers::Flashers;
 use crate::lights::Lights;
 use crate::pipeline::TablePipeline;
 use crate::post::Post;
@@ -20,6 +21,8 @@ pub struct Offscreen {
     pub queue: wgpu::Queue,
     pub pipeline: TablePipeline,
     pub lights: Lights,
+    /// The strobes, and the display where a table places it with one.
+    pub flashers: Flashers,
     /// The pieces that move. `None` draws only the baked geometry, which is
     /// what a plain photo of a table wants.
     pub dynamic: Option<DynamicParts>,
@@ -94,12 +97,14 @@ impl Offscreen {
             post.reflection_view(),
         );
         let lights = Lights::new(&device, &pipeline.light_frame_layout, hdr);
+        let flashers = Flashers::new(&device, &queue, &pipeline.light_frame_layout, hdr);
 
         Ok(Self {
             device,
             queue,
             pipeline,
             lights,
+            flashers,
             dynamic: None,
             width,
             height,
@@ -165,6 +170,18 @@ impl Offscreen {
     pub fn upload_lights(&mut self, scene: &Scene) {
         self.lights.upload(&self.device, &scene.lights);
         self.post.set_exposure(&self.queue, scene.lighting.exposure);
+    }
+
+    /// Uploads the table's flashers, in the state the file leaves them.
+    pub fn upload_flashers(&mut self, scene: &Scene) {
+        self.flashers.upload(&self.device, &self.queue, scene);
+    }
+
+    /// Puts a frame of dots on the flashers that show the display, the same
+    /// way the browser does. See `TableRenderer::set_dmd`.
+    pub fn set_dmd(&mut self, dots: &[u8], width: usize, height: usize) {
+        self.flashers
+            .set_dmd(&self.device, &self.queue, dots, width, height);
     }
 
     /// Uploads the moving pieces, so the photo shows the flippers where the
@@ -251,6 +268,7 @@ impl Offscreen {
             scene,
             self.dynamic.as_ref(),
             Some(&self.lights),
+            Some(&self.flashers),
             &filter,
         );
         self.post.finish(&mut encoder, &view);

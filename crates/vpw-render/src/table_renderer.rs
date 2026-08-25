@@ -7,6 +7,7 @@
 
 use crate::camera::Camera;
 use crate::dynamic::DynamicParts;
+use crate::flashers::Flashers;
 use crate::lights::Lights;
 use crate::pipeline::TablePipeline;
 use crate::post::Post;
@@ -25,6 +26,9 @@ pub struct TableRenderer {
     /// table with nothing that moves.
     dynamic: Option<DynamicParts>,
     lights: Lights,
+    /// The strobes and flash domes, and on a 10.8 table the display. Empty
+    /// until a table is loaded, and for a table without any.
+    flashers: Flashers,
     pub camera: Camera,
     /// Where the player is looking from, and what that framing was worked out
     /// against. Kept so the view survives a resize and a table reload.
@@ -59,6 +63,7 @@ impl TableRenderer {
             post.reflection_view(),
         );
         let lights = Lights::new(&gpu.device, &pipeline.light_frame_layout, hdr);
+        let flashers = Flashers::new(&gpu.device, &gpu.queue, &pipeline.light_frame_layout, hdr);
         Ok(Self {
             gpu,
             pipeline,
@@ -66,6 +71,7 @@ impl TableRenderer {
             scene: None,
             dynamic: None,
             lights,
+            flashers,
             camera: Camera::default(),
             occupied: Vec::new(),
             view: crate::camera::View::Front,
@@ -243,6 +249,8 @@ impl TableRenderer {
         self.occupied = scene.occupied();
         self.reframe();
         self.lights.upload(&self.gpu.device, &scene.lights);
+        self.flashers
+            .upload(&self.gpu.device, &self.gpu.queue, scene);
         self.dynamic = Some(DynamicParts::upload(
             &self.gpu.device,
             &self.gpu.queue,
@@ -259,12 +267,42 @@ impl TableRenderer {
         self.scene = None;
         self.dynamic = None;
         self.lights.lights.clear();
+        self.flashers = Flashers::new(
+            &self.gpu.device,
+            &self.gpu.queue,
+            &self.pipeline.light_frame_layout,
+            self.gpu.hdr_format,
+        );
     }
 
     /// The moving pieces, to move them before drawing.
     /// The lamps, to turn on and off as the game does.
     pub fn lights_mut(&mut self) -> &mut crate::lights::Lights {
         &mut self.lights
+    }
+
+    /// The flashers, to switch and fade as the script does.
+    ///
+    /// Handed back with the device and the queue, because setting a flasher
+    /// may need both: a script that swaps a picture needs a new bind group,
+    /// and everything else is a buffer write.
+    pub fn flashers_mut(&mut self) -> (&mut Flashers, &wgpu::Device, &wgpu::Queue) {
+        (&mut self.flashers, &self.gpu.device, &self.gpu.queue)
+    }
+
+    /// Puts a frame of the machine's dot matrix on the flashers that show it.
+    ///
+    /// The same frame that goes onto the head through [`Self::set_display`],
+    /// by a different route: the head wants a picture with the dots already
+    /// drawn, a flasher wants the dots themselves and draws them in its own
+    /// shader, the way the original does (`Renderer::SetupDMDRender`,
+    /// `Renderer.cpp:1420`). Nothing to do on a table with no such flasher.
+    pub fn set_dmd(&mut self, dots: &[u8], width: usize, height: usize) {
+        if !self.flashers.shows_dmd() {
+            return;
+        }
+        self.flashers
+            .set_dmd(&self.gpu.device, &self.gpu.queue, dots, width, height);
     }
 
     pub fn dynamic_mut(&mut self) -> Option<&mut DynamicParts> {
@@ -407,6 +445,7 @@ impl TableRenderer {
             scene,
             self.dynamic.as_ref(),
             Some(&self.lights),
+            Some(&self.flashers),
             move |b| head || !b.backbox,
         );
         self.post.finish(&mut encoder, &view);

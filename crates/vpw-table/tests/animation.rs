@@ -413,6 +413,7 @@ fn the_moving_pieces_leave_the_baked_scene() {
             reflection_strength: 0.0,
         },
         lights: Vec::new(),
+        flashers: Vec::new(),
         physics: vpw_table::geometry::TablePhysics {
             slope_deg: 6.0,
             gravity: DEFAULT_TABLE_GRAVITY,

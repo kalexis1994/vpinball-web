@@ -164,8 +164,12 @@ is what a cabinet has and this does not.
   lit artwork. Needs the table extent in the light builder, a texture
   binding in the light pass, and the `PS_LightWithTexel` blend. The most
   visible remaining gap.
-- **flashers** are not drawn at all — strobes, beacons, and on 10.8 tables
-  the DMD is placed with one
+- ✓ **flashers**: the polygon, both pictures and the four filters, the
+  painted and the additive blend, every script member, and the DMD mode
+  that a 10.8 table places its display with. Not yet: the `Display`,
+  `AlphaSeg` and external modes (plugin displays), ball shadows on a
+  flasher, and a lightmap flasher snaps with its lamp's switch rather than
+  following its fade
 - the table's own **environment map** (`EIMG`) — the bundled one is always
   used, and on many tables the environment is the only light source
 - tone-mapper selection and the colour-grade LUT
@@ -200,8 +204,8 @@ seen.
 
 ## Next
 
-1. The insert image and the flashers: the two things a player sees on every
-   table that are not there.
+1. The insert image: the one thing a player sees on every table that is not
+   there.
 2. The table's own environment map.
 3. The DMD PWM filter, so the display looks like the machine's.
 4. A third table, of a third family, to find what two have not.

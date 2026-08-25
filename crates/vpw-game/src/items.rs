@@ -159,15 +159,101 @@ struct Visual {
     /// clock (`hittarget.cpp:601`); counting down is the same thing without
     /// having to hand this module a clock it otherwise has no use for.
     raise_wait_ms: Cell<f32>,
+    /// A flasher's own members. Every item carries the block because the
+    /// items are one type, and it is a dozen cells.
+    flasher: FlasherProps,
     /// Everything else the script sets on this part. See the module note: a
     /// member we do not model is kept rather than refused, so it at least reads
     /// back as what was written.
     extra: RefCell<HashMap<Box<str>, Value>>,
 }
 
+/// What a script writes on a flasher, as the original stores it
+/// (`FlasherData`, `flasher.h:15-62`), less the rotations, which sit in
+/// [`Visual::rot_and_tra`] with everyone else's `RotX/Y/Z`.
+///
+/// The renderer reads it back through [`Item::flasher_state`] every frame; the
+/// script writes it whenever it likes. `core.vbs` alone flips `Visible` on
+/// every flasher wired to a solenoid (`vpmToggleObj`, `core.vbs:2534`), and a
+/// table's own script fades with `IntensityScale`, dims with `Opacity` and
+/// recolours with `Color` — a strobe that is not told about any of that stays
+/// however the file left it, which is to say off.
+#[derive(Debug)]
+struct FlasherProps {
+    /// `X` and `Y`, the centre of the outline: `get_X` answers the box's
+    /// centre and `put_X` shifts every point by the difference
+    /// (`flasher.cpp:553-586`).
+    x: Cell<f64>,
+    y: Cell<f64>,
+    height: Cell<f64>,
+    /// `Color`, as the script sees it: an `OLE_COLOR`, `0x00BBGGRR`.
+    color: Cell<u32>,
+    /// `Opacity`, out of a hundred and never below zero (`SetAlpha`,
+    /// `flasher.h:154`).
+    opacity: Cell<f64>,
+    modulate_vs_add: Cell<f64>,
+    add_blend: Cell<bool>,
+    filter: Cell<vpw_table::flasher::Filter>,
+    /// `Amount`, out of a hundred and never below zero (`SetFilterAmount`,
+    /// `flasher.h:162`).
+    amount: Cell<f64>,
+    image_a: RefCell<Rc<str>>,
+    image_b: RefCell<Rc<str>>,
+}
+
+impl Default for FlasherProps {
+    fn default() -> Self {
+        Self {
+            x: Cell::new(0.0),
+            y: Cell::new(0.0),
+            height: Cell::new(0.0),
+            color: Cell::new(0),
+            opacity: Cell::new(100.0),
+            modulate_vs_add: Cell::new(0.9),
+            add_blend: Cell::new(false),
+            filter: Cell::new(vpw_table::flasher::Filter::default()),
+            amount: Cell::new(100.0),
+            image_a: RefCell::new(Rc::from("")),
+            image_b: RefCell::new(Rc::from("")),
+        }
+    }
+}
+
+impl FlasherProps {
+    /// Where the file leaves it.
+    fn seed(&self, f: &vpin::vpx::gameitem::flasher::Flasher) {
+        if let Some(c) = vpw_table::flasher::center(f) {
+            self.x.set(f64::from(c.x));
+            self.y.set(f64::from(c.y));
+        }
+        self.height.set(f64::from(f.height));
+        self.color
+            .set(u32::from(f.color.r) | (u32::from(f.color.g) << 8) | (u32::from(f.color.b) << 16));
+        self.opacity.set(f64::from(f.alpha.max(0)));
+        self.modulate_vs_add.set(f64::from(f.modulate_vs_add));
+        self.add_blend.set(f.add_blend);
+        // Through the name rather than the number, so the two crates cannot
+        // disagree about which number is which filter.
+        let filter = match f.filter {
+            vpin::vpx::gameitem::flasher::Filter::None => "none",
+            vpin::vpx::gameitem::flasher::Filter::Additive => "additive",
+            vpin::vpx::gameitem::flasher::Filter::Overlay => "overlay",
+            vpin::vpx::gameitem::flasher::Filter::Multiply => "multiply",
+            vpin::vpx::gameitem::flasher::Filter::Screen => "screen",
+        };
+        if let Some(filter) = vpw_table::flasher::Filter::from_name(filter) {
+            self.filter.set(filter);
+        }
+        self.amount.set(f64::from(f.filter_amount));
+        *self.image_a.borrow_mut() = Rc::from(f.image_a.as_str());
+        *self.image_b.borrow_mut() = Rc::from(f.image_b.as_str());
+    }
+}
+
 impl Default for Visual {
     fn default() -> Self {
         Self {
+            flasher: FlasherProps::default(),
             visible: Cell::new(true),
             state: Cell::new(0),
             intensity_scale: Cell::new(1.0),
@@ -411,6 +497,7 @@ impl Object for Item {
             Kind::Spinner => self.spinner_get(&lower),
             Kind::Plunger => self.plunger_get(&lower),
             Kind::Bumper => self.bumper_get(&lower),
+            Kind::Flasher => self.flasher_get(&lower),
             _ => Err(Error::no_such_member(name)),
         };
         match specific {
@@ -443,6 +530,7 @@ impl Object for Item {
             Kind::Gate => self.gate_set(&lower, &value),
             Kind::Kicker => self.kicker_set(&lower, &value),
             Kind::Bumper => self.bumper_set(&lower, &value),
+            Kind::Flasher => self.flasher_set(&lower, &value),
             _ => Err(Error::no_such_member(name)),
         };
         if specific.is_err() {
@@ -852,6 +940,85 @@ impl Item {
         Ok(())
     }
 
+    /// The flasher's own members (`flasher.cpp:553-830`). `Visible`,
+    /// `IntensityScale` and the three rotations are common members and never
+    /// get here.
+    fn flasher_get(&self, name: &str) -> Result<Value> {
+        let f = &self.visual.flasher;
+        Ok(match name {
+            "x" => Value::Double(f.x.get()),
+            "y" => Value::Double(f.y.get()),
+            "height" => Value::Double(f.height.get()),
+            // `OLE_COLOR` is a long to a script.
+            "color" => Value::Long(f.color.get() as i32),
+            "imagea" => Value::Str(f.image_a.borrow().clone()),
+            "imageb" => Value::Str(f.image_b.borrow().clone()),
+            "opacity" => Value::Long(f.opacity.get() as i32),
+            "modulatevsadd" => Value::Double(f.modulate_vs_add.get()),
+            "amount" => Value::Long(f.amount.get() as i32),
+            "addblend" => Value::Bool(f.add_blend.get()),
+            "filter" => Value::Str(Rc::from(f.filter.get().name())),
+            _ => return Err(Error::no_such_member(name)),
+        })
+    }
+
+    fn flasher_set(&self, name: &str, value: &Value) -> Result<()> {
+        let f = &self.visual.flasher;
+        match name {
+            "x" => f.x.set(value.to_number()?),
+            "y" => f.y.set(value.to_number()?),
+            "height" => f.height.set(value.to_number()?),
+            "color" => f.color.set(value.to_int()? as u32),
+            "imagea" => *f.image_a.borrow_mut() = value.to_str()?,
+            "imageb" => *f.image_b.borrow_mut() = value.to_str()?,
+            // A `LONG` in the interface, so `Opacity = 12.7` has already lost
+            // its fraction; and clamped at zero (`SetAlpha`, `flasher.h:154`).
+            "opacity" => f.opacity.set(f64::from(value.to_int()?.max(0))),
+            "modulatevsadd" => f.modulate_vs_add.set(value.to_number()?),
+            "amount" => f.amount.set(f64::from(value.to_int()?.max(0))),
+            "addblend" => f.add_blend.set(value.to_bool()?),
+            // A name it does not know changes nothing, which is exactly
+            // `put_Filter` (`flasher.cpp:710-726`).
+            "filter" => {
+                if let Some(filter) = vpw_table::flasher::Filter::from_name(&value.to_str()?) {
+                    f.filter.set(filter);
+                }
+            }
+            _ => return Err(Error::no_such_member(name)),
+        }
+        Ok(())
+    }
+
+    /// What the renderer needs of a flasher this frame: everything the script
+    /// can have written, in the form `vpw_table::flasher` defines.
+    ///
+    /// Built fresh each time rather than kept, because the renderer compares
+    /// it against what it last drew and a table has a few dozen flashers: the
+    /// clone is cheaper than the bookkeeping that would avoid it.
+    pub fn flasher_state(&self) -> vpw_table::flasher::State {
+        let v = &self.visual;
+        let f = &v.flasher;
+        let c = f.color.get();
+        let rot = v.rot_and_tra.get();
+        vpw_table::flasher::State {
+            visible: v.visible.get(),
+            x: f.x.get() as f32,
+            y: f.y.get() as f32,
+            height: f.height.get() as f32,
+            rot: [rot[0], rot[1], rot[2]],
+            // `convertColor`: out of 255 and not decoded (`utils/color.h:22`).
+            color: [c & 0xff, (c >> 8) & 0xff, (c >> 16) & 0xff].map(|ch| ch as f32 / 255.0),
+            alpha: f.opacity.get() as f32,
+            intensity_scale: v.intensity_scale.get() as f32,
+            modulate_vs_add: f.modulate_vs_add.get() as f32,
+            add_blend: f.add_blend.get(),
+            filter: f.filter.get(),
+            filter_amount: f.amount.get() as f32,
+            image_a: f.image_a.borrow().to_string(),
+            image_b: f.image_b.borrow().to_string(),
+        }
+    }
+
     fn gate_get(&self, name: &str, args: &[Value]) -> Result<Value> {
         // `Move dir, speed, angle` is a method, and the only one a gate has.
         if name == "move" {
@@ -1235,6 +1402,9 @@ impl Items {
                 // A light that the file says starts on.
                 visual.state.set(i32::from(l.state.unwrap_or(0.0) != 0.0));
             }
+            if let vpin::vpx::gameitem::GameItemEnum::Flasher(f) = item {
+                visual.flasher.seed(f);
+            }
             if let vpin::vpx::gameitem::GameItemEnum::HitTarget(t) = item {
                 use vpin::vpx::gameitem::hittarget::TargetType as T;
                 visual.drops.set(matches!(
@@ -1532,9 +1702,15 @@ fn item_timer(item: &vpin::vpx::gameitem::GameItemEnum) -> Timer {
 /// Zero is not a safe default: a table that reads `RotX` before writing it —
 /// and `core.vbs` does, to animate relative to where a toy already is — would
 /// see a part it has not touched claim to be square with the table.
+///
+/// A flasher has the first three: its `RotX/Y/Z` are the same members and
+/// live in the same slots, so the common accessors serve both.
 fn item_placement(item: &vpin::vpx::gameitem::GameItemEnum) -> [f32; 9] {
     match item {
         vpin::vpx::gameitem::GameItemEnum::Primitive(p) => p.rot_and_tra,
+        vpin::vpx::gameitem::GameItemEnum::Flasher(f) => {
+            [f.rot_x, f.rot_y, f.rot_z, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        }
         _ => [0.0; 9],
     }
 }

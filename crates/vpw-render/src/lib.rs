@@ -7,6 +7,7 @@
 pub mod camera;
 pub mod dynamic;
 pub mod env;
+pub mod flashers;
 pub mod lights;
 pub mod pass;
 pub mod pipeline;
@@ -21,6 +22,7 @@ pub mod offscreen;
 pub use camera::Camera;
 pub use dynamic::{DynamicParts, MAX_BALLS};
 pub use env::EnvMap;
+pub use flashers::Flashers;
 pub use lights::Lights;
 pub use pipeline::TablePipeline;
 pub use post::Post;
