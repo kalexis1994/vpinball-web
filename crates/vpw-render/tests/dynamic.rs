@@ -85,6 +85,7 @@ fn floor_scene() -> Scene {
         },
         playfield_image: String::new(),
         playfield_material: String::new(),
+        env_image: String::new(),
         lighting: Lighting {
             lights: [Vec3::new(0.0, 0.0, 800.0), Vec3::new(0.0, 0.0, 800.0)],
             emission: [1.0, 1.0, 1.0],

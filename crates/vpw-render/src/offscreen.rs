@@ -186,7 +186,14 @@ impl Offscreen {
         ));
     }
 
-    pub fn upload(&self, scene: &Scene) -> GpuScene {
+    /// Uploads the table, environment map included: the map is the table's
+    /// (`Renderer.cpp:208`), and a photograph under the wrong one is a
+    /// photograph of a different table.
+    pub fn upload(&mut self, scene: &Scene) -> GpuScene {
+        self.pipeline.set_envmap(
+            &self.device,
+            crate::env::EnvMap::for_table(&self.device, &self.queue, scene),
+        );
         GpuScene::upload(
             &self.device,
             &self.queue,

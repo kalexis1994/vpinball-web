@@ -150,6 +150,12 @@ fn main() {
             light.intensity *= f;
         }
     }
+    // VPW_ENVMAP=default lights the table by the map that ships with Visual
+    // Pinball instead of its own, which is how you find out what the table's
+    // own map is doing: two photos, one under each.
+    if std::env::var("VPW_ENVMAP").is_ok_and(|v| v == "default") {
+        scene.env_image.clear();
+    }
     // VPW_FLAT_LIGHTS=1 forces every light onto the plain additive path, to
     // tell "the halo is not being drawn" apart from "the halo is drawn and its
     // blend contributes nothing".
@@ -337,6 +343,18 @@ fn main() {
 
     let s = gpu_scene.stats;
     println!("adapter        {}", gpu.adapter);
+    // Which map the table was lit by. On a table with no other light this
+    // is the whole exposure, so a photo that says nothing about it cannot
+    // be compared with another.
+    println!(
+        "environment    {} (table asks for {})",
+        gpu.pipeline.envmap.source,
+        if scene.env_image.is_empty() {
+            "nothing"
+        } else {
+            &scene.env_image
+        }
+    );
     println!(
         "table          {}",
         vpx.info.table_name.clone().unwrap_or_default()
@@ -385,9 +403,10 @@ fn main() {
         }
     }
 
-    let not_background = pixels
-        .as_chunks::<4>()
-        .0
+    let brightness =
+        |p: &[u8; 4]| (u32::from(p[0]) + u32::from(p[1]) + u32::from(p[2])) as f64 / 3.0;
+    let texels = pixels.as_chunks::<4>().0;
+    let not_background = texels
         .iter()
         .filter(|p| p[0] > 12 || p[1] > 12 || p[2] > 16)
         .count();
@@ -397,6 +416,15 @@ fn main() {
         not_background,
         width * height,
         100.0 * not_background as f32 / (width * height) as f32
+    );
+    // The number to put next to `playfield art` above: how bright the
+    // picture came out. Over every pixel, black bars included, because the
+    // set has to be the same in the two photographs being compared; a mean
+    // over "the pixels that are not black" moves its own goalposts when the
+    // table gets darker.
+    println!(
+        "rendered mean      {:.1}/255 over the whole picture",
+        texels.iter().map(brightness).sum::<f64>() / texels.len().max(1) as f64
     );
 
     image::save_buffer(&output, &pixels, width, height, image::ColorType::Rgba8)
