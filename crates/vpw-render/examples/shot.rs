@@ -121,12 +121,24 @@ fn main() {
         println!("  exposure        {}", scene.lighting.exposure);
         println!("  bloom strength  {}", scene.lighting.bloom_strength);
         println!("  env scale       {}", scene.lighting.env_scale);
+        println!("  light range     {}", scene.lighting.range);
+        println!("  global emission {}", vpx.gamedata.global_emission_scale);
+        println!(
+            "  overwrite day/night {:?}",
+            vpx.gamedata.overwrite_global_day_night
+        );
+        println!("  light 0 at      {:?}", scene.lighting.lights[0]);
         for l in scene.lights.iter().take(4) {
             println!(
                 "  e.g. {:<20} i {:.4} r {:.0} p {:.2} c {:?}",
                 l.name, l.intensity, l.falloff_radius, l.falloff_power, l.color
             );
         }
+    }
+    // VPW_NO_SCENE_LIGHTS=1 turns the two point lights off, to find out whether
+    // they are contributing anything at all.
+    if std::env::var("VPW_NO_SCENE_LIGHTS").is_ok() {
+        scene.lighting.emission = [0.0; 3];
     }
     // VPW_INTENSITY=<f> scales every light, to find out how far off the scale
     // is rather than arguing about it.

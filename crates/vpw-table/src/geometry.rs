@@ -646,16 +646,32 @@ pub fn extract(vpx: &VPX) -> Scene {
 /// The two scene lights, exactly as `Renderer.cpp:1055-1065` builds them.
 fn lighting(vpx: &VPX) -> Lighting {
     let g = &vpx.gamedata;
-    let scale = g.light_emission_scale;
+    // The day/night scale, which multiplies the ambient, the two scene lights
+    // and the environment alike (`Renderer.cpp:1037`, `:1051`, `:1063`).
+    //
+    // Whose number it is depends on the table. `Renderer.cpp:398` takes the
+    // table's own only in `Mode::Table`, and a table asks for that mode by
+    // setting "overwrite global day/night"; without it the player's own light
+    // level is used, and there is no player setting here, so it is one.
+    //
+    // Reading this as always-the-table's would be worse than not reading it:
+    // of the two tables to hand, one asks for 0.33 and does not claim the
+    // override, and the other asks for 0.08 and does. Applying both would make
+    // a table three times darker than its author meant.
+    let global = match g.overwrite_global_day_night {
+        Some(true) => g.global_emission_scale,
+        _ => 1.0,
+    };
+    let scale = g.light_emission_scale * global;
     Lighting {
         lights: [
             Vec3::new(g.right * 0.5, g.bottom / 3.0, g.light_height),
             Vec3::new(g.right * 0.5, g.bottom * 2.0 / 3.0, g.light_height),
         ],
         emission: color(&g.light0_emission).map(|c| c * scale),
-        ambient: color(&g.light_ambient),
+        ambient: color(&g.light_ambient).map(|c| c * global),
         range: g.light_range,
-        env_scale: g.env_emission_scale,
+        env_scale: g.env_emission_scale * global,
         // Tables older than 10.8 do not carry the field; the neutral value is 1.
         exposure: g.exposure.unwrap_or(1.0),
         bloom_strength: g.bloom_strength,
