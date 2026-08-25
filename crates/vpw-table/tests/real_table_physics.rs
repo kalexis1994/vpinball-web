@@ -666,6 +666,17 @@ fn the_physics_of_a_real_table_runs_much_faster_than_real_time() {
     }
 
     eprintln!("{simulated}s of table: {best:.0}x real time per control second");
+    // A debug build is not the thing being measured. Its physics and its
+    // control loop slow down by different factors — bounds checks and no
+    // inlining land on the one and barely touch the other — so the ratio
+    // means nothing there and the same code reads 8 on one run and 14 on the
+    // next. The floor below is calibrated on release, where an interleaved
+    // A/B of a change that halved the ramp triangles read 20 to 54 against
+    // 20 to 21 for the old code, and it is only asked of release.
+    if cfg!(debug_assertions) {
+        eprintln!("debug build: reported, not asserted");
+        return;
+    }
     // The regression this was written for — a version that walked the table's
     // three thousand shapes on every sub-cycle to move eight rotating pieces —
     // cost twelve times more. Half of the lowest reading seen on a good machine
@@ -974,5 +985,65 @@ fn the_popper_puts_the_ball_on_its_ramp_and_not_in_a_corner() {
         end.x,
         end.y,
         end.z
+    );
+}
+
+/// A habitrail's channel is twenty units wider than its wires are apart.
+///
+/// `ramp.cpp:471-474`: for a wire ramp the collision outline is
+/// `m_wireDistanceX + 20`, while the tubes are drawn at `m_wireDistanceX`.
+/// That twenty is the difference between a channel a ball runs down and one
+/// it wedges in: the wires on the table this was found on are thirty-eight
+/// apart and a ball is fifty across.
+///
+/// Built by hand rather than read from F-14, which has no wire ramps.
+#[test]
+fn a_wire_ramps_channel_is_twenty_wider_than_its_wires() {
+    use vpin::vpx::gameitem::dragpoint::DragPoint;
+    use vpin::vpx::gameitem::ramp::{Ramp, RampType};
+
+    let point = |x: f32, y: f32| DragPoint {
+        x,
+        y,
+        ..DragPoint::default()
+    };
+    let ramp = |kind: RampType| Ramp {
+        ramp_type: kind,
+        wire_distance_x: 38.0,
+        wire_diameter: 6.0,
+        width_bottom: 55.0,
+        width_top: 55.0,
+        drag_points: vec![point(100.0, 1000.0), point(100.0, 500.0)],
+        ..Ramp::default()
+    };
+    let widths = |r: &Ramp| {
+        let seen = vpw_table::ramp::path(r, 4.0).expect("a path to draw");
+        let met = vpw_table::ramp::collision_path(r, 4.0).expect("a path to run on");
+        (
+            (seen.right[0] - seen.left[0]).length(),
+            (met.right[0] - met.left[0]).length(),
+        )
+    };
+
+    let (drawn, channel) = widths(&ramp(RampType::TwoWire));
+    assert!(
+        (drawn - 38.0).abs() < 1e-3,
+        "the tubes are drawn at the wire spacing, not {drawn}"
+    );
+    assert!(
+        (channel - 58.0).abs() < 1e-3,
+        "the channel is the spacing plus twenty, not {channel}"
+    );
+
+    // The two kinds the original leaves alone.
+    let (drawn, channel) = widths(&ramp(RampType::OneWire));
+    assert!(
+        (channel - drawn).abs() < 1e-3,
+        "a single wire gets no extra: {drawn} vs {channel}"
+    );
+    let (drawn, channel) = widths(&ramp(RampType::Flat));
+    assert!(
+        (channel - drawn).abs() < 1e-3,
+        "a flat ramp gets no extra: {drawn} vs {channel}"
     );
 }

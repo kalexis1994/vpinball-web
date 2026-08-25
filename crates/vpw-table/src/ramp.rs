@@ -53,6 +53,30 @@ pub fn path(ramp: &Ramp, accuracy: f32) -> Option<Outline> {
     Some(outline(ramp, &curve, edge_width(ramp)))
 }
 
+/// The path the **ball** meets, which is not quite the one it sees.
+///
+/// For a habitrail the original widens the collision outline by twenty units
+/// over the wire spacing — `widthcur = m_wireDistanceX; if (inc_width)
+/// widthcur += 20.0f;` (`ramp.cpp:471-474`), and `PhysicSetup` is the one
+/// caller that passes `inc_width` as true (`ramp.cpp:545`). The tubes are drawn
+/// at the spacing; the channel the ball runs in is the spacing plus twenty.
+///
+/// Leaving the twenty out is not a small error. A two-wire ramp with its wires
+/// thirty-eight apart draws correctly and gets a thirty-eight unit channel
+/// with a wall on each side, and a ball is fifty across: it wedges between the
+/// walls and stops dead, anywhere along the ramp, for ever.
+pub fn collision_path(ramp: &Ramp, accuracy: f32) -> Option<Outline> {
+    let curve = dragpoint::expand(&dragpoint::from_vpin(&ramp.drag_points), false, accuracy);
+    if curve.len() < 2 {
+        return None;
+    }
+    let extra = match ramp.ramp_type {
+        RampType::Flat | RampType::OneWire => 0.0,
+        _ => 20.0,
+    };
+    Some(outline(ramp, &curve, edge_width(ramp) + extra))
+}
+
 /// How far apart the two edges run: a fixed distance for a wire ramp, and
 /// `NAN` for a flat one, where it is interpolated point by point.
 fn edge_width(ramp: &Ramp) -> f32 {

@@ -49,6 +49,7 @@ export function TouchControls({ onNewBall }: Props) {
     <div className="touch" aria-label="Touch controls">
       <CoinSlot />
       <StartButton />
+      <VolumeButtons />
       <Plunger onNewBall={onNewBall} />
       <FlipperButton side="left" code="KeyZ" />
       <FlipperButton side="right" code="KeyM" />
@@ -224,6 +225,48 @@ function CoinSlot() {
     >
       <CoinIcon />
     </button>
+  );
+}
+
+/**
+ * The machine's volume, which is the machine's and not the page's.
+ *
+ * These are the red and the green button on the inside of a Stern coin door:
+ * the red one turns the volume down a step and the green one up, and the
+ * level lives in the machine's own battery-backed memory, so it is saved with
+ * the high scores and comes back next time. Nothing here scales the audio —
+ * a machine that ships quiet is turned up the way an operator turns it up,
+ * and the display says what it is set to as you press.
+ *
+ * Under the start button, out of the way: it is a setting, not a control.
+ */
+function VolumeButtons() {
+  const tap = useCallback((code: string) => {
+    void (async () => {
+      await pressKey(code, true);
+      window.setTimeout(() => void pressKey(code, false), 100);
+    })();
+  }, []);
+
+  const button = (code: string, label: string, glyph: string) => (
+    <button
+      className="touch-volume-btn"
+      aria-label={label}
+      onPointerDown={(e) => {
+        e.preventDefault();
+        tap(code);
+      }}
+      onContextMenu={(e) => e.preventDefault()}
+    >
+      {glyph}
+    </button>
+  );
+
+  return (
+    <div className="touch-volume" aria-label="Machine volume">
+      {button('Digit9', 'Volume down', '−')}
+      {button('Digit8', 'Volume up', '+')}
+    </div>
   );
 }
 

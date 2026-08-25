@@ -35,6 +35,27 @@ fn write_wav(path: &str, samples: &[u8], rate: u32) {
     let _ = std::fs::write(path, out);
 }
 
+fn shape_kind(s: &vpw_physics::engine::Shape) -> &'static str {
+    use vpw_physics::engine::Shape as S;
+    match s {
+        S::Line(_) => "Line",
+        S::LineZ(_) => "LineZ",
+        S::Line3D(_) => "Line3D",
+        S::Circle(_) => "Circle",
+        S::Plane(_) => "Plane",
+        S::Point(_) => "Point",
+        S::Poly(_) => "Poly",
+        S::Triangle(_) => "Triangle",
+        S::Slingshot(_) => "Slingshot",
+        S::Bumper(_) => "Bumper",
+        S::Gate(_) => "Gate",
+        S::Spinner(_) => "Spinner",
+        S::Kicker(_) => "Kicker",
+        S::Flipper(_) => "Flipper",
+        S::Plunger(_) => "Plunger",
+    }
+}
+
 fn main() {
     let mut args = std::env::args().skip(1);
     let table = args
@@ -105,8 +126,16 @@ fn main() {
                 && k.name == "sw9"
             {
                 println!(
-                    "  {} enabled {} type {:?} angle {} speed {} radius {}",
-                    k.name, k.is_enabled, k.kicker_type, k.orientation, k.scatter, k.radius
+                    "  {} enabled {} type {:?} angle {} speed {} radius {} legacy {:?} fall_through {:?} hit_accuracy {:?}",
+                    k.name,
+                    k.is_enabled,
+                    k.kicker_type,
+                    k.orientation,
+                    k.scatter,
+                    k.radius,
+                    k.legacy_mode,
+                    k.fall_through,
+                    k.hit_accuracy
                 );
             }
         }
@@ -143,6 +172,17 @@ fn main() {
     let mut table_lights = 0usize;
     let mut ever: std::collections::HashSet<String> = std::collections::HashSet::new();
 
+    // VPW_DROP=x,y drops a ball at a playfield spot once the game is running
+    // and reports where it is every quarter second, which is how a fault a
+    // player describes as "it gets stuck over there" is turned into a place
+    // and a shape.
+    let drop: Option<(f32, f32)> = std::env::var("VPW_DROP").ok().and_then(|v| {
+        let (x, y) = v.split_once(',')?;
+        Some((x.trim().parse().ok()?, y.trim().parse().ok()?))
+    });
+    let mut trail: Vec<(u32, vpw_math::Vec3, f32)> = Vec::new();
+    let mut jumped = false;
+
     let mut heard = 0usize;
     let mut loud = 0usize;
     let mut peak = 0.0f32;
@@ -172,6 +212,70 @@ fn main() {
         // Two seconds to settle, a coin, then start.
         press(&mut game, "Digit5", 2_000, t);
         press(&mut game, "Digit1", 4_000, t);
+        // VPW_KEYS="Code@ms,Code@ms,..." presses arbitrary keys at arbitrary
+        // times, held for a tenth of a second each — the way to walk a
+        // machine's own service menu from here, which is the only honest way
+        // to find out what a setting does.
+        if let Ok(list) = std::env::var("VPW_KEYS") {
+            for spec in list.split(',') {
+                if let Some((code, at)) = spec.trim().split_once('@')
+                    && let Ok(at) = at.trim().parse::<u32>()
+                {
+                    if t == at {
+                        game.key(code.trim(), true);
+                    }
+                    if t == at + 100 {
+                        game.key(code.trim(), false);
+                    }
+                }
+            }
+        }
+        if let Some((x, y)) = drop {
+            if t == 6_000 {
+                let mut engine = game.engine.borrow_mut();
+                engine.balls.clear();
+                let z: f32 = std::env::var("VPW_DROP_Z")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(25.0);
+                engine.add_ball(vpw_physics::ball::Ball::new(
+                    vpw_math::Vec3::new(x, y, z),
+                    25.0,
+                ));
+            }
+            // Every sound the script asks for while the ball is being watched,
+            // and the instant its vertical speed jumps: between them they say
+            // whether a kicker took the ball and what threw it.
+            if t >= 6_000 {
+                for name in game.take_sounds() {
+                    if name.to_ascii_lowercase().contains("kick") {
+                        println!("  {:>5} ms  sound {name}", t - 6_000);
+                    }
+                }
+                if let Some(b) = game.engine.borrow().balls.first()
+                    && b.vel.z.abs() > 5.0
+                    && !jumped
+                {
+                    jumped = true;
+                    println!(
+                        "  {:>5} ms  vertical jump: pos ({:.0},{:.0},{:.0}) vel ({:.1},{:.1},{:.1})",
+                        t - 6_000,
+                        b.pos.x,
+                        b.pos.y,
+                        b.pos.z,
+                        b.vel.x,
+                        b.vel.y,
+                        b.vel.z
+                    );
+                }
+            }
+            if t >= 6_000
+                && t % 250 == 0
+                && let Some(b) = game.engine.borrow().balls.first()
+            {
+                trail.push((t - 6_000, b.pos, b.vel.length()));
+            }
+        }
         game.step();
         if t % 17 == 16 {
             game.game_sync();
@@ -225,6 +329,177 @@ fn main() {
         }
     }
 
+    // VPW_GREP=word prints every script line mentioning it, so a piece can be
+    // traced from the file to what the table's own code does with it.
+    if let Ok(word) = std::env::var("VPW_GREP") {
+        let lower = word.to_ascii_lowercase();
+        println!("script lines mentioning {word:?}:");
+        for line in vpx.gamedata.code.string.lines() {
+            if line.to_ascii_lowercase().contains(&lower) {
+                println!("  {}", line.trim());
+            }
+        }
+        println!();
+    }
+    // VPW_RAMP=name prints a ramp's path as the file has it and what the
+    // physics built from it: the two things to compare when a ball falls
+    // through one.
+    if let Ok(name) = std::env::var("VPW_RAMP") {
+        use vpin::vpx::gameitem::GameItemEnum as G;
+        for item in &vpx.gameitems {
+            let G::Ramp(r) = item else { continue };
+            if !r.name.eq_ignore_ascii_case(&name) {
+                continue;
+            }
+            println!(
+                "ramp {}: type {:?}, z {:.0} -> {:.0}, width {:.0} -> {:.0}, collidable {}, \
+                 physics mat {:?}, overwrite {:?}, elas {} fric {} scat {}",
+                r.name,
+                r.ramp_type,
+                r.height_bottom,
+                r.height_top,
+                r.width_bottom,
+                r.width_top,
+                r.is_collidable,
+                r.physics_material,
+                r.overwrite_physics,
+                r.elasticity,
+                r.friction,
+                r.scatter
+            );
+            println!("  drag points:");
+            for (i, p) in r.drag_points.iter().enumerate() {
+                println!(
+                    "    {i:>2}: ({:>6.0}, {:>6.0}) smooth {}",
+                    p.x, p.y, p.smooth
+                );
+            }
+            match vpw_table::ramp::collision_path(r, 4.0) {
+                Some(c) => {
+                    println!("  collision path: {} steps", c.height.len());
+                    for i in 0..c.height.len() {
+                        println!(
+                            "    {i:>2}: right ({:>6.0},{:>6.0}) left ({:>6.0},{:>6.0}) z {:>5.1}",
+                            c.right[i].x, c.right[i].y, c.left[i].x, c.left[i].y, c.height[i]
+                        );
+                    }
+                }
+                None => println!("  collision path: NONE"),
+            }
+        }
+        match game.items().get(&name) {
+            Some(item) => {
+                let engine = game.engine.borrow();
+                let mut kinds = std::collections::BTreeMap::new();
+                for &s in &item.shapes {
+                    if let Some(sh) = engine.shapes().get(s) {
+                        *kinds.entry(shape_kind(sh)).or_insert(0) += 1;
+                    }
+                }
+                println!("  shapes owned: {kinds:?}");
+            }
+            None => println!("  (no item named {name} in the game)"),
+        }
+        println!();
+    }
+    if let Some((x, y)) = drop {
+        // Everything whose footprint covers the drop point, so a lane a
+        // player calls "a metal channel" gets its file name.
+        use vpin::vpx::gameitem::GameItemEnum as G;
+        println!("what the file has around ({x:.0}, {y:.0}):");
+        for item in &vpx.gameitems {
+            let (kind, near) = match item {
+                G::Ramp(r) => {
+                    let near = r
+                        .drag_points
+                        .iter()
+                        .any(|p| (p.x - x).abs() < 80.0 && (p.y - y).abs() < 200.0);
+                    if near {
+                        println!(
+                            "  Ramp       {:<14} type {:?} z {:.0}..{:.0} w {:.0}..{:.0} collidable {} visible {} points {}",
+                            r.name,
+                            r.ramp_type,
+                            r.height_bottom,
+                            r.height_top,
+                            r.width_bottom,
+                            r.width_top,
+                            r.is_collidable,
+                            r.is_visible,
+                            r.drag_points.len()
+                        );
+                    }
+                    continue;
+                }
+                G::Wall(w) => (
+                    "Wall",
+                    w.drag_points
+                        .iter()
+                        .any(|p| (p.x - x).abs() < 80.0 && (p.y - y).abs() < 200.0),
+                ),
+                G::Rubber(r) => (
+                    "Rubber",
+                    r.drag_points
+                        .iter()
+                        .any(|p| (p.x - x).abs() < 80.0 && (p.y - y).abs() < 200.0),
+                ),
+                G::Kicker(k) => (
+                    "Kicker",
+                    (k.center.x - x).abs() < 80.0 && (k.center.y - y).abs() < 200.0,
+                ),
+                G::Gate(g) => (
+                    "Gate",
+                    (g.center.x - x).abs() < 80.0 && (g.center.y - y).abs() < 200.0,
+                ),
+                G::Trigger(t) => (
+                    "Trigger",
+                    (t.center.x - x).abs() < 80.0 && (t.center.y - y).abs() < 200.0,
+                ),
+                G::Primitive(p) => (
+                    "Primitive",
+                    (p.position.x - x).abs() < 80.0 && (p.position.y - y).abs() < 200.0,
+                ),
+                _ => continue,
+            };
+            if near {
+                println!("  {kind:<10} {}", item.name());
+            }
+        }
+        println!();
+    }
+    if !trail.is_empty() {
+        println!("the dropped ball, every quarter second:");
+        for (ms, p, v) in &trail {
+            println!(
+                "  {ms:>5} ms  at ({:>6.0}, {:>6.0}, {:>4.0})  speed {v:>5.1}",
+                p.x, p.y, p.z
+            );
+        }
+        // What it ended up touching, so the shape has a name.
+        if let Some(b) = game.engine.borrow().balls.first() {
+            let engine = game.engine.borrow();
+            let mut near: Vec<(f32, String)> = Vec::new();
+            for (i, shape) in engine.shapes().iter().enumerate() {
+                let Some(bb) = shape.bbox() else { continue };
+                let dx = (b.pos.x - b.pos.x.clamp(bb.min.x, bb.max.x)).abs();
+                let dy = (b.pos.y - b.pos.y.clamp(bb.min.y, bb.max.y)).abs();
+                let d = (dx * dx + dy * dy).sqrt();
+                if d < 30.0 {
+                    let owner = game
+                        .items()
+                        .by_shape(i)
+                        .map(|it| format!("{} ({:?})", it.name, it.kind))
+                        .unwrap_or_else(|| "?".into());
+                    near.push((d, format!("{owner} shape#{i} {}", shape_kind(shape))));
+                }
+            }
+            near.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+            println!("  resting against:");
+            for (d, what) in near.iter().take(8) {
+                println!("    {d:>5.1} away: {what}");
+            }
+        }
+        println!();
+    }
     println!("after {seconds}s of table time:");
     println!("  handlers fired  {}", game.handlers_fired());
     println!("  switches closed {:016x}", game.machine().switch_matrix());

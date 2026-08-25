@@ -978,7 +978,7 @@ fn ramp(r: &vpin::vpx::gameitem::ramp::Ramp, vpx: &VPX, out: &mut Vec<Shape>) {
     if !r.is_collidable {
         return;
     }
-    let Some(c) = crate::ramp::path(r, dragpoint::collision_accuracy()) else {
+    let Some(c) = crate::ramp::collision_path(r, dragpoint::collision_accuracy()) else {
         return;
     };
     let n = c.height.len();
@@ -1099,10 +1099,15 @@ fn ramp(r: &vpin::vpx::gameitem::ramp::Ramp, vpx: &VPX, out: &mut Vec<Shape>) {
         }
         previous = Some(normal);
 
-        // Facing up, so the ball rides on it...
+        // Facing up only. This used to add the same triangle facing down as
+        // well, "so a ball underneath cannot come up through", and the original
+        // does not: it builds one `HitTriangle` per floor triangle
+        // (`ramp.cpp:656`, `:676`) and a triangle answers only from its front —
+        // a ball behind the plane is no hit (`collideex.cpp:838`). A ball can
+        // rise through a ramp floor from below in Visual Pinball, and tables
+        // are built knowing it: a vertical up-kicker fires a ball up under a
+        // wire ramp and it lands on top.
         push_triangle(v, &material, out);
-        // ...and facing down, so a ball underneath cannot come up through.
-        push_triangle([v[1], v[0], v[2]], &material, out);
     };
 
     for i in 0..n - 1 {
