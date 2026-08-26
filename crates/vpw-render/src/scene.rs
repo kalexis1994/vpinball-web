@@ -247,6 +247,9 @@ pub struct GpuScene {
     /// The playfield as the lightmap's frame wants it:
     /// `[min.x, min.y, 1/width, 1/height]`. See `GpuFrame::field`.
     pub field: [f32; 4],
+    /// The playfield's picture, for the ball to reflect. The white fallback
+    /// when the table paints its floor with a material alone.
+    pub field_picture: Option<wgpu::TextureView>,
     /// A copy of the table's lighting, so we do not have to drag the CPU scene
     /// all the way to drawing time.
     pub lighting: vpw_table::geometry::Lighting,
@@ -302,6 +305,7 @@ impl GpuScene {
         let mut indices: Vec<u32> = Vec::with_capacity(scene.total_triangles() * 3);
         let mut batches = Vec::new();
         let mut bind_groups = Vec::new();
+        let mut field_picture = None;
         let mut textures = 0usize;
         let (mut min, mut max) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
 
@@ -356,6 +360,9 @@ impl GpuScene {
             );
             if slot.textured {
                 textures += 1;
+            }
+            if key.playfield && slot.textured {
+                field_picture = Some(slot.view.clone());
             }
             // The one image whose pixels change while the table runs. Kept by
             // name, because the renderer asks for it by name too and there is
@@ -420,6 +427,7 @@ impl GpuScene {
                 let (dx, dy) = (b.max.x - b.min.x, b.max.y - b.min.y);
                 [b.min.x, b.min.y, 1.0 / dx.max(1.0), 1.0 / dy.max(1.0)]
             },
+            field_picture,
             lighting: scene.lighting,
         }
     }
@@ -448,6 +456,10 @@ impl GpuScene {
 /// A resolved group-1 binding: the material block plus its texture.
 pub struct MaterialSlot {
     pub bind_group: wgpu::BindGroup,
+    /// The texture view the slot bound — the fallback when nothing resolved.
+    /// A handle, so keeping it costs nothing; the ball's shader wants the
+    /// playfield's to reflect.
+    pub view: wgpu::TextureView,
     /// Whether the texture really did resolve, or we fell back to white.
     pub textured: bool,
     /// The texture itself, kept only when the image says its pixels change
@@ -533,6 +545,11 @@ pub fn material_slot(
     if playfield {
         data.extra[3] = 2.0;
     }
+    // And 3.0 is the ball: the one metal whose whole look is a dedicated
+    // reflection path (`BallShader.hlsl` in the original).
+    if material.is_some_and(|m| m.name == "vpw-ball") {
+        data.extra[3] = 3.0;
+    }
     let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("vpw-material"),
         contents: bytemuck::bytes_of(&data),
@@ -540,6 +557,7 @@ pub fn material_slot(
     });
 
     MaterialSlot {
+        view: view.clone(),
         bind_group: device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("vpw-material-bg"),
             layout,

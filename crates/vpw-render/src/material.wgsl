@@ -115,6 +115,9 @@ struct VsIn {
 // See `crate::bake`.
 @group(0) @binding(7) var gi_lightmap : texture_2d_array<f32>;
 
+// The playfield's picture, for the ball's planar reflection.
+@group(0) @binding(8) var field_tex : texture_2d<f32>;
+
 // The playfield's reflection of what stands on it.
 //
 // Drawn before the table, from a camera flipped through the playfield, with
@@ -191,6 +194,11 @@ fn gi_diffuse(pos : vec3<f32>, n : vec3<f32>, diffuse : vec3<f32>) -> vec3<f32> 
         let color = frame.gi[2u * i + 1u];
         let to = at.xyz - pos;
         let len = length(to) * at.w;
+        // A negative falloff power marks a baked lamp: it rides in the table
+        // for the ball's glints only, its diffuse living in the lightmap.
+        if (color.w < 0.0) {
+            continue;
+        }
         // The same ceiling as the bounce: the glass keeps a GI bulb's light
         // inside the cabinet, and the head stands behind it. Without this a
         // field-scale lamp paints the head's face its own colour.
@@ -415,7 +423,7 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
         // The baked half of the GI: each group traced with shadows and one
         // bounce, its layer scaled by its live level. Only the playfield
         // carries the flag — its UV spans the field, the lightmap's space.
-        if (material.extra.w > 1.5) {
+        if (material.extra.w > 1.5 && material.extra.w < 2.5) {
             let layers = u32(frame.env.z);
             for (var g = 0u; g < layers; g = g + 1u) {
                 let baked = textureSampleLevel(gi_lightmap, env_samp, in.uv, g, 0.0).rgb;
@@ -424,13 +432,57 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
         }
     }
     // A metal has no diffuse, and the loop above leaves it out of the GI
-    // entirely — which turned the ball into a glass marble: dark steel over a
-    // lit field, because the field's light lives in a lightmap the ball never
-    // read. Steel shows the light around it; the base colour is its tint.
-    if (is_metal) {
-        let around = gi_diffuse(in.world, n, material.base_color.rgb)
+    // entirely. A flat ambient here made the ball look like wax — a metal
+    // answers direction, not averages — so the metals split: the ball gets
+    // the original's dedicated treatment below, and every other metal part
+    // keeps a modest ambient so rails and posts do not go black.
+    let is_ball = material.extra.w > 2.5;
+    if (is_metal && !is_ball) {
+        color = color + gi_diffuse(in.world, n, material.base_color.rgb)
             + material.base_color.rgb * gi_baked(in.world);
-        color = color + around;
+    }
+
+    // The ball: `BallShader.hlsl`'s idea, on this port's light. What a
+    // pinball reflects is overwhelmingly the playfield it hovers over, so the
+    // reflected eye ray either dives below the horizon — intersect the
+    // playfield plane, sample its picture there, and light that texel with
+    // the same baked GI the floor itself wears — or it escapes upward into
+    // the environment map, which the metal path above already added. On top,
+    // the frame's GI bulbs as specular pinpoints: the sharp highlights are
+    // most of what makes chrome read as chrome.
+    if (is_ball) {
+        let v_dir = normalize(frame.eye.xyz - in.world);
+        let r = (2.0 * dot(n, v_dir)) * n - v_dir;
+        if (r.z < -0.02 && in.world.z > 0.0) {
+            let t = in.world.z / -r.z;
+            let hit = in.world + r * t;
+            let uv = (hit.xy - frame.field.xy) * frame.field.zw;
+            if (uv.x >= 0.0 && uv.x <= 1.0 && uv.y >= 0.0 && uv.y <= 1.0) {
+                let texel = textureSampleLevel(field_tex, samp, uv, 0.0).rgb;
+                // The picture times its light is only the field's base coat:
+                // the field a player actually sees also wears its halos and
+                // its lit inserts, which live in no texture this can sample.
+                // The constant stands in for them, tuned until the ball's
+                // reflection sits at the brightness of the wood beside it.
+                let lit = texel * (gi_baked(hit) + frame.gi_bounce.rgb
+                    + vec3<f32>(0.05) * frame.emission.a) * 2.5;
+                color = color + material.base_color.rgb * lit;
+            }
+        }
+        // The lamps, mirrored: a highlight where the reflected ray runs near
+        // a bulb. The exponent is the ball's polish; the scale keeps a lamp's
+        // pinpoint at the brightness its halo would show.
+        let count = u32(frame.env.w);
+        for (var i = 0u; i < count; i = i + 1u) {
+            let at = frame.gi[2u * i];
+            let lamp_color = frame.gi[2u * i + 1u];
+            let to = at.xyz - in.world;
+            let d = length(to);
+            if (d * at.w < 1.5) {
+                let glint = pow(max(dot(r, to / d), 0.0), 150.0);
+                color = color + abs(lamp_color.rgb) * glint * 8.0;
+            }
+        }
     }
     if (max_component(glossy) > 0.0 || max_component(specular) > 0.0) {
         let refl = (2.0 * ndv) * n - v;

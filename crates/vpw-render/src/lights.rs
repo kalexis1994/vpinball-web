@@ -253,7 +253,7 @@ impl Lights {
         let mut lit: Vec<(f32, &Light)> = self
             .lights
             .iter()
-            .filter(|l| l.bulb && l.baked.is_none())
+            .filter(|l| l.bulb)
             .filter_map(|l| {
                 let level = l.data.color[3];
                 if level <= 0.0 {
@@ -318,13 +318,22 @@ impl Lights {
             .iter()
             .map(|(_, l)| {
                 let level = l.data.color[3] * GI_ILLUMINATION;
+                // A baked lamp stays in the table for the ball's glints —
+                // steel mirrors every lit bulb — but its diffuse job is the
+                // lightmap's now, and the sign of the falloff power is how
+                // the shader tells the two apart.
+                let power = if l.baked.is_some() {
+                    -l.data.color2[3]
+                } else {
+                    l.data.color2[3]
+                };
                 [
                     l.data.center,
                     [
                         l.data.color[0] * level,
                         l.data.color[1] * level,
                         l.data.color[2] * level,
-                        l.data.color2[3],
+                        power,
                     ],
                 ]
             })

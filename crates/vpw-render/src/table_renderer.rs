@@ -243,6 +243,10 @@ impl TableRenderer {
             &self.gpu.device,
             crate::env::EnvMap::for_table(&self.gpu.device, &self.gpu.queue, scene),
         );
+        // The floor's picture, for the ball's planar reflection.
+        if let Some(view) = gpu_scene.field_picture.clone() {
+            self.pipeline.set_field_picture(&self.gpu.device, view);
+        }
 
         let pf = scene.playfield;
         // The sheet itself, flat, and separately the corners of everything

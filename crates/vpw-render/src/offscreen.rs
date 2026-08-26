@@ -266,12 +266,17 @@ impl Offscreen {
             &self.device,
             crate::env::EnvMap::for_table(&self.device, &self.queue, scene),
         );
-        GpuScene::upload(
+        let gpu_scene = GpuScene::upload(
             &self.device,
             &self.queue,
             &self.pipeline.material_layout,
             scene,
-        )
+        );
+        // The floor's picture, for the ball's planar reflection.
+        if let Some(view) = gpu_scene.field_picture.clone() {
+            self.pipeline.set_field_picture(&self.device, view);
+        }
+        gpu_scene
     }
 
     /// Draws a frame and returns the RGBA of the image.

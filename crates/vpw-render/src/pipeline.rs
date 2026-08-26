@@ -35,6 +35,8 @@ pub struct TablePipeline {
     /// lands, and how many layers of it are live.
     gi_lightmap: wgpu::TextureView,
     gi_layers: u32,
+    /// The playfield's picture, for the ball's planar reflection.
+    field_picture: wgpu::TextureView,
     /// The same, for the pass that draws the reflection probe: a camera flipped
     /// through the playfield and a clip plane to go with it.
     pub mirror_buffer: wgpu::Buffer,
@@ -125,6 +127,8 @@ impl TablePipeline {
                     },
                     count: None,
                 },
+                // The playfield's picture, for the ball to reflect.
+                env_texture(8),
                 wgpu::BindGroupLayoutEntry {
                     binding: 5,
                     visibility: wgpu::ShaderStages::FRAGMENT,
@@ -281,6 +285,7 @@ impl TablePipeline {
             .create_view(&Default::default());
         // The GI lightmap starts as one black layer: a table with no bake
         // adds nothing, and the shader never has to ask.
+        let field_picture = blank.clone();
         let gi_lightmap = device
             .create_texture(&wgpu::TextureDescriptor {
                 label: Some("vpw-no-gi-bake"),
@@ -309,6 +314,7 @@ impl TablePipeline {
             &envmap.sampler,
             &blank,
             &gi_lightmap,
+            &field_picture,
         );
 
         let mirror_buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -326,6 +332,7 @@ impl TablePipeline {
             &envmap.sampler,
             &blank,
             &gi_lightmap,
+            &field_picture,
         );
 
         let light_frame_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -346,6 +353,7 @@ impl TablePipeline {
             blank,
             gi_lightmap,
             gi_layers: 0,
+            field_picture,
             light_frame_layout,
             light_frame_bind_group,
             mip_levels: envmap.mip_levels,
@@ -401,6 +409,12 @@ impl TablePipeline {
         self.rebind(device);
     }
 
+    /// Hands the frame the playfield's picture, for the ball to reflect.
+    pub fn set_field_picture(&mut self, device: &wgpu::Device, view: wgpu::TextureView) {
+        self.field_picture = view;
+        self.rebind(device);
+    }
+
     /// Hands the frame the baked GI lightmap array. See `crate::bake`.
     pub fn set_gi_lightmap(&mut self, device: &wgpu::Device, view: wgpu::TextureView, layers: u32) {
         self.gi_lightmap = view;
@@ -433,6 +447,7 @@ impl TablePipeline {
             &self.transmission_sampler,
             &self.reflection,
             &self.gi_lightmap,
+            &self.field_picture,
         );
         // The reflection pass renders *into* the probe, so its own bind group
         // must not hold it — and has no use for it either: nothing reflects
@@ -446,6 +461,7 @@ impl TablePipeline {
             &self.transmission_sampler,
             &self.blank,
             &self.gi_lightmap,
+            &self.field_picture,
         );
     }
 
@@ -459,6 +475,7 @@ impl TablePipeline {
         transmission_sampler: &wgpu::Sampler,
         reflection: &wgpu::TextureView,
         gi_lightmap: &wgpu::TextureView,
+        field_picture: &wgpu::TextureView,
     ) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("vpw-frame-bg"),
@@ -495,6 +512,10 @@ impl TablePipeline {
                 wgpu::BindGroupEntry {
                     binding: 7,
                     resource: wgpu::BindingResource::TextureView(gi_lightmap),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 8,
+                    resource: wgpu::BindingResource::TextureView(field_picture),
                 },
             ],
         })
