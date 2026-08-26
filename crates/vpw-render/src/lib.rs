@@ -4,6 +4,7 @@
 //! None of that gets ported: we target a single backend, WebGPU, with no VR,
 //! no anaglyph and no editor mode.
 
+pub mod bake;
 pub mod camera;
 pub mod dynamic;
 pub mod env;
@@ -87,6 +88,33 @@ impl std::fmt::Display for FrameError {
 
 impl std::error::Error for FrameError {}
 
+/// Which backends the instance may try.
+///
+/// On the web the browser decides most of it: `Backends::all()` is WebGPU
+/// with WebGL2 behind it, and wgpu takes WebGPU when `navigator.gpu` exists —
+/// which is exactly the secure-context question, because an insecure origin
+/// has no `navigator.gpu` at all and lands on WebGL2, which predates the
+/// requirement. The renderer was built inside WebGL2's envelope on purpose
+/// (`downlevel_webgl2_defaults`, no compute), so both doors open onto the
+/// same room.
+///
+/// `VPW_FORCE_WEBGL` on the global scope pins it to GL, so the path a phone
+/// on plain HTTP takes can be exercised on a desktop that would never take
+/// it. The page sets it from `?gpu=gl`.
+fn requested_backends() -> wgpu::Backends {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let forced = js_sys::Reflect::get(
+            &js_sys::global(),
+            &wasm_bindgen::JsValue::from_str("VPW_FORCE_WEBGL"),
+        );
+        if forced.is_ok_and(|v| v.is_truthy()) {
+            return wgpu::Backends::GL;
+        }
+    }
+    wgpu::Backends::from_env().unwrap_or(wgpu::Backends::all())
+}
+
 impl GpuContext {
     /// Initialises WebGPU against the given target (on the web, a `<canvas>`).
     pub async fn new(
@@ -95,7 +123,7 @@ impl GpuContext {
         height: u32,
     ) -> Result<Self, GpuInitError> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::from_env().unwrap_or(wgpu::Backends::all()),
+            backends: requested_backends(),
             ..wgpu::InstanceDescriptor::new_without_display_handle()
         });
 
@@ -112,6 +140,14 @@ impl GpuContext {
             })
             .await
             .map_err(|e| GpuInitError::NoAdapter(e.to_string()))?;
+
+        // Which door was opened. On the web there are two — WebGPU, and
+        // WebGL2 through the GL backend — and everything downstream behaves
+        // identically, so this line is the only place the difference shows.
+        {
+            let info = adapter.get_info();
+            log::info!("adapter: {} ({:?})", info.name, info.backend);
+        }
 
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {

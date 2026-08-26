@@ -149,6 +149,7 @@ fn one_bright_light(intensity: f32, alpha: f32) -> Scene {
             ambient: [0.0, 0.0, 0.0],
             range: 3000.0,
             env_scale: 0.0,
+            global: 1.0,
             exposure: 1.0,
             bloom_strength: 0.0,
             reflection_strength: 0.0,

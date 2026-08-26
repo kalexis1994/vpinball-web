@@ -92,6 +92,7 @@ fn floor_scene() -> Scene {
             ambient: [0.1, 0.1, 0.1],
             range: 3000.0,
             env_scale: 1.0,
+            global: 1.0,
             exposure: 1.0,
             bloom_strength: 0.0,
             reflection_strength: 0.0,

@@ -13,6 +13,7 @@ use crate::pipeline::TablePipeline;
 use crate::post::Post;
 use crate::scene::GpuScene;
 use vpw_table::geometry::Scene;
+use wgpu::util::DeviceExt;
 
 pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 
@@ -166,6 +167,60 @@ impl Offscreen {
         self.post.set_strength(&self.queue, strength);
     }
 
+    /// Traces the GI groups' lightmaps and hands them to the frame.
+    ///
+    /// Returns how many groups were baked; zero means the table names no GI
+    /// string — or brought its own bake, which is better than ours. See
+    /// `crate::bake` for what and why.
+    pub fn bake_gi(&mut self, scene: &Scene) -> usize {
+        let groups = crate::bake::gi_groups(scene);
+        if groups.is_empty() {
+            return 0;
+        }
+        let bake = crate::bake::bake_gi_set(scene, &groups, crate::bake::INDIRECT_SAMPLES);
+        self.apply_gi_bake(
+            &bake,
+            &groups.iter().map(|g| g.names.clone()).collect::<Vec<_>>(),
+        );
+        groups.len()
+    }
+
+    /// Installs an already-traced bake — this run's, or one a cache kept.
+    pub fn apply_gi_bake(&mut self, bake: &crate::bake::GiBakeSet, groups: &[Vec<String>]) {
+        let mut data: Vec<u16> = Vec::with_capacity(bake.layers.len() * bake.layers[0].len());
+        for layer in &bake.layers {
+            data.extend_from_slice(layer);
+        }
+        let texture = &self.device.create_texture_with_data(
+            &self.queue,
+            &wgpu::TextureDescriptor {
+                label: Some("vpw-gi-bake"),
+                size: wgpu::Extent3d {
+                    width: bake.width,
+                    height: bake.height,
+                    depth_or_array_layers: bake.layers.len() as u32,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba16Float,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            bytemuck::cast_slice(&data),
+        );
+        self.pipeline.set_gi_lightmap(
+            &self.device,
+            texture.create_view(&wgpu::TextureViewDescriptor {
+                dimension: Some(wgpu::TextureViewDimension::D2Array),
+                ..Default::default()
+            }),
+            bake.layers.len() as u32,
+        );
+        self.lights.set_baked_groups(&self.queue, groups);
+    }
+
     /// Uploads the table's lit lights.
     pub fn upload_lights(&mut self, scene: &Scene) {
         self.lights
@@ -232,12 +287,14 @@ impl Offscreen {
         filter: impl Fn(&crate::scene::Batch) -> bool,
     ) -> Vec<u8> {
         let aspect = self.width as f32 / self.height as f32;
+        let gi = self.lights.gi_sources(crate::scene::MAX_GI_BULBS);
         self.pipeline.set_frame(
             &self.queue,
             camera.view_projection(aspect),
             camera.eye(),
             &scene.lighting,
             (self.width, self.height),
+            &gi,
         );
 
         let view = self

@@ -56,6 +56,18 @@ fn shape_kind(s: &vpw_physics::engine::Shape) -> &'static str {
     }
 }
 
+/// The bake's candidate rule, spelled out here because this example must not
+/// pull the renderer in: bulbs whose reach is field-scale. Keep in step with
+/// `vpw_render::bake::field_scale_candidates`.
+fn vpw_render_candidates(scene: &vpw_table::geometry::Scene) -> Vec<String> {
+    scene
+        .lights
+        .iter()
+        .filter(|l| l.is_bulb && l.falloff_radius >= 120.0 && l.intensity > 0.0)
+        .map(|l| l.name.clone())
+        .collect()
+}
+
 fn main() {
     let mut args = std::env::args().skip(1);
     let table = args
@@ -539,6 +551,25 @@ fn main() {
     // What the game has lit, by name, for a renderer to photograph. Numbers
     // about lamps have been agreeing with each other all day while the picture
     // stayed dark, so the picture is the thing to look at.
+    // VPW_DUMP_GROUPS=<file> keeps the machine running for another thirty
+    // seconds and writes which field-scale lamps it switched together, one
+    // group per line, tab-separated: the machine's own answer to the bake's
+    // grouping question, for photographing next to the guessed one.
+    if let Ok(path) = std::env::var("VPW_DUMP_GROUPS") {
+        // A scene of its own: the game took the moving parts out of the
+        // first one, and the candidate list wants the lights untouched.
+        let fresh = vpw_table::geometry::extract(&vpx);
+        let candidates = vpw_render_candidates(&fresh);
+        let groups = vpw_game::grouping::observe_lamp_groups(&mut game, &candidates, 30.0);
+        let mut out = String::new();
+        for group in &groups {
+            out.push_str(&group.join("\t"));
+            out.push('\n');
+        }
+        std::fs::write(&path, out).expect("could not write the groups");
+        println!("  wrote {path} ({} groups)", groups.len());
+    }
+
     if let Ok(path) = std::env::var("VPW_DUMP_LIGHTS") {
         let mut out = String::new();
         for item in game.items().iter() {

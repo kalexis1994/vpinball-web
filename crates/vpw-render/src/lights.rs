@@ -88,6 +88,66 @@ pub struct Light {
     /// Whether the light is drawn at zero intensity. See
     /// `vpw_table::light::Light::drawn_when_off`.
     drawn_when_off: bool,
+    /// The lamp at full power, kept so a baked lamp's live level can be read
+    /// as a fraction of the level its bake was traced at.
+    full: f32,
+    /// Which baked group this lamp's illumination lives in, if any. Its halo
+    /// still draws — the glow is the bulb itself — but it leaves the frame's
+    /// point-light table, or the light would arrive twice, and the halo
+    /// shrinks to the bulb ([`BAKED_HALO_SHRINK`]).
+    baked: Option<u8>,
+    /// `1 / falloff` as uploaded, so baking and unbaking can set the halo's
+    /// reach absolutely rather than compounding a factor on every call.
+    range_w: f32,
+}
+
+/// How strongly a lit bulb lights the surfaces around it, per unit of its
+/// own intensity. See `GpuFrame::gi` for why this exists at all.
+///
+/// Calibrated on F-14's attract: its GI bulbs run at 8 with a falloff of 200,
+/// and this puts the wood under them at the level a photograph of the real
+/// machine shows — legible artwork in the bulbs' own red and blue, well short
+/// of daylight. Not a physical constant: the original's intensities are halo
+/// numbers, and this is the bridge from "how bright the halo paints" to "how
+/// much light the bulb sheds".
+pub const GI_ILLUMINATION: f32 = 0.15;
+
+/// How much a baked lamp's halo shrinks.
+///
+/// A bulb's halo does two jobs in the original: the glow of the bulb itself,
+/// and — through the modulate blend — a crude lighting of the field around
+/// it. For a baked lamp the second job is done properly by the lightmap, so
+/// its halo keeps only the first: the same brightness over a quarter of the
+/// reach, which reads as a bulb and not as a floodlight drawn twice.
+pub const BAKED_HALO_SHRINK: f32 = 4.0;
+
+/// One bounce, for the shadows.
+///
+/// Direct light ends at each bulb's falloff, and a field lit by thirty bulbs
+/// still keeps black patches wherever none of them reach — the flippers, a
+/// far corner. A real machine has no black patches: the glass above, the
+/// plastics and the wood itself scatter the light everywhere. This is that
+/// first bounce, as a flat ambient term: the lit bulbs' total flux spread
+/// over the field's area, in their average colour. It rises and falls with
+/// the GI itself, so a game that cuts the GI for a light show still cuts the
+/// room to black. Calibrated so the shadowed flanks sit at a fraction of the
+/// lit field — the way a photograph of a machine in a dark arcade shows them —
+/// rather than at nothing.
+pub const GI_BOUNCE: f32 = 0.006;
+
+/// The general illumination, gathered for one frame.
+///
+/// Two halves of the same light: the brightest lit bulbs as the frame's point
+/// lights — two `vec4` rows per bulb, `[x, y, z, 1/range]` then
+/// `[r·K, g·K, b·K, falloff_power]`, the colour already at the lamp's current
+/// level and the calibration — and their first bounce as a flat colour.
+pub struct Gi {
+    pub rows: Vec<[[f32; 4]; 2]>,
+    pub bounce: [f32; 3],
+    /// Each baked group's live level, 0 to 1: what scales its lightmap layer
+    /// this frame. Zero everywhere when nothing is baked, which also blanks
+    /// the black stand-in texture.
+    pub levels: [f32; 4],
 }
 
 /// Which of the four draws a call is making. They differ in the blend, in
@@ -164,9 +224,151 @@ pub struct Lights {
     /// The lamps' names, in the same order, so a caller can find the one the
     /// script is talking about.
     pub names: Vec<String>,
+    /// The playfield's area in VPU², learned at upload. What the bounce
+    /// divides the lit flux by: the same bulbs in a bigger room make a dimmer
+    /// wall.
+    field_area: f32,
+    /// Whether the GI departure applies at all. A table that ships its own
+    /// lightmaps was authored with its light transport in it, and adding ours
+    /// on top would light everything twice (`crate::bake::prebaked`).
+    departure: bool,
 }
 
 impl Lights {
+    /// The general illumination as the frame wants it. See [`Gi`].
+    ///
+    /// Bulbs only: a classic light is an insert, a picture in the surface,
+    /// and its light pass already adds it. Ordered by emitted flux —
+    /// intensity times the square of the range — so a wide dim GI string
+    /// outranks a small bright insert, which is the ordering that matters
+    /// for lighting a room.
+    pub fn gi_sources(&self, max: usize) -> Gi {
+        if !self.departure {
+            return Gi {
+                rows: Vec::new(),
+                bounce: [0.0; 3],
+                levels: [0.0; 4],
+            };
+        }
+        let mut lit: Vec<(f32, &Light)> = self
+            .lights
+            .iter()
+            .filter(|l| l.bulb && l.baked.is_none())
+            .filter_map(|l| {
+                let level = l.data.color[3];
+                if level <= 0.0 {
+                    return None;
+                }
+                let range = 1.0 / l.data.center[3].max(1e-6);
+                Some((level * range * range, l))
+            })
+            .collect();
+        // The bounce takes every lit bulb — the baked ones included, since a
+        // bake holds direct light and its shadows, not the scatter — and the
+        // cut below only the strongest: a bulb too dim to matter as a point
+        // still warms the room.
+        let mut bounce = [0.0f32; 3];
+        if self.field_area > 0.0 {
+            for l in self.lights.iter().filter(|l| l.bulb) {
+                let level = l.data.color[3];
+                if level <= 0.0 {
+                    continue;
+                }
+                let range = 1.0 / l.data.center[3].max(1e-6);
+                let flux = level * range * range;
+                for (b, c) in bounce.iter_mut().zip(&l.data.color[..3]) {
+                    *b += c * flux * GI_BOUNCE / self.field_area;
+                }
+            }
+        }
+
+        // How lit each baked group is, against the full level its bake was
+        // traced at. On F-14 the warm string is the relay's and all-or-
+        // nothing while the red and blue strings flash on their own; the
+        // per-group average keeps every case honest.
+        let (mut level_sum, mut full_sum) = ([0.0f32; 4], [0.0f32; 4]);
+        for l in &self.lights {
+            let Some(g) = l.baked else { continue };
+            let g = g as usize;
+            if g < 4 {
+                level_sum[g] += l.data.color[3];
+                full_sum[g] += l.full;
+            }
+        }
+        let mut levels = [0.0f32; 4];
+        for g in 0..4 {
+            if full_sum[g] > 0.0 {
+                levels[g] = level_sum[g] / full_sum[g];
+            }
+        }
+        lit.sort_by(|a, b| b.0.total_cmp(&a.0));
+        lit.truncate(max);
+        if std::env::var("VPW_GI_DEBUG").is_ok() {
+            for (flux, l) in &lit {
+                eprintln!(
+                    "GI pick: flux {flux:.0} level {} color {:?} range {:.0} power {}",
+                    l.data.color[3],
+                    &l.data.color[..3],
+                    1.0 / l.data.center[3],
+                    l.data.color2[3]
+                );
+            }
+        }
+        let rows = lit
+            .iter()
+            .map(|(_, l)| {
+                let level = l.data.color[3] * GI_ILLUMINATION;
+                [
+                    l.data.center,
+                    [
+                        l.data.color[0] * level,
+                        l.data.color[1] * level,
+                        l.data.color[2] * level,
+                        l.data.color2[3],
+                    ],
+                ]
+            })
+            .collect();
+        Gi {
+            rows,
+            bounce,
+            levels,
+        }
+    }
+
+    /// Marks each group's lamps as living in that layer of the baked
+    /// lightmap. Resolved by name rather than index, because a bake can come
+    /// back from a cache that outlived the scene it was traced from.
+    pub fn set_baked_groups(&mut self, queue: &wgpu::Queue, groups: &[Vec<String>]) {
+        for l in &mut self.lights {
+            l.baked = None;
+        }
+        for (g, names) in groups.iter().take(4).enumerate() {
+            for name in names {
+                for (i, existing) in self.names.iter().enumerate() {
+                    if existing.eq_ignore_ascii_case(name) {
+                        self.lights[i].baked = Some(g as u8);
+                    }
+                }
+            }
+        }
+        // The halo of a baked lamp hugs its bulb; everyone else's reach is
+        // put back where the file had it.
+        for l in &mut self.lights {
+            let shrink = if l.baked.is_some() {
+                BAKED_HALO_SHRINK
+            } else {
+                1.0
+            };
+            l.data.center[3] = l.range_w * shrink;
+            queue.write_buffer(
+                &l.uniform,
+                std::mem::offset_of!(GpuLight, center) as u64,
+                bytemuck::bytes_of(&l.data.center),
+            );
+        }
+    }
+
     /// Builds the pipelines against the table's own layouts.
     ///
     /// The lit insert needs the material shader's frame — the environment
@@ -374,6 +576,8 @@ impl Lights {
             empty,
             lights: Vec::new(),
             names: Vec::new(),
+            field_area: 0.0,
+            departure: true,
         }
     }
 
@@ -393,6 +597,9 @@ impl Lights {
     ) {
         let lights = &scene.lights;
         self.names = lights.iter().map(|l| l.name.clone()).collect();
+        let b = &scene.playfield;
+        self.field_area = ((b.max.x - b.min.x) * (b.max.y - b.min.y)).abs();
+        self.departure = !crate::bake::prebaked(scene);
 
         // The same sampler and the same fallback as the table's pieces, so an
         // insert samples its picture exactly the way the playfield under it
@@ -464,6 +671,7 @@ impl Lights {
                                 &white,
                                 scene.material(&l.surface_material),
                                 scene.image(&l.image),
+                                false,
                             );
                             // A name that is not one of the table's images is
                             // the original's null `offTexel`: the halo alone.
@@ -510,6 +718,9 @@ impl Lights {
                     bulb: l.is_bulb,
                     transmission: l.transmission_scale,
                     blinking: l.blinking,
+                    full: l.intensity,
+                    baked: None,
+                    range_w: 1.0 / l.falloff_radius.max(1.0),
                     // Only with a picture that resolved: a light whose picture
                     // is missing falls back to the halo, and a halo at zero
                     // intensity is nothing.

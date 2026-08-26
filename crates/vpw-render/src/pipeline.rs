@@ -31,6 +31,10 @@ pub struct TablePipeline {
     pub material_layout: wgpu::BindGroupLayout,
     pub model_layout: wgpu::BindGroupLayout,
     pub frame_buffer: wgpu::Buffer,
+    /// The baked GI lightmap array, or a single black layer until a bake
+    /// lands, and how many layers of it are live.
+    gi_lightmap: wgpu::TextureView,
+    gi_layers: u32,
     /// The same, for the pass that draws the reflection probe: a camera flipped
     /// through the playfield and a clip plane to go with it.
     pub mirror_buffer: wgpu::Buffer,
@@ -109,6 +113,18 @@ impl TablePipeline {
                 env_texture(4),
                 // The playfield's reflection, likewise.
                 env_texture(6),
+                // The baked general illumination: one layer per group, in
+                // playfield UV space.
+                wgpu::BindGroupLayoutEntry {
+                    binding: 7,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2Array,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
                 wgpu::BindGroupLayoutEntry {
                     binding: 5,
                     visibility: wgpu::ShaderStages::FRAGMENT,
@@ -263,6 +279,27 @@ impl TablePipeline {
                 view_formats: &[],
             })
             .create_view(&Default::default());
+        // The GI lightmap starts as one black layer: a table with no bake
+        // adds nothing, and the shader never has to ask.
+        let gi_lightmap = device
+            .create_texture(&wgpu::TextureDescriptor {
+                label: Some("vpw-no-gi-bake"),
+                size: wgpu::Extent3d {
+                    width: 1,
+                    height: 1,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba16Float,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            })
+            .create_view(&wgpu::TextureViewDescriptor {
+                dimension: Some(wgpu::TextureViewDimension::D2Array),
+                ..Default::default()
+            });
         let frame_bind_group = Self::frame_bg(
             device,
             &frame_layout,
@@ -271,6 +308,7 @@ impl TablePipeline {
             &blank,
             &envmap.sampler,
             &blank,
+            &gi_lightmap,
         );
 
         let mirror_buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -287,6 +325,7 @@ impl TablePipeline {
             &blank,
             &envmap.sampler,
             &blank,
+            &gi_lightmap,
         );
 
         let light_frame_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -305,6 +344,8 @@ impl TablePipeline {
             transmission_sampler: envmap.sampler.clone(),
             reflection: blank.clone(),
             blank,
+            gi_lightmap,
+            gi_layers: 0,
             light_frame_layout,
             light_frame_bind_group,
             mip_levels: envmap.mip_levels,
@@ -360,6 +401,13 @@ impl TablePipeline {
         self.rebind(device);
     }
 
+    /// Hands the frame the baked GI lightmap array. See `crate::bake`.
+    pub fn set_gi_lightmap(&mut self, device: &wgpu::Device, view: wgpu::TextureView, layers: u32) {
+        self.gi_lightmap = view;
+        self.gi_layers = layers;
+        self.rebind(device);
+    }
+
     /// Swaps in a table's environment map.
     ///
     /// The map belongs to the table, not to the pipeline (`Renderer.cpp:208`
@@ -384,6 +432,7 @@ impl TablePipeline {
             &self.transmission,
             &self.transmission_sampler,
             &self.reflection,
+            &self.gi_lightmap,
         );
         // The reflection pass renders *into* the probe, so its own bind group
         // must not hold it — and has no use for it either: nothing reflects
@@ -396,9 +445,11 @@ impl TablePipeline {
             &self.transmission,
             &self.transmission_sampler,
             &self.blank,
+            &self.gi_lightmap,
         );
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn frame_bg(
         device: &wgpu::Device,
         layout: &wgpu::BindGroupLayout,
@@ -407,6 +458,7 @@ impl TablePipeline {
         transmission: &wgpu::TextureView,
         transmission_sampler: &wgpu::Sampler,
         reflection: &wgpu::TextureView,
+        gi_lightmap: &wgpu::TextureView,
     ) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("vpw-frame-bg"),
@@ -440,6 +492,10 @@ impl TablePipeline {
                     binding: 6,
                     resource: wgpu::BindingResource::TextureView(reflection),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: wgpu::BindingResource::TextureView(gi_lightmap),
+                },
             ],
         })
     }
@@ -451,12 +507,23 @@ impl TablePipeline {
         eye: vpw_math::Vec3,
         lighting: &vpw_table::geometry::Lighting,
         size: (u32, u32),
+        gi: &crate::lights::Gi,
     ) {
         let mut data = GpuFrame::from_lighting(lighting);
         data.view_proj = view_proj.to_cols_array_2d();
         data.eye = [eye.x, eye.y, eye.z, 1.0];
         data.env[0] = self.mip_levels as f32;
         data.env[1] = self.env_height as f32;
+        // The general illumination, brightest first. See `GpuFrame::gi`.
+        let bulbs = gi.rows.len().min(crate::scene::MAX_GI_BULBS);
+        data.env[3] = bulbs as f32;
+        data.gi_bounce = [gi.bounce[0], gi.bounce[1], gi.bounce[2], 0.0];
+        data.gi_levels = gi.levels;
+        data.env[2] = self.gi_layers as f32;
+        for (i, rows) in gi.rows.iter().take(bulbs).enumerate() {
+            data.gi[i * 2] = rows[0];
+            data.gi[i * 2 + 1] = rows[1];
+        }
         data.screen = [
             1.0 / size.0.max(1) as f32,
             1.0 / size.1.max(1) as f32,

@@ -98,7 +98,15 @@ fn fs_bulb(in : VsOut) -> @location(0) vec4<f32> {
     let atten = pow(max(1.0 - len, 0.0001), light.color2.a);
     let lcolor = mix(light.color2.rgb, light.color.rgb, sqrt(len));
     let m = light.blend.x;
-    return vec4<f32>(lcolor * (-m * atten * light.color.a), 1.0 / m - 1.0);
+    // The amplification is capped. At `m` near one the blend multiplies what
+    // is under the halo by `1 + C`, and the authors tuned `C` against the
+    // original's darker field; over the field the GI departure lights, a
+    // slingshot lamp at an intensity of eighty is a flash grenade. The soft
+    // cap leaves a small halo exactly as tuned and walks the huge ones down
+    // to at most ×9 — a bulb's worth of glare, not a detonation.
+    let c = atten * light.color.a;
+    let capped = c / (1.0 + c / 8.0);
+    return vec4<f32>(lcolor * (-m * capped), 1.0 / m - 1.0);
 }
 
 /// The same halo, into the transmitted-light buffer.
@@ -116,7 +124,11 @@ fn fs_bulb(in : VsOut) -> @location(0) vec4<f32> {
 @fragment
 fn fs_transmitted(in : VsOut) -> @location(0) vec4<f32> {
     let lit = halo(in.world);
-    let contribution = lit.a * light.blend.y;
+    // The same soft cap as `fs_bulb`, for the same reason: this buffer is
+    // added onto every translucent plastic, and a two-hundred-strong flash
+    // through it whites out the whole side of the table.
+    let c = lit.a * light.blend.y;
+    let contribution = c / (1.0 + c / 8.0);
     return vec4<f32>(lit.rgb * contribution, saturate(contribution));
 }
 
@@ -205,6 +217,9 @@ fn light_loop(
     }
     if (!is_metal && diffuse_max > 0.0) {
         color = color + env_diffuse(n, diffuse);
+        // The GI lights an insert's artwork the same as the wood around it,
+        // or a lit-through insert would sit in a darker room than its floor.
+        color = color + gi_diffuse(pos, n, diffuse);
     }
     if (glossy_max > 0.0 || specular_max > 0.0) {
         let r = (2.0 * ndv) * n - v;

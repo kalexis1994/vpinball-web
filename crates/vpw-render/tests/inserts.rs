@@ -158,6 +158,7 @@ fn scene(image: &str, image_mode: bool, surface_image: &str, state: f32) -> Scen
             ambient: [0.0, 0.0, 0.0],
             range: 3000.0,
             env_scale: 0.0,
+            global: 1.0,
             exposure: 1.0,
             bloom_strength: 0.0,
             reflection_strength: 0.0,

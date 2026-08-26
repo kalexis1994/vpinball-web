@@ -57,6 +57,25 @@ fn main() {
             light.state = 1.0;
         }
     }
+    // VPW_MODULATE=<0..1> overrides every halo's modulate-vs-add, to see how
+    // much of a dark field is the halos multiplying darkness.
+    if let Ok(v) = std::env::var("VPW_MODULATE")
+        && let Ok(m) = v.parse()
+    {
+        for light in &mut scene.lights {
+            light.modulate = m;
+        }
+    }
+    // VPW_GLOBAL=<scale> overrides the table's day/night, to separate "the
+    // file asks for a dark room" from "the room is darker than asked".
+    if let Ok(v) = std::env::var("VPW_GLOBAL")
+        && let Ok(g) = v.parse::<f32>()
+    {
+        let old = scene.lighting.env_scale;
+        scene.lighting.env_scale = old * g;
+        scene.lighting.ambient = scene.lighting.ambient.map(|c| c * g);
+        scene.lighting.emission = scene.lighting.emission.map(|c| c * g);
+    }
     // VPW_LIGHTS=<file> takes the lamp states from a game that actually ran,
     // one `name<TAB>level` per line, which is what `vpw-game`'s `table`
     // example writes. Photographing what the ROM is doing is the only way to
@@ -215,6 +234,31 @@ fn main() {
     let t2 = std::time::Instant::now();
     let gpu_scene = gpu.upload(&scene);
     gpu.upload_lights(&scene);
+    // VPW_BAKE=1 traces the GI relay's lightmap first — shadows and all —
+    // which is the difference between light that respects the posts and light
+    // that shines through them.
+    if std::env::var("VPW_BAKE").is_ok() {
+        let t = std::time::Instant::now();
+        // VPW_GROUPS=<file> bakes the groups a machine was observed switching
+        // (the `table` example's VPW_DUMP_GROUPS writes it) instead of the
+        // guessed ones.
+        let n = if let Ok(path) = std::env::var("VPW_GROUPS") {
+            let text = std::fs::read_to_string(&path).expect("could not read the groups");
+            let observed: Vec<Vec<String>> = text
+                .lines()
+                .map(|l| l.split('\t').map(str::to_string).collect())
+                .collect();
+            let groups = vpw_render::bake::gi_groups_from_names(&scene, &observed);
+            let bake =
+                vpw_render::bake::bake_gi_set(&scene, &groups, vpw_render::bake::INDIRECT_SAMPLES);
+            let names: Vec<Vec<String>> = groups.iter().map(|g| g.names.clone()).collect();
+            gpu.apply_gi_bake(&bake, &names);
+            groups.len()
+        } else {
+            gpu.bake_gi(&scene)
+        };
+        println!("baked {n} GI groups in {:.1?}", t.elapsed());
+    }
     // VPW_NO_FLASHERS=1 leaves them out, for a photograph of what they add.
     if std::env::var("VPW_NO_FLASHERS").is_err() {
         gpu.upload_flashers(&scene);

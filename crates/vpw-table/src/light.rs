@@ -130,8 +130,9 @@ pub struct Light {
     pub falloff_radius: f32,
     /// Exponent of the falloff.
     pub falloff_power: f32,
-    /// Intensity **already scaled** by the original's factor. See
-    /// [`INTENSITY_FACTOR`].
+    /// Intensity at full power, **unscaled**: the halo draws with the plain
+    /// value (`light.cpp:798`). [`INTENSITY_FACTOR`] belongs to the bulb mesh
+    /// alone and is not applied here — see its doc for the day that cost.
     pub intensity: f32,
     /// Color near the center and color at the edge. The shader interpolates.
     pub color: [f32; 3],

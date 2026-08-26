@@ -154,6 +154,7 @@ impl DynamicParts {
                 &white,
                 material,
                 image,
+                false,
             );
             let with_alpha = image.is_some_and(|i| i.has_alpha);
             let transparent = material.is_some_and(|m| m.is_transparent(with_alpha));

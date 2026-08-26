@@ -409,6 +409,7 @@ fn the_moving_pieces_leave_the_baked_scene() {
             ambient: [0.0; 3],
             range: 1.0,
             env_scale: 0.0,
+            global: 1.0,
             exposure: 1.0,
             bloom_strength: 0.0,
             reflection_strength: 0.0,

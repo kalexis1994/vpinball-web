@@ -33,6 +33,7 @@
 //! this port got a playable table before it had a script engine.
 
 pub mod controller;
+pub mod grouping;
 pub mod items;
 pub mod sound;
 pub mod telemetry;

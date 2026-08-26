@@ -61,7 +61,8 @@ pub struct GpuMaterial {
     pub clearcoat: [f32; 4],
     /// x = has texture, y = is metal, z = wrap lighting, w = edge
     pub flags: [f32; 4],
-    /// x = specular image lerp, y = thickness, z = alpha test, w free
+    /// x = specular image lerp, y = thickness, z = alpha test,
+    /// w = emissive: the texel is the light itself, skip the light loop
     pub extra: [f32; 4],
 }
 
@@ -118,7 +119,35 @@ pub struct GpuFrame {
     /// xyz = the normal of the surface that reflects, w = how strongly.
     /// The original's `mirrorNormal_factor` (`primitive.cpp:1230`).
     pub mirror: [f32; 4],
+    /// The general illumination: up to [`MAX_GI_BULBS`] lit bulb lights, two
+    /// rows each — `[x, y, z, 1/range]` and `[r·K, g·K, b·K, falloff_power]`
+    /// with the colour already scaled by the level and the calibration.
+    /// `env.z` says how many rows are live.
+    ///
+    /// A **departure**, and the one that makes a dark table look like a
+    /// machine instead of a photograph of one. The original draws these bulbs
+    /// as screen-space halos that mostly *modulate* what is under them
+    /// (`light.cpp:826-830`, its own words: "a very crude approximation of
+    /// real lighting") — and modulating a playfield that the table's own
+    /// lighting leaves black produces black. A real machine's GI string is
+    /// thirty bulbs pouring real light onto the wood; in a dark arcade the
+    /// machine glows. So the brightest lit bulbs are also fed to the material
+    /// loop as point lights, which is what they are.
+    /// rgb = the GI's first bounce: the lit bulbs' flux spread over the
+    /// field, in their average colour. The flat term that keeps a corner no
+    /// bulb reaches from being black. See [`crate::lights::GI_BOUNCE`].
+    pub gi_bounce: [f32; 4],
+    /// Each baked group's live level, scaling its lightmap layer. `env.z`
+    /// says how many layers are live.
+    pub gi_levels: [f32; 4],
+    pub gi: [[f32; 4]; MAX_GI_BULBS * 2],
 }
+
+/// How many GI bulbs the frame carries. Thirty-two holds a real GI string
+/// whole — F-14 wires twenty-seven — with room for the flashers on top; the
+/// selection takes the brightest by emitted flux, so a table with more loses
+/// its dimmest, not its look.
+pub const MAX_GI_BULBS: usize = 32;
 
 impl GpuFrame {
     /// The matrix that flips the world through the reflecting plane.
@@ -149,11 +178,16 @@ impl GpuFrame {
             light0: [l.lights[0].x, l.lights[0].y, l.lights[0].z, 0.0],
             light1: [l.lights[1].x, l.lights[1].y, l.lights[1].z, 0.0],
             emission: [l.emission[0], l.emission[1], l.emission[2], l.env_scale],
-            env: [1.0, 0.0, l.exposure, 0.0],
+            // z once held the exposure; that moved to the post uniform with
+            // the tone mapping, and the slot is dead. w counts the GI rows.
+            env: [1.0, 0.0, 0.0, 0.0],
             screen: [0.0; 4],
             clip: [0.0; 4],
             // The playfield is the plane z = 0 and it faces up.
             mirror: [0.0, 0.0, 1.0, l.reflection_strength],
+            gi_bounce: [0.0; 4],
+            gi_levels: [0.0; 4],
+            gi: [[0.0; 4]; MAX_GI_BULBS * 2],
         }
     }
 }
@@ -213,12 +247,15 @@ pub struct GpuScene {
 /// The key that decides whether two meshes can share a draw call.
 #[derive(PartialEq, Eq, Hash, Clone)]
 struct BatchKey {
+    // (fields below; `playfield` keeps the floor in a batch of its own, which
+    // is what lets its material carry the baked-GI flag.)
     material: String,
     image: String,
     transparent: bool,
     /// Kept in the key so the head never merges into a batch with the table:
     /// a view that leaves it out has to be able to leave it out on its own.
     backbox: bool,
+    playfield: bool,
 }
 
 impl GpuScene {
@@ -248,6 +285,7 @@ impl GpuScene {
                 image: m.image.clone(),
                 transparent,
                 backbox: matches!(m.kind, vpw_table::geometry::MeshKind::Backbox),
+                playfield: matches!(m.kind, vpw_table::geometry::MeshKind::Playfield),
             };
             groups.entry(key).or_default().push(m);
         }
@@ -306,6 +344,7 @@ impl GpuScene {
                 &white,
                 scene.material(&key.material),
                 scene.image(&key.image),
+                key.playfield,
             );
             if slot.textured {
                 textures += 1;
@@ -432,6 +471,7 @@ pub fn table_sampler(device: &wgpu::Device) -> wgpu::Sampler {
 ///
 /// `fallback` is the 1x1 white texture: the shader always samples, so there has
 /// to be something bound even when the piece has no image.
+#[allow(clippy::too_many_arguments)]
 pub fn material_slot(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
@@ -440,6 +480,7 @@ pub fn material_slot(
     fallback: &wgpu::TextureView,
     material: Option<&vpw_table::geometry::Material>,
     image: Option<&vpw_table::geometry::Image>,
+    playfield: bool,
 ) -> MaterialSlot {
     let uploaded = image.and_then(|i| upload_texture(device, queue, i));
     let redrawn = match (image, uploaded.as_ref()) {
@@ -463,7 +504,22 @@ pub fn material_slot(
         Some(i) if textured && i.has_alpha => i.alpha_test,
         _ => -1.0,
     };
-    let data = GpuMaterial::from_inputs(&inputs, textured, alpha_test);
+    let mut data = GpuMaterial::from_inputs(&inputs, textured, alpha_test);
+    // The machine's display is a light, not a lit thing: a plasma panel makes
+    // its own photons, and putting it through the light loop draws it at
+    // whatever the room happens to be — on a table authored dark, invisible.
+    // The original never faces this because its desktop backglass is a
+    // backdrop drawn outside the scene's lighting altogether; this port's head
+    // is in the scene, so the panel carries an emissive flag instead.
+    if image.is_some_and(|i| i.name == vpw_table::backbox::DISPLAY_IMAGE) {
+        data.extra[3] = 1.0;
+    }
+    // The playfield receives the baked GI: its UVs span the field, which is
+    // the lightmap's space. 2.0 in the emissive slot, because the two flags
+    // are mutually exclusive and the uniform has no room left over.
+    if playfield {
+        data.extra[3] = 2.0;
+    }
     let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("vpw-material"),
         contents: bytemuck::bytes_of(&data),

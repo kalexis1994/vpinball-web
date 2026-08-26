@@ -14,6 +14,7 @@ use crate::post::Post;
 use crate::scene::{GpuScene, SceneStats};
 use crate::{FrameError, GpuContext, GpuInitError};
 use vpw_math::Vec3;
+use wgpu::util::DeviceExt;
 
 pub struct TableRenderer {
     gpu: GpuContext,
@@ -39,6 +40,13 @@ pub struct TableRenderer {
     framing: Option<(vpw_table::geometry::Bounds, vpw_table::backbox::Backbox)>,
     /// Corners of what really stands on the playfield. See `Scene::occupied`.
     occupied: Vec<Vec3>,
+    /// The player's day/night, when they have set one; the table's own
+    /// otherwise. The original's `SceneLighting` in `Mode::User`
+    /// (`Renderer.cpp:377-398`): the player's level *replaces* the table's
+    /// `m_globalEmissionScale`. The knob exists because plenty of tables are
+    /// authored dark on purpose — F-14 asks for 0.08 — and how dark a room a
+    /// player wants to sit in is the player's business.
+    day_night: Option<f32>,
 }
 
 impl TableRenderer {
@@ -74,6 +82,7 @@ impl TableRenderer {
             flashers,
             camera: Camera::default(),
             occupied: Vec::new(),
+            day_night: None,
             view: crate::camera::View::Front,
             pending_display: None,
             framing: None,
@@ -379,6 +388,87 @@ impl TableRenderer {
         self.reframe();
     }
 
+    /// Traces the GI groups' lightmaps and hands them to the frame.
+    ///
+    /// Returns how many groups were baked; zero means the table names no GI
+    /// string — or brought its own bake, which is better than ours. See
+    /// `crate::bake` for what and why.
+    pub fn bake_gi(&mut self, scene: &vpw_table::geometry::Scene) -> usize {
+        let groups = crate::bake::gi_groups(scene);
+        if groups.is_empty() {
+            return 0;
+        }
+        let bake = crate::bake::bake_gi_set(scene, &groups, crate::bake::INDIRECT_SAMPLES);
+        self.apply_gi_bake(
+            &bake,
+            &groups.iter().map(|g| g.names.clone()).collect::<Vec<_>>(),
+        );
+        groups.len()
+    }
+
+    /// Installs an already-traced bake — this run's, or one a cache kept.
+    pub fn apply_gi_bake(&mut self, bake: &crate::bake::GiBakeSet, groups: &[Vec<String>]) {
+        let mut data: Vec<u16> = Vec::with_capacity(bake.layers.len() * bake.layers[0].len());
+        for layer in &bake.layers {
+            data.extend_from_slice(layer);
+        }
+        let texture = &self.gpu.device.create_texture_with_data(
+            &self.gpu.queue,
+            &wgpu::TextureDescriptor {
+                label: Some("vpw-gi-bake"),
+                size: wgpu::Extent3d {
+                    width: bake.width,
+                    height: bake.height,
+                    depth_or_array_layers: bake.layers.len() as u32,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba16Float,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            bytemuck::cast_slice(&data),
+        );
+        self.pipeline.set_gi_lightmap(
+            &self.gpu.device,
+            texture.create_view(&wgpu::TextureViewDescriptor {
+                dimension: Some(wgpu::TextureViewDimension::D2Array),
+                ..Default::default()
+            }),
+            bake.layers.len() as u32,
+        );
+        self.lights.set_baked_groups(&self.gpu.queue, groups);
+    }
+
+    /// Sets the player's day/night, 0 to 1, or clears it with `None`.
+    ///
+    /// Replaces the table's own global emission scale, exactly as the
+    /// original's user mode does — which means dividing the baked factor out
+    /// and multiplying the chosen one in, on the three terms the original
+    /// scales by it (`Renderer.cpp:1037,1051,1063`): the scene lights, the
+    /// ambient, and the environment.
+    pub fn set_day_night(&mut self, scale: Option<f32>) {
+        self.day_night = scale.map(|s| s.clamp(0.0, 1.0));
+    }
+
+    /// The table's lighting with the player's day/night applied, if any.
+    fn effective_lighting(
+        &self,
+        lighting: &vpw_table::geometry::Lighting,
+    ) -> vpw_table::geometry::Lighting {
+        let Some(user) = self.day_night else {
+            return *lighting;
+        };
+        let factor = user / lighting.global.max(1e-6);
+        let mut out = *lighting;
+        out.emission = out.emission.map(|c| c * factor);
+        out.ambient = out.ambient.map(|c| c * factor);
+        out.env_scale *= factor;
+        out
+    }
+
     /// Draws a frame. With no table loaded it only clears, which is still
     /// enough to tell that the chain down to WebGPU is alive.
     pub fn render(&mut self) -> Result<(), FrameError> {
@@ -389,12 +479,15 @@ impl TableRenderer {
             return self.gpu.render();
         };
 
+        let lighting = self.effective_lighting(&scene.lighting);
+        let gi = self.lights.gi_sources(crate::scene::MAX_GI_BULBS);
         self.pipeline.set_frame(
             &self.gpu.queue,
             self.camera.view_projection(aspect),
             self.camera.eye(),
-            &scene.lighting,
+            &lighting,
             (w, h),
+            &gi,
         );
         self.post
             .set_exposure(&self.gpu.queue, scene.lighting.exposure);

@@ -52,6 +52,15 @@ struct Frame {
     clip       : vec4<f32>,
     // xyz = the normal of the surface that reflects, w = how strongly.
     mirror     : vec4<f32>,
+    // rgb = the GI's first bounce off the glass and the plastics: flat, in
+    // the lit bulbs' average colour. See `GpuFrame::gi_bounce`.
+    gi_bounce  : vec4<f32>,
+    // Each baked group's live level, scaling its lightmap layer. `env.z`
+    // says how many layers are live.
+    gi_levels  : vec4<f32>,
+    // The general illumination: `env.w` pairs of rows, `[xyz, 1/range]` then
+    // `[rgb at level and calibration, falloff_power]`. See `GpuFrame::gi`.
+    gi         : array<vec4<f32>, 64>,
 };
 
 // The same values `Shader::SetMaterial` hands to the original's ubershader
@@ -96,6 +105,12 @@ struct VsIn {
 // reads it.
 @group(0) @binding(4) var transmitted : texture_2d<f32>;
 @group(0) @binding(5) var transmitted_samp : sampler;
+
+// The baked general illumination: the GI string traced against the table's
+// own geometry, once, shadows and all, in playfield UV space. `gi_bounce.a`
+// carries the group's live level, so the machine still owns the switch.
+// See `crate::bake`.
+@group(0) @binding(7) var gi_lightmap : texture_2d_array<f32>;
 
 // The playfield's reflection of what stands on it.
 //
@@ -148,6 +163,46 @@ fn env_uv(ray : vec3<f32>) -> vec2<f32> {
 fn env_diffuse(n : vec3<f32>, diffuse : vec3<f32>) -> vec3<f32> {
     let e = textureSampleLevel(env_irradiance, env_samp, env_uv(n), 0.0).rgb;
     return diffuse * e * frame.emission.a;
+}
+
+// The general illumination, as light and not as paint.
+//
+// A departure from the original, which draws every bulb as a screen-space
+// halo that mostly *modulates* the pixel under it — its own comment calls
+// that "a very crude approximation of real lighting" (`light.cpp:826`) — so a
+// playfield the table's own lighting leaves black stays black under thirty
+// lit bulbs. A real machine's GI string pours real light onto the wood; in a
+// dark arcade the machine glows. The brightest lit bulbs therefore also
+// arrive here as point lights: the same centre, range and falloff their halos
+// use, so what the author tuned keeps meaning the same thing.
+fn gi_diffuse(pos : vec3<f32>, n : vec3<f32>, diffuse : vec3<f32>) -> vec3<f32> {
+    // The bounce first: it reaches every corner the bulbs do not. But not the
+    // head — the glass keeps the bounce inside the cabinet, and the head
+    // stands behind it. The window is cabinet geometry, not the table's: the
+    // field and its ramps live below 300 VPU and the head starts past it.
+    let inside = 1.0 - smoothstep(300.0, 500.0, pos.z);
+    var out = diffuse * frame.gi_bounce.rgb * inside;
+    let count = u32(frame.env.w);
+    for (var i = 0u; i < count; i = i + 1u) {
+        let at    = frame.gi[2u * i];
+        let color = frame.gi[2u * i + 1u];
+        let to = at.xyz - pos;
+        let len = length(to) * at.w;
+        // The same ceiling as the bounce: the glass keeps a GI bulb's light
+        // inside the cabinet, and the head stands behind it. Without this a
+        // field-scale lamp paints the head's face its own colour.
+        if (len < 1.0 && inside > 0.0) {
+            // The halo's own attenuation, so the reach the author set is the
+            // reach the light has. No cosine: a GI bulb sits a hand above the
+            // wood under a plastic that scatters it everywhere, and the
+            // cosine of the direct ray would darken exactly the sideways
+            // reach that makes it *general* illumination. This is bounced
+            // room light, not a spotlight.
+            let atten = pow(1.0 - len, color.w);
+            out = out + diffuse * color.rgb * (atten * inside);
+        }
+    }
+    return out;
 }
 
 // `DoEnvmapGlossy`, `Material.fxh:158`. Picking the mip by roughness is, in the
@@ -240,6 +295,16 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
         texel = vec4<f32>(saturate(texel.rgb), texel.a);
     }
 
+    // An emissive surface: the texel is the light itself, not something the
+    // room lights. The machine's display is the one such surface — a plasma
+    // panel glows in a dark room instead of vanishing into it. Doubled so a
+    // lit segment sits above the tone mapper's paper white and feeds a little
+    // bloom, which is what a display does to a camera in the dark. (2.0 in
+    // this slot is the playfield's baked-GI flag, not emission.)
+    if (material.extra.w > 0.5 && material.extra.w < 1.5) {
+        return vec4<f32>(texel.rgb * 2.0, texel.a);
+    }
+
     // The alpha test. `BasicShader.hlsl:366`:
     //
     //     clip(pixel.a <= alphaTestValue ? -1 : 1);
@@ -321,6 +386,17 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
     let ndv = min(max(dot(n, v), 0.0), 1.0);
     if (!is_metal && max_component(diffuse) > 0.0) {
         color = color + env_diffuse(n, diffuse);
+        color = color + gi_diffuse(in.world, n, diffuse);
+        // The baked half of the GI: each group traced with shadows and one
+        // bounce, its layer scaled by its live level. Only the playfield
+        // carries the flag — its UV spans the field, the lightmap's space.
+        if (material.extra.w > 1.5) {
+            let layers = u32(frame.env.z);
+            for (var g = 0u; g < layers; g = g + 1u) {
+                let baked = textureSampleLevel(gi_lightmap, env_samp, in.uv, g, 0.0).rgb;
+                color = color + diffuse * baked * frame.gi_levels[g];
+            }
+        }
     }
     if (max_component(glossy) > 0.0 || max_component(specular) > 0.0) {
         let refl = (2.0 * ndv) * n - v;

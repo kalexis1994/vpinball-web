@@ -340,6 +340,12 @@ pub struct Lighting {
     pub range: f32,
     /// How much the environment map contributes.
     pub env_scale: f32,
+    /// The table's own day/night — `m_globalEmissionScale`, already multiplied
+    /// into the three terms above. Kept on its own as well so a player-side
+    /// day/night override (`Renderer.cpp:377`, `Mode::User`) can divide it
+    /// back out: the original's user mode *replaces* this value, and replacing
+    /// a factor that is already baked in means knowing what it was.
+    pub global: f32,
     /// Scene exposure, which feeds into tone mapping.
     pub exposure: f32,
     /// How strongly the bloom is added back, from the table's own field.
@@ -737,6 +743,7 @@ fn lighting(vpx: &VPX) -> Lighting {
         ambient: color(&g.light_ambient).map(|c| c * global),
         range: g.light_range,
         env_scale: g.env_emission_scale * global,
+        global,
         // Tables older than 10.8 do not carry the field; the neutral value is 1.
         exposure: g.exposure.unwrap_or(1.0),
         bloom_strength: g.bloom_strength,
