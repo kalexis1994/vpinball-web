@@ -436,7 +436,14 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
     // answers direction, not averages — so the metals split: the ball gets
     // the original's dedicated treatment below, and every other metal part
     // keeps a modest ambient so rails and posts do not go black.
-    let is_ball = material.extra.w > 2.5;
+    // The reflection probe renders this same shader with a mirrored eye, and
+    // the ball's planar trick makes no sense from under the floor: the rays
+    // land nowhere and the mirrored ball comes out black — which the field
+    // then wears as a dark cutout around the real one. The probe's pass is
+    // the one with a clip plane, so in it the ball takes the plain lit-metal
+    // path and its reflection looks like a ball.
+    let mirror_pass = frame.clip.z != 0.0;
+    let is_ball = material.extra.w > 2.5 && !mirror_pass;
     if (is_metal && !is_ball) {
         color = color + gi_diffuse(in.world, n, material.base_color.rgb)
             + material.base_color.rgb * gi_baked(in.world);

@@ -50,19 +50,30 @@ fn main() {
         let n = gpu.bake_gi(&scene);
         eprintln!("baked {n} groups");
     }
+    // VPW_NOBALL=1 photographs the same framing with no ball at all, for
+    // telling an artifact around the ball from the artwork under it.
+    let no_ball = std::env::var("VPW_NOBALL").is_ok();
     let radius = 25.0;
     let m = Mat4::from_translation(Vec3::new(x, y, radius))
         * Mat4::from_scale(Vec3::splat(radius))
         * Mat4::from_quat(Quat::IDENTITY);
-    gpu.dynamic
-        .as_mut()
-        .unwrap()
-        .set_ball_transform(&gpu.queue, 0, Some(m));
+    if !no_ball {
+        gpu.dynamic
+            .as_mut()
+            .unwrap()
+            .set_ball_transform(&gpu.queue, 0, Some(m));
+    }
 
     let b = scene.playfield;
     let mut camera = vpw_render::Camera::framing(b.min, b.max, w as f32 / h as f32);
-    camera.inclination = 55.0;
-    camera.distance *= 0.55;
+    // VPW_TOPDOWN=1 looks straight down, which maps world to screen simply
+    // enough to find the ball in the pixels from a script.
+    if std::env::var("VPW_TOPDOWN").is_ok() {
+        camera.inclination = 89.0;
+    } else {
+        camera.inclination = 55.0;
+        camera.distance *= 0.55;
+    }
     let pixels = gpu.render(&uploaded, &camera);
     image::save_buffer(&out, &pixels, w, h, image::ColorType::Rgba8).unwrap();
     eprintln!("saved {out}");
