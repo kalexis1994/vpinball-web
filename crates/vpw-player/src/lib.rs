@@ -592,12 +592,7 @@ pub fn render_audio(frames: usize) -> Vec<f32> {
     // A cap so that a page asking for a silly number cannot allocate the tab
     // out of memory. Ten seconds is far more than any sane buffer.
     let frames = frames.min(vpw_game::AUDIO_RATE as usize * 10);
-    PLAYER.with(|p| {
-        let player = p.borrow();
-        let Some(player) = player.as_ref() else {
-            return Vec::new();
-        };
-        let mut player = player.borrow_mut();
+    with_player(|player| {
         let Some(table) = player.table.as_mut() else {
             return Vec::new();
         };
@@ -605,6 +600,7 @@ pub fn render_audio(frames: usize) -> Vec<f32> {
         table.render_audio(&mut out);
         out
     })
+    .unwrap_or_default()
 }
 
 /// Presses or releases a key, by the same `KeyboardEvent.code` the keyboard
@@ -638,12 +634,7 @@ pub fn press_key(code: &str, pressed: bool) {
 /// megabyte of unchanged pixels: the caller keeps what it already drew.
 #[wasm_bindgen(js_name = displayImage)]
 pub fn display_image(width: u32, height: u32) -> Vec<u8> {
-    PLAYER.with(|p| {
-        let player = p.borrow();
-        let Some(player) = player.as_ref() else {
-            return Vec::new();
-        };
-        let mut player = player.borrow_mut();
+    with_player(|player| {
         let Some(table) = player.table.as_ref() else {
             return Vec::new();
         };
@@ -658,6 +649,7 @@ pub fn display_image(width: u32, height: u32) -> Vec<u8> {
         player.display_sent = Some(asked);
         segment_raster(&segments, (width, height)).rgba
     })
+    .unwrap_or_default()
 }
 
 /// Where the machine's head lands on screen, as `[left, top, width, height]` in
@@ -888,6 +880,44 @@ thread_local! {
     /// The live player. Global because the event handlers and the functions JS
     /// calls all have to reach the same state.
     static PLAYER: RefCell<Option<Rc<RefCell<Player>>>> = const { RefCell::new(None) };
+
+    /// Whether the wedged-player message has been printed. Once is a clue;
+    /// sixty times a second is a wall.
+    static WEDGED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Runs `f` on the live player, or on nobody.
+///
+/// `try_borrow` rather than `borrow`, and the difference only matters after a
+/// disaster: a panic mid-frame aborts the wasm instance without unwinding, so
+/// the frame's borrow is never returned and the cell stays borrowed forever.
+/// Every caller that then panics in turn buries the one error that names the
+/// real fault under sixty a second saying "already borrowed". This says what
+/// happened once, quietly returns nothing, and leaves the console legible.
+/// Says, once, that the player is beyond saving and why the console looks the
+/// way it does.
+fn wedged_notice() {
+    if !WEDGED.with(|w| w.replace(true)) {
+        log::error!(
+            "the player's state is still borrowed from a frame that never \
+             finished — a panic above this line is the real fault, and \
+             everything after it is aftermath"
+        );
+    }
+}
+
+fn with_player<R>(f: impl FnOnce(&mut Player) -> R) -> Option<R> {
+    PLAYER.with(|p| {
+        let outer = p.try_borrow().ok()?;
+        let player = outer.as_ref()?;
+        match player.try_borrow_mut() {
+            Ok(mut player) => Some(f(&mut player)),
+            Err(_) => {
+                wedged_notice();
+                None
+            }
+        }
+    })
 }
 
 /// What the player tells the UI after loading a table.
@@ -1018,19 +1048,14 @@ pub fn release_plunger() {
 /// least work it can: two borrows and a subtraction.
 #[wasm_bindgen(js_name = plungerPull)]
 pub fn plunger_pull() -> Option<f32> {
-    PLAYER.with(|p| {
-        p.borrow()
-            .as_ref()
-            .and_then(|player| player.borrow().table.as_ref()?.plunger_pull())
-    })
+    with_player(|player| player.table.as_ref()?.plunger_pull()).flatten()
 }
 
 /// What the UI can read at any time for the HUD.
 #[wasm_bindgen(js_name = loopStats)]
 pub fn loop_stats() -> Option<LoopStats> {
-    PLAYER.with(|p| {
-        p.borrow().as_ref().map(|player| {
-            let player = player.borrow();
+    with_player(|player| {
+        {
             let s = &player.stats;
             let hud = player.table.as_ref().map(hud_of);
             LoopStats {
@@ -1067,7 +1092,7 @@ pub fn loop_stats() -> Option<LoopStats> {
                     .map(|t| t.take_messages().join(" · "))
                     .unwrap_or_default(),
             }
-        })
+        }
     })
 }
 
@@ -1384,7 +1409,16 @@ fn install_and_run(renderer: TableRenderer, surface: Surface) {
     let handle: Rc<RefCell<Option<RafClosure>>> = Rc::new(RefCell::new(None));
     let scheduler = handle.clone();
     *handle.borrow_mut() = Some(Closure::wrap(Box::new(move |now_ms: f64| {
-        player.borrow_mut().frame(now_ms);
+        // `try_borrow` for the same reason as `with_player`: after a panic
+        // mid-frame the borrow is never coming back, and the loop's job then
+        // is to stop, not to add a panic per frame to the pile.
+        match player.try_borrow_mut() {
+            Ok(mut player) => player.frame(now_ms),
+            Err(_) => {
+                wedged_notice();
+                return;
+            }
+        }
         if let Some(cb) = scheduler.borrow().as_ref() {
             request_frame(cb.as_ref().unchecked_ref());
         }
