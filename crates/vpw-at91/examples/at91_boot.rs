@@ -1,6 +1,6 @@
 //! Boots the real sound firmware and says how far it gets.
 //!
-//!     cargo run --release -p vpw-at91 --example boot -- lotr.zip [seconds]
+//!     cargo run --release -p vpw-at91 --example at91_boot -- lotr.zip [seconds]
 //!
 //! The two things worth watching are the **remap** and the **samples**. The
 //! board boots out of the BIOS, builds its real program in the RAM at

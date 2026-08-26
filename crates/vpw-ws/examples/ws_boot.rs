@@ -1,6 +1,6 @@
 //! Boots a real Whitestar ROM and says how far it gets.
 //!
-//!     cargo run --release -p vpw-ws --example boot -- lotr.zip [seconds]
+//!     cargo run --release -p vpw-ws --example ws_boot -- lotr.zip [seconds]
 //!
 //! What it is looking for is not "no crash" — a 6809 running on garbage does
 //! not crash, it runs garbage. It is looking for the things a board that is

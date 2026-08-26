@@ -91,6 +91,8 @@ pub struct Sound {
     write_at: usize,
     read_at: usize,
     last_written: u8,
+    /// Commands actually taken off the queue, idle repeats not counted.
+    pub commands_taken: u64,
 
     /// The two channels the firmware writes, kept apart because it writes them
     /// apart: one halfword each, to the two halves of the same word.
@@ -136,6 +138,7 @@ impl Sound {
             write_at: 0,
             read_at: 0,
             last_written: 0,
+            commands_taken: 0,
             left: Vec::new(),
             right: Vec::new(),
             remapped: false,
@@ -201,13 +204,12 @@ impl Sound {
 
     /// The CPU board has sent a sound command.
     ///
-    /// The byte is only half of it. On the real board the gate array pulls the
-    /// processor's fast interrupt down as well, which is the whole reason that
-    /// pin is wired: the firmware spends its time filling the sample buffer and
-    /// is not watching the latch, so a command that only sat in a register
-    /// would be noticed some milliseconds later or, if the mixing loop never
-    /// looks, not at all. The line is dropped again when the firmware reads the
-    /// latch, which is what reading it is for.
+    /// Queued, and nothing else: the reference's write handler (`scmd_w`,
+    /// `desound.c:694`) raises no interrupt — the firmware polls the port on
+    /// its own schedule, and the only interrupt this board lives on is the
+    /// sample timer's. The one thing the reference does beyond the queue is
+    /// wake a host-suspended processor, which is MAME's scheduler and not the
+    /// hardware.
     pub fn send(&mut self, command: u8) {
         // Only a change is queued (`desound.c:696`): the game holds the latch
         // between commands and re-posting the same byte is not a new one.
@@ -236,6 +238,11 @@ impl Sound {
         let data = self.queue[self.read_at];
         if self.read_at != self.write_at {
             self.read_at = (self.read_at + 1) % COMMAND_QUEUE;
+            // A dequeue, as opposed to the idle repeat below. The count is
+            // for whoever is asking why a machine is quiet: a firmware that
+            // is polling but never taking anything is a different fault from
+            // one that is not polling at all.
+            self.commands_taken += 1;
         }
         if self.read_at == self.write_at {
             self.queue[self.read_at] = data;
@@ -245,7 +252,9 @@ impl Sound {
         data
     }
 
-    /// Whether the fast interrupt line is down. See [`Sound::send`].
+    /// Whether the fast interrupt line is down. A command does not pull it —
+    /// the firmware polls for those, see [`Sound::send`] — so this only ever
+    /// answers what the firmware has raised on itself through the controller.
     pub fn fiq(&self) -> bool {
         self.aic.fast_asserted()
     }
@@ -381,21 +390,31 @@ impl Sound {
                     0x18 => self.timers[channel].rb,
                     0x1c => self.timers[channel].rc,
                     0x20 => self.timers[channel].take_status(),
-                    0x28 => self.timers[channel].irq_mask,
+                    // The mask is read at 0x2c (`at91.c:1386`). 0x28 is the
+                    // disable register, which is write-only.
+                    0x2c => self.timers[channel].irq_mask,
                     _ => 0,
                 }
             }
             0xffff_0000 => match addr & 0xfff {
-                0x00 => self.pio.enabled,
+                // The status registers, not their enable/disable pairs: which
+                // lines the port controls at 0x08 and which are outputs at
+                // 0x18 (`at91.c:1416,1419`). 0x00 and 0x10 are the write-only
+                // enables, and the reference does not answer them.
                 0x08 => self.pio.enabled,
-                0x10 => self.pio.output,
+                0x18 => self.pio.output,
                 0x38 => self.pio.data,
                 0x3c => self.pio.pins(),
                 0x48 => self.pio.irq_mask,
                 0x4c => std::mem::take(&mut self.pio.irq_status),
                 _ => 0,
             },
-            0xffff_4000 => self.power,
+            // Power saving: only the clock status register reads back, at
+            // 0x0c (`at91.c:1465`). The other three are write-only.
+            0xffff_4000 => match addr & 0xfff {
+                0x0c => self.power,
+                _ => 0,
+            },
             // The interrupt controller. The register map is Atmel's and the
             // order of the first two blocks is the one thing in it that is
             // easy to get backwards: the **modes** are at zero and the
@@ -481,9 +500,14 @@ impl Sound {
                 0x44 => self.pio.irq_mask &= !value,
                 _ => {}
             },
+            // The clock enable is at 0x04 and the disable at 0x08
+            // (`at91.c:1148,1157`); 0x00 is the control register, whose only
+            // job is entering idle mode, and it does not touch the clocks.
+            // Decoded one register down, an enable is a disable — latent only
+            // because reset already has the timer clocks on.
             0xffff_4000 => match addr & 0xfff {
-                0x00 => self.power |= value,
-                0x04 => self.power &= !value,
+                0x04 => self.power |= value,
+                0x08 => self.power &= !value,
                 _ => {}
             },
             0xffff_f000 => {
@@ -516,6 +540,15 @@ impl Sound {
             }
             _ => self.last_unmapped = Some((addr, true)),
         }
+        // The settle above computed how long the timers may be left alone —
+        // under the setup this write has just replaced. A write that starts a
+        // timer, or turns its clock back on through the power register, would
+        // otherwise leave a stale bound of "forever", and the sample interrupt
+        // would sit unfired until the firmware happened to touch some other
+        // peripheral. Settling again costs nothing — the cycles owed were
+        // already taken — and recomputes the bound against what the register
+        // says now.
+        self.settle();
     }
 }
 
@@ -628,11 +661,14 @@ impl Bus for Sound {
             0x0040_0000..=0x005f_fffc => {
                 set_word(&mut self.bios[..], (addr - 0x0040_0000) as usize, value);
             }
-            // The samples, two channels in the two halves of the word
-            // (`desound.c:571`). This is the whole output of the board.
+            // The samples. The firmware writes them a halfword per channel —
+            // that path is in [`Bus::write16`] — and a full-word store makes
+            // **one** sample, not two: the reference's handler
+            // (`desound.c:573-586`) tests the upper half of the mask first,
+            // and a word store has both halves, so the upper wins and the
+            // lower is never looked at.
             0x2040_0000..=0x2040_0003 => {
                 self.sample(true, (value >> 16) as u16);
-                self.sample(false, (value & 0xffff) as u16);
             }
             0x1000_0000..=0x207f_fffc | 0x4000_0000..=0x4000_fffc => {}
             _ if addr >= 0xffe0_0000 => self.write_peripheral(addr, value),

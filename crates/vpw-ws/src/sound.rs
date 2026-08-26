@@ -25,9 +25,6 @@ pub struct SoundBoard {
     /// and the one before, for [`SoundBoard::take_audio_at`].
     phase: f64,
     previous: f32,
-    /// How many times the firmware has taken the fast interrupt, which is how
-    /// it hears about a command. See [`vpw_at91::Sound::send`].
-    pub commands_taken: u64,
 }
 
 impl SoundBoard {
@@ -41,7 +38,6 @@ impl SoundBoard {
             produced: 0,
             phase: 0.0,
             previous: 0.0,
-            commands_taken: 0,
         }
     }
 
@@ -68,11 +64,7 @@ impl SoundBoard {
             let n = self.cpu.step(&mut *self.board);
             self.cycle += u64::from(n);
             self.cpu.irq = self.board.tick(n);
-            let asking = self.board.fiq();
-            if asking && !self.cpu.fiq {
-                self.commands_taken += 1;
-            }
-            self.cpu.fiq = asking;
+            self.cpu.fiq = self.board.fiq();
         }
     }
 
@@ -96,11 +88,12 @@ impl SoundBoard {
         (((pins & 0x001f_0000) >> 16) | ((pins & 0x0380_0000) >> 18)) as u8
     }
 
-    /// What the board has been up to: fast interrupts asked for, and the four
-    /// read counters — command bytes, command words, sample bytes, sample words.
+    /// What the board has been up to: commands taken off the queue, and the
+    /// four read counters — command bytes, command words, sample bytes,
+    /// sample words.
     pub fn diagnostics(&self) -> (u64, [u64; 4], u32, u32) {
         (
-            self.commands_taken,
+            self.board.commands_taken,
             self.board.reads,
             self.board.aic.enabled,
             self.cpu.r[15],
