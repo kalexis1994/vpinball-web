@@ -296,6 +296,17 @@ fires comes back through the script as a kick.
 
 ## Smaller things that show anyway
 
+**Attract mode never starts on its own.** A board booted with a blank CMOS
+writes FACTORY SETTING on the display and then sits there for minutes —
+sampled after every instruction, the ROM programs the lamp rows' direction
+and writes nothing but "all off" until an operator presses something. Whether
+the real machine leaves that state by itself and begins its attract lamp show
+is not settled; PinMAME with the same ROM is the reference to consult. The
+test that watches boot (`rom_real.rs`) pins today's behaviour and will say so
+if it changes. Found while un-encoding a test that asserted the POST lights
+all 64 lamps — a measurement that was real, but taken through the PIA's
+settling ghost, before the filament model kept it under the lit threshold.
+
 **Ramps.** They collide now, which is what makes a launch lane work: F-14's
 shooter lane is `Ramp3` lifting the ball from the playfield to 61 units over a
 wall that is 45 tall, then `Ramp5` carrying it round the top. Ported from

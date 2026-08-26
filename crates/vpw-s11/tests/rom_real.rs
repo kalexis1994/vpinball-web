@@ -190,17 +190,32 @@ fn the_diagnostic_menu_shows_the_settings() {
     );
 }
 
+/// What boot actually looks like from the lamp matrix.
+///
+/// This test used to assert the opposite — that the POST lights all 64 — on
+/// a measurement that was real but taken through a bug: while the PIA's
+/// directions are still being programmed, its undriven active-low lines read
+/// as every lamp in the strobed column on, and a bitmap view of the matrix
+/// counted them. The filament model keeps those microseconds below the lit
+/// threshold, and with the ghost gone the truth is the sibling tests':
+/// a board with a blank CMOS pulses its coils once and then sits at
+/// FACTORY SETTING waiting for the operator, lighting nothing. Watched by
+/// sampling the drive after every instruction, the ROM programs the row
+/// port's direction and then writes only `$FF` — all off — for minutes.
+///
+/// Whether attract mode should eventually begin on its own after the
+/// factory defaults are written is not settled here; today it does not, and
+/// if that ever changes this test is the one that will say so.
 #[test]
-fn the_post_tests_the_lamps_and_the_solenoids() {
+fn a_blank_board_pulses_its_coils_and_lights_no_lamp() {
     let Some(roms) = load_roms() else {
         eprintln!("skipped: set VPW_S11_ROM to run this test");
         return;
     };
     let mut machine = machine_with_rom(&roms);
 
-    // During boot the ROM runs its test: it lights every lamp and pulses the
-    // coils. It has to be watched by accumulating, because at any given
-    // instant there is almost never anything active.
+    // Accumulated, because a coil pulse is milliseconds and an instantaneous
+    // look misses almost every firing.
     let mut max_lamps = 0;
     let mut solenoids = 0u32;
     let target = machine.cycle() + 20_000_000;
@@ -210,15 +225,18 @@ fn the_post_tests_the_lamps_and_the_solenoids() {
         solenoids |= machine.board.solenoids.fired();
     }
 
-    assert_eq!(max_lamps, 64, "the lamp test lights them all");
+    // The boot pulse on solenoids 9-16 is real drive, not the settling
+    // ghost: the write only counts once the data register is selected.
     assert_eq!(
         solenoids & 0xFF00,
         0xFF00,
-        "the test pulses solenoids 9-16: {solenoids:#018b}"
+        "boot pulses solenoids 9-16: {solenoids:#018b}"
     );
 
-    // Once in the operator menu there is not a single one left lit.
-    assert_eq!(machine.board.lamps.lit_count(), 0);
+    // And not one lamp shows, ever — not even from the reset transient. A
+    // filament driven for the microseconds between two PIA writes does not
+    // warm enough to see, and that is the regression this pins.
+    assert_eq!(max_lamps, 0, "a waiting board lights nothing");
 }
 
 #[test]
