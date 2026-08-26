@@ -283,8 +283,12 @@ impl TablePipeline {
                 view_formats: &[],
             })
             .create_view(&Default::default());
-        // The GI lightmap starts as one black layer: a table with no bake
-        // adds nothing, and the shader never has to ask.
+        // The GI lightmap starts as black layers: a table with no bake adds
+        // nothing, and the shader never has to ask. Two of them rather than
+        // one, because wgpu-hal guesses a texture's view dimension from its
+        // layer count — a single layer is assumed to be a plain `D2`, and
+        // viewing it as the array the shader binds earns a warning at every
+        // boot.
         let field_picture = blank.clone();
         let gi_lightmap = device
             .create_texture(&wgpu::TextureDescriptor {
@@ -292,7 +296,7 @@ impl TablePipeline {
                 size: wgpu::Extent3d {
                     width: 1,
                     height: 1,
-                    depth_or_array_layers: 1,
+                    depth_or_array_layers: 2,
                 },
                 mip_level_count: 1,
                 sample_count: 1,

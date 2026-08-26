@@ -191,6 +191,11 @@ impl Offscreen {
         for layer in &bake.layers {
             data.extend_from_slice(layer);
         }
+        // A spare black layer when there is only one, as in the on-screen
+        // renderer: wgpu-hal guesses the view dimension from the layer count,
+        // and one layer reads as `D2` rather than the array the shader binds.
+        let layers = (bake.layers.len() as u32).max(2);
+        data.resize(layers as usize * bake.layers[0].len(), 0);
         let texture = &self.device.create_texture_with_data(
             &self.queue,
             &wgpu::TextureDescriptor {
@@ -198,7 +203,7 @@ impl Offscreen {
                 size: wgpu::Extent3d {
                     width: bake.width,
                     height: bake.height,
-                    depth_or_array_layers: bake.layers.len() as u32,
+                    depth_or_array_layers: layers,
                 },
                 mip_level_count: 1,
                 sample_count: 1,

@@ -416,6 +416,12 @@ impl TableRenderer {
         for layer in &bake.layers {
             data.extend_from_slice(layer);
         }
+        // wgpu-hal reads a texture's shape as its intent, and one layer looks
+        // like a plain picture to it rather than the array the shader binds.
+        // A table whose GI is a single relay gets a spare black layer, and
+        // the guess and the binding agree.
+        let layers = (bake.layers.len() as u32).max(2);
+        data.resize(layers as usize * bake.layers[0].len(), 0);
         let texture = &self.gpu.device.create_texture_with_data(
             &self.gpu.queue,
             &wgpu::TextureDescriptor {
@@ -423,7 +429,7 @@ impl TableRenderer {
                 size: wgpu::Extent3d {
                     width: bake.width,
                     height: bake.height,
-                    depth_or_array_layers: bake.layers.len() as u32,
+                    depth_or_array_layers: layers,
                 },
                 mip_level_count: 1,
                 sample_count: 1,
