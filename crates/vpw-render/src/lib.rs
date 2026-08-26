@@ -177,12 +177,17 @@ impl GpuContext {
         }));
 
         let caps = surface.get_capabilities(&adapter);
+        let Some(&fallback) = caps.formats.first() else {
+            return Err(GpuInitError::Surface(
+                "the adapter cannot present to this canvas".into(),
+            ));
+        };
         let format = caps
             .formats
             .iter()
             .copied()
             .find(|f| f.is_srgb())
-            .unwrap_or(caps.formats[0]);
+            .unwrap_or(fallback);
 
         // WebGPU does not offer an sRGB format for a canvas: the capabilities
         // come back as `Bgra8Unorm` and nothing else. The shader works in
@@ -250,13 +255,26 @@ impl GpuContext {
 
         // The format is re-read rather than assumed: it is a property of the
         // surface, and a second canvas is not obliged to offer the same one.
+        //
+        // It can also come back **empty**: on the WebGL backend the adapter is
+        // married to the one canvas its context was created from, and a surface
+        // on any other canvas is one it cannot present to. That has to be an
+        // error and not a panic — this runs holding the player's state, and a
+        // panic here wedges the whole instance.
         let caps = surface.get_capabilities(&self.adapter);
+        let Some(&fallback) = caps.formats.first() else {
+            return Err(GpuInitError::Surface(
+                "the adapter cannot present to this canvas — a WebGL context \
+                 only draws into the canvas it was born on"
+                    .into(),
+            ));
+        };
         let format = caps
             .formats
             .iter()
             .copied()
             .find(|f| f.is_srgb())
-            .unwrap_or(caps.formats[0]);
+            .unwrap_or(fallback);
         let view_format = format.add_srgb_suffix();
 
         self.config.format = format;
