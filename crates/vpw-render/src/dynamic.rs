@@ -212,10 +212,12 @@ impl DynamicParts {
         // shader wants: a multiplicative map, white where the steel is
         // untouched, dimmed where a mark scatters what the mirror would have
         // returned.
-        let decal = scene
-            .image(&scene.ball_decal)
-            .and_then(ball_wear)
-            .unwrap_or_else(vpw_table::ball::scratches);
+        let decal = soften(
+            scene
+                .image(&scene.ball_decal)
+                .and_then(ball_wear)
+                .unwrap_or_else(vpw_table::ball::scratches),
+        );
         for _ in 0..MAX_BALLS {
             parts.push(make_part(
                 device,
@@ -333,6 +335,55 @@ impl DynamicParts {
 /// which is what a scratch does to a mirror: scatter part of what it would
 /// have returned. `None` when the image cannot be decoded, and the caller
 /// falls back to the scratches made in `vpw_table::ball`.
+/// Blurs the wear until it reads as haze rather than engraving.
+///
+/// A decal's strokes are drawn pixel-sharp, and pixel-sharp marks on a curved
+/// mirror look like cracks in it. Real wear is thousands of overlapping
+/// micro-scratches, and what the eye gets of it is a soft smudge. Two passes
+/// of a small box blur are that smudge; the horizontal pass wraps, because
+/// the sphere's UV seam is a meridian and a blur that stopped at it would
+/// draw the seam on the ball.
+fn soften(mut wear: vpw_table::geometry::Image) -> vpw_table::geometry::Image {
+    let (w, h) = (wear.width as usize, wear.height as usize);
+    let Some(px) = wear.rgba.as_mut() else {
+        return wear;
+    };
+    let mut gray: Vec<u16> = px.chunks_exact(4).map(|t| t[0] as u16).collect();
+    let mut pass = vec![0u16; gray.len()];
+    const R: isize = 2;
+    for _ in 0..2 {
+        // Horizontal, wrapping.
+        for y in 0..h {
+            for x in 0..w {
+                let mut sum = 0u32;
+                for dx in -R..=R {
+                    let sx = (x as isize + dx).rem_euclid(w as isize) as usize;
+                    sum += gray[y * w + sx] as u32;
+                }
+                pass[y * w + x] = (sum / (2 * R + 1) as u32) as u16;
+            }
+        }
+        // Vertical, clamped: the poles are not each other's neighbours.
+        for y in 0..h {
+            for x in 0..w {
+                let mut sum = 0u32;
+                for dy in -R..=R {
+                    let sy = (y as isize + dy).clamp(0, h as isize - 1) as usize;
+                    sum += pass[sy * w + x] as u32;
+                }
+                gray[y * w + x] = (sum / (2 * R + 1) as u32) as u16;
+            }
+        }
+    }
+    for (texel, g) in px.chunks_exact_mut(4).zip(&gray) {
+        let v = *g as u8;
+        texel[0] = v;
+        texel[1] = v;
+        texel[2] = v;
+    }
+    wear
+}
+
 fn ball_wear(image: &vpw_table::geometry::Image) -> Option<vpw_table::geometry::Image> {
     let rgba: std::borrow::Cow<[u8]> = match (&image.rgba, &image.encoded) {
         (Some(px), _) => std::borrow::Cow::Borrowed(px),
@@ -354,7 +405,7 @@ fn ball_wear(image: &vpw_table::geometry::Image) -> Option<vpw_table::geometry::
             // Well under half strength: wear is something noticed on the
             // second look, and at full weight the ball reads as damaged
             // rather than played.
-            let dim = 255 - (mark * 2 / 5) as u8;
+            let dim = 255 - (mark / 4) as u8;
             [dim, dim, dim, 255]
         })
         .collect();
