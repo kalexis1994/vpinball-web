@@ -468,7 +468,14 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
                 // it leaves the belly — the field genuinely mirrored under
                 // the ball — at full strength.
                 let steep = clamp(-r.z, 0.0, 1.0);
-                let fade = steep * steep;
+                // And by the ray's travel: a reflection that flew far lands
+                // far behind the part, and drawing the distant field there is
+                // what reads as seeing *through* it — worst at the front
+                // view, where the centre of the ball mirrors the field a
+                // metre back. The original's ball keeps its reflection local
+                // to the ball for the same reason; a quarter-metre half-life
+                // is that locality.
+                let fade = steep * steep / (1.0 + t / 250.0);
                 // A cross of taps rather than one: the reflection of a
                 // rolling ball is soft, and one texel of a far hit is glass
                 // again. The spread grows with the distance the ray flew.
@@ -484,9 +491,18 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
                 // its lit inserts, which live in no texture this can sample.
                 // The constant stands in for them, tuned until the ball's
                 // reflection sits at the brightness of the wood beside it.
+                // The floor just under a ball is in the ball's own shadow,
+                // and its reflection is the dark core every chrome ball on a
+                // surface shows at its bottom. The maps know nothing of the
+                // ball, so the shadow is put back by the one thing that
+                // measures "just under": the reflected ray's flight. A short
+                // hop lands in the occluded ring; a long one reaches field
+                // the ball never darkened. Without this the belly continues
+                // the bright floor and the ball reads as glass.
+                let contact = smoothstep(30.0, 180.0, t);
                 let lit = texel * (gi_baked(hit) + frame.gi_bounce.rgb
                     + vec3<f32>(0.05) * frame.emission.a) * 2.5;
-                color = color + material.base_color.rgb * lit * fade;
+                color = color + material.base_color.rgb * lit * fade * contact;
             }
         }
         // The lamps, mirrored: a highlight where the reflected ray runs near

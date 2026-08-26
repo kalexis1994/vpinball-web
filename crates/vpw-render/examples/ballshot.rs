@@ -71,7 +71,12 @@ fn main() {
     if std::env::var("VPW_TOPDOWN").is_ok() {
         camera.inclination = 89.0;
     } else {
-        camera.inclination = 55.0;
+        // VPW_INCL picks the angle; the front view a player actually holds
+        // is a low one, and it is where a mirror ball is hardest to draw.
+        camera.inclination = std::env::var("VPW_INCL")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(55.0);
         camera.distance *= 0.55;
     }
     let pixels = gpu.render(&uploaded, &camera);
