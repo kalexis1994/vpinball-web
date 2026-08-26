@@ -159,15 +159,35 @@ export async function saveMachineState(): Promise<void> {
   if (data) await writeMachineState(runningSet, data);
 }
 
+/** The one canvas the player ever draws into. */
+let canvasEl: HTMLCanvasElement | null = null;
+
+/**
+ * The player's canvas, the same element every time.
+ *
+ * The element belongs to the player, not to React: the game view appends it on
+ * the way in and detaches it on the way out, and a return trip gets the very
+ * same node back. That is not a nicety — on the WebGL backend the graphics
+ * context is married to the canvas it was created from and can never present
+ * to another, and on the worker path a canvas's control can only be
+ * transferred once. A fresh element per visit meant a fresh surface per visit,
+ * which WebGPU tolerated and WebGL answered with a crash.
+ */
+export function playerCanvas(): HTMLCanvasElement {
+  if (!canvasEl) {
+    canvasEl = document.createElement('canvas');
+    canvasEl.id = 'playfield';
+  }
+  return canvasEl;
+}
+
 /**
  * Starts the player on the canvas, or moves it there.
  *
- * Every call reaches the host's `start`, which is what makes coming back from
- * the menu work: React unmounts the canvas on the way out and builds a **new**
- * element on the way back, and only the player's side can see that the element
- * changed. Memoising this away — which it used to do — left the renderer
- * drawing into the canvas from the first visit, so the second one had sound and
- * controls and a black rectangle where the table should be.
+ * Every call reaches the host's `start`. With {@link playerCanvas} the element
+ * is the same one every visit, so this usually amounts to "you are already
+ * there, wake up" — but only the player's side can tell, and the answer has to
+ * stay correct if the element ever does change.
  *
  * What is memoised is the expensive half: choosing the host, fetching the wasm
  * and handing over the script libraries. Those are the same whatever canvas is

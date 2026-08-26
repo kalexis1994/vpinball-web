@@ -190,6 +190,10 @@ body {
 
 .player { position: fixed; inset: 0; background: #000; }
 .player canvas { width: 100%; height: 100%; display: block; touch-action: none; }
+/* No box of its own: the canvas inside lays out as a direct child of .player.
+   The div exists because the element belongs to the player and is appended by
+   hand, and React needs somewhere it will not reconcile away. */
+.player-stage { display: contents; }
 
 .player-hud {
   position: absolute;

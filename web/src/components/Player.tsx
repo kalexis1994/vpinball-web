@@ -11,6 +11,7 @@ import {
   mark,
   newBall,
   nextCameraView,
+  playerCanvas,
   saveMachineState,
   setCameraView,
   setDayNight,
@@ -53,7 +54,7 @@ const PHASES: Record<Phase, string> = {
  * mark.
  */
 export function Player({ table, title, source, rom, onExit }: Props) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const stageRef = useRef<HTMLDivElement>(null);
   const [error, setError] = useState<string | null>(null);
   const [phase, setPhase] = useState<Phase>('starting');
   const [loop, setLoop] = useState<Loop | null>(null);
@@ -77,10 +78,15 @@ export function Player({ table, title, source, rom, onExit }: Props) {
     let timer: number | undefined;
     let disconnectInput: (() => void) | undefined;
 
+    // The canvas is the player's own element, appended rather than rendered:
+    // a WebGL context and a transferred `OffscreenCanvas` are both married to
+    // one element for life, so every visit must present the same one. See
+    // `playerCanvas`.
+    const canvas = playerCanvas();
+    stageRef.current?.appendChild(canvas);
+
     void (async () => {
       try {
-        const canvas = canvasRef.current;
-        if (!canvas) throw new Error('the canvas never mounted');
         await startPlayer(canvas);
         if (!alive) return;
 
@@ -148,6 +154,8 @@ export function Player({ table, title, source, rom, onExit }: Props) {
       // ball drains while somebody reads the table list.
       hidePlayer();
       void stopAudio();
+      // Detached, not destroyed: the element goes back in on the next visit.
+      canvas.remove();
     };
   }, [key]);
 
@@ -208,7 +216,9 @@ export function Player({ table, title, source, rom, onExit }: Props) {
 
   return (
     <div className="player">
-      <canvas id="playfield" ref={canvasRef} />
+      {/* The canvas lands here, appended by the effect above; the div itself
+          generates no box, so the canvas lays out as a direct child. */}
+      <div className="player-stage" ref={stageRef} />
 
       {phase === 'ready' && <ScoreDisplay view={view} />}
       {phase === 'ready' && <TouchControls onNewBall={() => void newBall()} />}
