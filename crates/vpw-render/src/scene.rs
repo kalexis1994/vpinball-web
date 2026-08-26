@@ -140,6 +140,10 @@ pub struct GpuFrame {
     /// Each baked group's live level, scaling its lightmap layer. `env.z`
     /// says how many layers are live.
     pub gi_levels: [f32; 4],
+    /// The playfield in world units — `[min.x, min.y, 1/width, 1/height]` —
+    /// which is how a fragment that is not the playfield finds its place in
+    /// the lightmap: a ball is steel, and steel shows the light around it.
+    pub field: [f32; 4],
     pub gi: [[f32; 4]; MAX_GI_BULBS * 2],
 }
 
@@ -187,6 +191,7 @@ impl GpuFrame {
             mirror: [0.0, 0.0, 1.0, l.reflection_strength],
             gi_bounce: [0.0; 4],
             gi_levels: [0.0; 4],
+            field: [0.0; 4],
             gi: [[0.0; 4]; MAX_GI_BULBS * 2],
         }
     }
@@ -239,6 +244,9 @@ pub struct GpuScene {
     pub bind_groups: Vec<wgpu::BindGroup>,
     pub stats: SceneStats,
     pub bounds: (Vec3, Vec3),
+    /// The playfield as the lightmap's frame wants it:
+    /// `[min.x, min.y, 1/width, 1/height]`. See `GpuFrame::field`.
+    pub field: [f32; 4],
     /// A copy of the table's lighting, so we do not have to drag the CPU scene
     /// all the way to drawing time.
     pub lighting: vpw_table::geometry::Lighting,
@@ -407,6 +415,11 @@ impl GpuScene {
             bind_groups,
             stats,
             bounds: (min, max),
+            field: {
+                let b = &scene.playfield;
+                let (dx, dy) = (b.max.x - b.min.x, b.max.y - b.min.y);
+                [b.min.x, b.min.y, 1.0 / dx.max(1.0), 1.0 / dy.max(1.0)]
+            },
             lighting: scene.lighting,
         }
     }

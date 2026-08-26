@@ -370,6 +370,45 @@ fn strings_of_different_colours_become_their_own_groups() {
     assert_eq!(at(red_layer, 2), 0.0, "and no blue in the red layer");
 }
 
+/// Steel shows the light around it: a metal surface must brighten under the
+/// baked GI, or a ball over a lit field reads as a glass marble — dark steel
+/// with the field's light living in a map the metal never read.
+#[test]
+fn a_metal_surface_shows_the_baked_light() {
+    let Some(mut gpu) = gpu() else { return };
+    let mut scene = scene_with(1.0, "GI_1", false);
+    scene.materials[0].is_metal = true; // the floor's material
+
+    let mut camera = Camera::framing(
+        Vec3::new(0.0, 0.0, 0.0),
+        Vec3::new(TABLE, TABLE, 0.0),
+        W as f32 / H as f32,
+    );
+    camera.inclination = 89.0;
+
+    let sample = |pixels: &[u8]| {
+        let (x, y) = (W / 2 + W / 5, H / 2);
+        let i = ((y * W + x) * 4) as usize;
+        pixels[i] as i32 + pixels[i + 1] as i32 + pixels[i + 2] as i32
+    };
+
+    let uploaded = gpu.upload(&scene);
+    gpu.upload_lights(&scene);
+    gpu.set_bloom(0.0);
+    let before = sample(&gpu.render(&uploaded, &camera));
+    let baked = gpu.bake_gi(&scene);
+    assert_eq!(baked, 1);
+    let after = sample(&gpu.render(&uploaded, &camera));
+
+    // Before the bake the lamp reaches the metal as a point light; after it
+    // the light lives in the map, and the metal must still show it.
+    assert!(
+        after + 40 > before,
+        "the metal went dark when the light was baked: before {before}, after {after}"
+    );
+    assert!(after > 40, "the metal shows no baked light at all: {after}");
+}
+
 /// A table that ships its own lightmaps gets none of the departure: no
 /// groups to bake, no point lights, no bounce.
 #[test]

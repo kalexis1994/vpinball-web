@@ -295,6 +295,7 @@ impl Offscreen {
             &scene.lighting,
             (self.width, self.height),
             &gi,
+            scene.field,
         );
 
         let view = self

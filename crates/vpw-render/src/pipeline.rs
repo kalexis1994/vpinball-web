@@ -500,6 +500,7 @@ impl TablePipeline {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn set_frame(
         &self,
         queue: &wgpu::Queue,
@@ -508,6 +509,7 @@ impl TablePipeline {
         lighting: &vpw_table::geometry::Lighting,
         size: (u32, u32),
         gi: &crate::lights::Gi,
+        field: [f32; 4],
     ) {
         let mut data = GpuFrame::from_lighting(lighting);
         data.view_proj = view_proj.to_cols_array_2d();
@@ -520,6 +522,7 @@ impl TablePipeline {
         data.gi_bounce = [gi.bounce[0], gi.bounce[1], gi.bounce[2], 0.0];
         data.gi_levels = gi.levels;
         data.env[2] = self.gi_layers as f32;
+        data.field = field;
         for (i, rows) in gi.rows.iter().take(bulbs).enumerate() {
             data.gi[i * 2] = rows[0];
             data.gi[i * 2 + 1] = rows[1];

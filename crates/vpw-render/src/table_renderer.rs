@@ -488,6 +488,7 @@ impl TableRenderer {
             &lighting,
             (w, h),
             &gi,
+            scene.field,
         );
         self.post
             .set_exposure(&self.gpu.queue, scene.lighting.exposure);

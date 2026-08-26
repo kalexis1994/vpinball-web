@@ -58,6 +58,9 @@ struct Frame {
     // Each baked group's live level, scaling its lightmap layer. `env.z`
     // says how many layers are live.
     gi_levels  : vec4<f32>,
+    // The playfield in world units: [min.x, min.y, 1/width, 1/height]. How a
+    // fragment that is not the playfield finds its place in the lightmap.
+    field      : vec4<f32>,
     // The general illumination: `env.w` pairs of rows, `[xyz, 1/range]` then
     // `[rgb at level and calibration, falloff_power]`. See `GpuFrame::gi`.
     gi         : array<vec4<f32>, 64>,
@@ -203,6 +206,28 @@ fn gi_diffuse(pos : vec3<f32>, n : vec3<f32>, diffuse : vec3<f32>) -> vec3<f32> 
         }
     }
     return out;
+}
+
+// The baked layers, sampled by world position and scaled by their groups'
+// live levels — for everything that is not the playfield but stands in its
+// light: above all the ball, which is steel, and steel shows the light
+// around it. The same cabinet ceiling as the rest of the GI.
+fn gi_baked(pos : vec3<f32>) -> vec3<f32> {
+    var out = vec3<f32>(0.0);
+    let layers = u32(frame.env.z);
+    if (layers == 0u) {
+        return out;
+    }
+    let uv = (pos.xy - frame.field.xy) * frame.field.zw;
+    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {
+        return out;
+    }
+    let inside = 1.0 - smoothstep(300.0, 500.0, pos.z);
+    for (var g = 0u; g < layers; g = g + 1u) {
+        let baked = textureSampleLevel(gi_lightmap, env_samp, uv, g, 0.0).rgb;
+        out = out + baked * frame.gi_levels[g];
+    }
+    return out * inside;
 }
 
 // `DoEnvmapGlossy`, `Material.fxh:158`. Picking the mip by roughness is, in the
@@ -397,6 +422,15 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
                 color = color + diffuse * baked * frame.gi_levels[g];
             }
         }
+    }
+    // A metal has no diffuse, and the loop above leaves it out of the GI
+    // entirely — which turned the ball into a glass marble: dark steel over a
+    // lit field, because the field's light lives in a lightmap the ball never
+    // read. Steel shows the light around it; the base colour is its tint.
+    if (is_metal) {
+        let around = gi_diffuse(in.world, n, material.base_color.rgb)
+            + material.base_color.rgb * gi_baked(in.world);
+        color = color + around;
     }
     if (max_component(glossy) > 0.0 || max_component(specular) > 0.0) {
         let refl = (2.0 * ndv) * n - v;
