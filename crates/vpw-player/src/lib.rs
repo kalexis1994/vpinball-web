@@ -73,28 +73,39 @@ impl FrameStats {
     }
 }
 
-/// State of the camera the user drives with the mouse.
-#[derive(Default)]
-struct CameraControls {
-    dragging: bool,
-    last: (f32, f32),
+/// Where the frames land.
+///
+/// Two shapes, because the player runs in two places. On the **main thread**
+/// it draws into the page's own `<canvas>`: layout owns the size, so the
+/// element is measured every frame, and "nobody can see it" is a fact the
+/// element itself knows. In a **worker** it draws into the `OffscreenCanvas`
+/// the page transferred: there is no layout to ask and no document to be in,
+/// so the size is whatever the page last said and visibility is told rather
+/// than observed.
+enum Surface {
+    Dom {
+        /// Owned here rather than captured by the animation-frame closure,
+        /// because it can change: leaving the game and coming back builds a
+        /// new element, and a closure holding the old one would keep measuring
+        /// something that is no longer in the document. See [`start`].
+        canvas: web_sys::HtmlCanvasElement,
+        dpr: f64,
+    },
+    Offscreen {
+        canvas: web_sys::OffscreenCanvas,
+        /// Set through [`set_visible`]. While false the loop holds the clocks,
+        /// exactly as the main-thread path does for a detached canvas.
+        visible: bool,
+    },
 }
 
 struct Player {
     renderer: TableRenderer,
-    /// The canvas being drawn to, and the pixel ratio it was measured at.
-    ///
-    /// Owned here rather than captured by the animation-frame closure, because
-    /// it can change: leaving the game and coming back builds a new element,
-    /// and a closure holding the old one would keep measuring something that is
-    /// no longer in the document. See [`start`].
-    canvas: web_sys::HtmlCanvasElement,
-    dpr: f64,
+    surface: Surface,
     /// The table being played, once one is loaded.
     table: Option<Game>,
     clock: FixedStep,
     stats: FrameStats,
-    camera_controls: CameraControls,
     /// The segments the display was last drawn from, so it is only redrawn
     /// when the machine says something new.
     display_segments: Vec<u16>,
@@ -109,47 +120,62 @@ struct Player {
 }
 
 impl Player {
-    fn frame(&mut self, now_ms: f64) {
-        let canvas = self.canvas.clone();
-        let (canvas, dpr) = (&canvas, self.dpr);
+    /// Whether there is anything to draw for, and the backbuffer size to draw
+    /// at if it changed.
+    ///
+    /// `None` means nobody could see the frame: the canvas is out of the
+    /// document, or the page said the player is hidden. Not merely a saving.
+    /// The main-thread loop measures the canvas to size the backbuffer, and a
+    /// detached element measures zero, so every frame spent in the menu was
+    /// resizing the surface to one pixel by one and rebuilding the offscreen
+    /// targets to match. And the table went on being played with nobody
+    /// watching: a ball can drain while somebody reads the table list, and
+    /// they come back to a game they did not lose.
+    fn visible_size(&self) -> Option<Option<(u32, u32)>> {
+        match &self.surface {
+            Surface::Dom { canvas, dpr } => {
+                use wasm_bindgen::JsCast as _;
+                if !canvas.unchecked_ref::<web_sys::Node>().is_connected() {
+                    return None;
+                }
+                // Fit the backbuffer to the current CSS size times the device
+                // pixel ratio.
+                let w = (f64::from(canvas.client_width()) * dpr).round().max(1.0) as u32;
+                let h = (f64::from(canvas.client_height()) * dpr).round().max(1.0) as u32;
+                if (canvas.width(), canvas.height()) != (w, h) {
+                    canvas.set_width(w);
+                    canvas.set_height(h);
+                    Some(Some((w, h)))
+                } else {
+                    Some(None)
+                }
+            }
+            // An offscreen canvas is resized by [`resize_surface`] when the
+            // page tells it to; the frame has nothing to measure.
+            Surface::Offscreen { visible, .. } => visible.then_some(None),
+        }
+    }
 
-        // Nothing to do while the canvas is out of the document, which is what
-        // it is the whole time the player is in the menu.
-        //
-        // Not merely a saving. The loop measures the canvas to size the
-        // backbuffer, and a detached element measures zero, so every frame
-        // spent in the menu was resizing the surface to one pixel by one and
-        // rebuilding the offscreen targets to match. And the table went on
-        // being played with nobody watching: a ball can drain while somebody
-        // reads the table list, and they come back to a game they did not lose.
-        //
-        // The clocks are held still rather than left to run, or the first frame
-        // back owes every millisecond spent in the menu and the loop tries to
-        // pay it in one go.
-        use wasm_bindgen::JsCast as _;
-        if !canvas.unchecked_ref::<web_sys::Node>().is_connected() {
+    fn frame(&mut self, now_ms: f64) {
+        // The clocks are held still rather than left to run while nobody can
+        // see the table, or the first frame back owes every millisecond spent
+        // in the menu and the loop tries to pay it in one go.
+        let Some(resized) = self.visible_size() else {
             self.last_ms = now_ms;
             self.finished_ms = clock_ms();
             return;
+        };
+        if let Some((w, h)) = resized {
+            self.renderer.resize(w, h);
         }
 
         // Two clocks, because they answer different questions. `now_ms` is the
         // animation frame's own timestamp: when the frame was **due**. This one
         // is when we actually got to run. The gap between them is how busy the
-        // main thread was with something else.
+        // thread was with something else.
         let entered = clock_ms();
         let idle_ms = (entered - self.finished_ms) as f32;
         let late_ms = (entered - now_ms) as f32;
-
-        // Fit the backbuffer to the current CSS size times the device pixel
-        // ratio.
-        let w = (f64::from(canvas.client_width()) * dpr).round().max(1.0) as u32;
-        let h = (f64::from(canvas.client_height()) * dpr).round().max(1.0) as u32;
-        if (canvas.width(), canvas.height()) != (w, h) {
-            canvas.set_width(w);
-            canvas.set_height(h);
-            self.renderer.resize(w, h);
-        }
 
         // Clamped to exactly what the clock is willing to make up for. Not a
         // number of its own: clamping to more than that throws the difference
@@ -1146,18 +1172,41 @@ pub fn note_pause(source: &str, ms: f32) {
     });
 }
 
-fn now(window: &web_sys::Window) -> f64 {
-    window.performance().map_or(0.0, |p| p.now())
+thread_local! {
+    /// The scope's `performance`, looked up once.
+    ///
+    /// Through the global and not through `Window`, because there is no
+    /// `Window` in a worker and the clock is the same object under either
+    /// name. `std::time::Instant` panics on `wasm32-unknown-unknown`, so the
+    /// browser's own is the only one there is. Browsers coarsen it
+    /// deliberately against timing attacks — a fraction of a millisecond,
+    /// typically — which is far below anything worth calling a hitch.
+    static PERFORMANCE: Option<web_sys::Performance> =
+        js_sys::Reflect::get(&js_sys::global(), &JsValue::from_str("performance"))
+            .ok()
+            .and_then(|p| p.dyn_into::<web_sys::Performance>().ok());
 }
 
-/// The same clock without a window to hand.
-///
-/// `std::time::Instant` panics on `wasm32-unknown-unknown`, so the browser's
-/// own is the only one there is. Browsers coarsen it deliberately against
-/// timing attacks — a fraction of a millisecond, typically — which is far below
-/// anything worth calling a hitch.
 fn clock_ms() -> f64 {
-    web_sys::window().map_or(0.0, |w| now(&w))
+    PERFORMANCE.with(|p| p.as_ref().map_or(0.0, |p| p.now()))
+}
+
+/// Schedules `cb` for the next animation frame of whichever thread this is:
+/// the window's on the main thread, the worker's own in a worker.
+///
+/// Looked up by name on the global rather than through the `web_sys` types,
+/// because the same loop runs under both globals and the function is the same
+/// function either way. A scope without one cannot run the loop at all — which
+/// is what the page's capability probe is for, so by the time this runs the
+/// answer is known.
+fn request_frame(cb: &js_sys::Function) {
+    let global = js_sys::global();
+    match js_sys::Reflect::get(&global, &JsValue::from_str("requestAnimationFrame")) {
+        Ok(f) if f.is_function() => {
+            let _ = f.unchecked_into::<js_sys::Function>().call1(&global, cb);
+        }
+        _ => log::error!("no requestAnimationFrame in this scope; the loop cannot run"),
+    }
 }
 
 /// Starts the player on the `<canvas>` with the given id.
@@ -1199,80 +1248,402 @@ pub async fn start(canvas_id: String) -> Result<(), JsValue> {
         // common, and the element is what differs.
         let same = {
             let running = player.borrow();
-            js_sys::Object::is(canvas.as_ref(), running.canvas.as_ref())
+            match &running.surface {
+                Surface::Dom { canvas: c, .. } => js_sys::Object::is(canvas.as_ref(), c.as_ref()),
+                Surface::Offscreen { .. } => false,
+            }
         };
         if same {
             log::info!("the player is already on this canvas");
             return Ok(());
         }
-
-        {
-            let mut running = player.borrow_mut();
-            running
-                .renderer
-                .attach(wgpu::SurfaceTarget::Canvas(canvas.clone()), width, height)
-                .map_err(|e| JsValue::from_str(&e.to_string()))?;
-            running.canvas = canvas.clone();
-            running.dpr = dpr;
-            // The clock has been running while nobody was looking. Without
-            // this the first frame back owes every millisecond spent in the
-            // menu and the loop tries to pay it all at once.
-            running.last_ms = now(&window);
-            running.finished_ms = running.last_ms;
-        }
-        // Only the canvas half. The old element's listeners died with it, but
-        // the keyboard's are on `window` and are still there — connecting them
-        // again would deliver every keypress twice, and once more for every
-        // trip through the menu after that.
-        connect_pointer(&canvas, &player)?;
-        log::info!("the player moved to a new canvas ({width}x{height})");
+        reattach(
+            &player,
+            wgpu::SurfaceTarget::Canvas(canvas.clone()),
+            Surface::Dom { canvas, dpr },
+            width,
+            height,
+        )?;
         return Ok(());
     }
 
     let renderer = TableRenderer::new(wgpu::SurfaceTarget::Canvas(canvas.clone()), width, height)
         .await
         .map_err(|e| JsValue::from_str(&e.to_string()))?;
+    log::info!("WebGPU ready ({width}x{height})");
+    install_and_run(renderer, Surface::Dom { canvas, dpr });
+    Ok(())
+}
 
+/// Starts the player in a worker, on the `OffscreenCanvas` the page handed
+/// over.
+///
+/// The worker half of [`start`]: the same player and the same loop, with none
+/// of the DOM. The page keeps the `<canvas>` element, transfers control of it
+/// here, and stays responsible for everything only it can see — the element's
+/// size on the layout ([`resize_surface`]), whether anyone is looking at it
+/// ([`set_visible`]), and the input events, which arrive through the same
+/// exports the touch controls already use.
+#[wasm_bindgen(js_name = startOffscreen)]
+pub async fn start_offscreen(
+    canvas: web_sys::OffscreenCanvas,
+    width: u32,
+    height: u32,
+) -> Result<(), JsValue> {
+    let (width, height) = (width.max(1), height.max(1));
+    canvas.set_width(width);
+    canvas.set_height(height);
+
+    if let Some(player) = PLAYER.with(|p| p.borrow().clone()) {
+        // No "already on this canvas" case: the page only transfers a canvas
+        // once, so a second start is always a new element after a trip
+        // through the menu.
+        reattach(
+            &player,
+            wgpu::SurfaceTarget::OffscreenCanvas(canvas.clone()),
+            Surface::Offscreen {
+                canvas,
+                visible: true,
+            },
+            width,
+            height,
+        )?;
+        return Ok(());
+    }
+
+    let renderer = TableRenderer::new(
+        wgpu::SurfaceTarget::OffscreenCanvas(canvas.clone()),
+        width,
+        height,
+    )
+    .await
+    .map_err(|e| JsValue::from_str(&e.to_string()))?;
+    log::info!("WebGPU ready in a worker ({width}x{height})");
+    install_and_run(
+        renderer,
+        Surface::Offscreen {
+            canvas,
+            visible: true,
+        },
+    );
+    Ok(())
+}
+
+/// Points the running player at a new surface.
+///
+/// Leaving the game for the menu unmounts the canvas and coming back builds a
+/// new one — same id, different object. A surface is bound to the element it
+/// was made from, so without this the renderer carries on drawing into a
+/// canvas that is no longer in the document: the sound plays, the controls are
+/// there, and the table is a black rectangle. Everything already uploaded
+/// stays where it is, so coming back from the menu costs nothing.
+fn reattach(
+    player: &Rc<RefCell<Player>>,
+    target: wgpu::SurfaceTarget<'static>,
+    surface: Surface,
+    width: u32,
+    height: u32,
+) -> Result<(), JsValue> {
+    let mut running = player.borrow_mut();
+    running
+        .renderer
+        .attach(target, width, height)
+        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+    running.surface = surface;
+    // The clock has been running while nobody was looking. Without this the
+    // first frame back owes every millisecond spent in the menu and the loop
+    // tries to pay it all at once.
+    running.last_ms = clock_ms();
+    running.finished_ms = running.last_ms;
+    log::info!("the player moved to a new canvas ({width}x{height})");
+    Ok(())
+}
+
+/// Installs the player as the live one and spawns its frame loop.
+fn install_and_run(renderer: TableRenderer, surface: Surface) {
     let player = Rc::new(RefCell::new(Player {
         renderer,
-        canvas: canvas.clone(),
-        dpr,
+        surface,
         table: None,
         clock: FixedStep::default(),
         stats: FrameStats::default(),
-        camera_controls: CameraControls::default(),
         display_segments: Vec::new(),
         display_sent: None,
-        last_ms: now(&window),
-        finished_ms: now(&window),
+        last_ms: clock_ms(),
+        finished_ms: clock_ms(),
         elapsed_ticks: 0,
     }));
     PLAYER.with(|p| *p.borrow_mut() = Some(player.clone()));
 
-    log::info!("WebGPU ready ({width}x{height})");
-    connect_controls(&canvas, &player)?;
-
     // One synchronous frame before entering the loop: it avoids a blank canvas
     // until the first rAF and leaves the backbuffer at the real size the layout
     // has already resolved.
-    player.borrow_mut().frame(now(&window));
+    player.borrow_mut().frame(clock_ms());
 
     // The rAF loop: the closure reschedules itself.
     let handle: Rc<RefCell<Option<RafClosure>>> = Rc::new(RefCell::new(None));
     let scheduler = handle.clone();
     *handle.borrow_mut() = Some(Closure::wrap(Box::new(move |now_ms: f64| {
         player.borrow_mut().frame(now_ms);
-
-        if let (Some(win), Some(cb)) = (web_sys::window(), scheduler.borrow().as_ref()) {
-            let _ = win.request_animation_frame(cb.as_ref().unchecked_ref());
+        if let Some(cb) = scheduler.borrow().as_ref() {
+            request_frame(cb.as_ref().unchecked_ref());
         }
     }) as Box<dyn FnMut(f64)>));
 
-    window.request_animation_frame(handle.borrow().as_ref().unwrap().as_ref().unchecked_ref())?;
+    request_frame(handle.borrow().as_ref().unwrap().as_ref().unchecked_ref());
     // The closure has to outlive this function; it reschedules itself.
     std::mem::forget(handle);
+}
 
+/// Resizes an offscreen surface to the size the page measured.
+///
+/// The worker path's half of what the main-thread loop does by measuring the
+/// canvas: layout lives on the page, so the page watches the element with a
+/// `ResizeObserver` and reports here in device pixels. A no-op on the
+/// main-thread path, which measures for itself.
+#[wasm_bindgen(js_name = resizeSurface)]
+pub fn resize_surface(width: u32, height: u32) {
+    PLAYER.with(|p| {
+        if let Some(player) = p.borrow().as_ref() {
+            let mut player = player.borrow_mut();
+            let (width, height) = (width.max(1), height.max(1));
+            match &player.surface {
+                Surface::Offscreen { canvas, .. } => {
+                    canvas.set_width(width);
+                    canvas.set_height(height);
+                }
+                Surface::Dom { .. } => return,
+            }
+            player.renderer.resize(width, height);
+        }
+    });
+}
+
+/// Tells an offscreen player whether anyone can see it.
+///
+/// The worker cannot know: the element whose visibility matters lives on the
+/// page. While hidden the loop holds the clocks and draws nothing, exactly as
+/// the main-thread path does when its canvas leaves the document — a ball must
+/// not drain while somebody reads the table list.
+#[wasm_bindgen(js_name = setVisible)]
+pub fn set_visible(visible: bool) {
+    PLAYER.with(|p| {
+        if let Some(player) = p.borrow().as_ref() {
+            let mut player = player.borrow_mut();
+            if let Surface::Offscreen { visible: v, .. } = &mut player.surface {
+                *v = visible;
+            }
+        }
+    });
+}
+
+/// Orbits the camera by a mouse drag, in pixels.
+///
+/// The page owns the listeners — there is no DOM in a worker — and hands the
+/// deltas here, where the feel lives: how many degrees a pixel is worth is a
+/// property of the camera, not of whichever thread caught the event.
+///
+/// Provisional, like the drag it replaces: once the original's `ViewSetup` is
+/// in, the camera will be fixed by the table and this stays only for
+/// inspection.
+#[wasm_bindgen(js_name = cameraOrbit)]
+pub fn camera_orbit(dx: f32, dy: f32) {
+    PLAYER.with(|p| {
+        if let Some(player) = p.borrow().as_ref() {
+            let mut player = player.borrow_mut();
+            let camera = &mut player.renderer.camera;
+            camera.azimuth -= dx * 0.3;
+            camera.inclination = (camera.inclination + dy * 0.3).clamp(5.0, 89.0);
+        }
+    });
+}
+
+/// Traces the GI lightmaps for a table, away from any player.
+///
+/// The bake worker's entry point: it runs in a worker of its own with a wasm
+/// instance of its own, because tens of millions of rays on the game's thread
+/// would be a visible stutter. The answer is everything the cache stores and
+/// [`apply_gi_bake`] takes: the layers as one buffer of half floats, and each
+/// group's lamp names, which is how a bake finds its lamps again in a scene
+/// it has never met.
+/// Boots the game headless and asks the machine which lamps switch together.
+///
+/// `observe_seconds` of table time, after a warm-up long enough for attract
+/// to get going. Needs the script libraries and — for a table with one — the
+/// ROM to already be in this instance's registries, exactly as `loadTable`
+/// does. Empty when the game will not run, which is the caller's cue to fall
+/// back to guessing from names and colours.
+fn observe_groups(
+    vpx: &vpin::vpx::VPX,
+    candidates: &[String],
+    observe_seconds: f32,
+) -> Vec<Vec<String>> {
+    if observe_seconds <= 0.0 || candidates.is_empty() {
+        return Vec::new();
+    }
+    // A scene of its own: `Game::load` takes the moving parts out of the one
+    // it is given, and the bake wants the scene whole.
+    let mut scene = vpw_table::geometry::extract(vpx);
+    let resources = Resources::new(Rc::new(PageLibraries)).with_roms(Rc::new(PageRoms));
+    let Ok(mut game) = Game::load(vpx, &mut scene, resources) else {
+        return Vec::new();
+    };
+    if game.start().is_err() {
+        return Vec::new();
+    }
+    // Attract needs a moment to begin saying anything.
+    const WARMUP_S: f32 = 10.0;
+    for _ in 0..(WARMUP_S * 1000.0) as u32 {
+        game.step();
+    }
+    game.game_sync();
+    vpw_game::grouping::observe_lamp_groups(&mut game, candidates, observe_seconds)
+}
+
+#[wasm_bindgen(js_name = bakeGi)]
+pub fn bake_gi(bytes: &[u8], observe_seconds: f32) -> Result<JsValue, JsValue> {
+    let vpx = vpin::vpx::from_bytes(bytes)
+        .map_err(|e| JsValue::from_str(&format!("could not read the .vpx: {e}")))?;
+    let scene = vpw_table::geometry::extract(&vpx);
+
+    // The machine's own answer first: run it and watch what switches
+    // together. Names and colours only when there is nothing to watch —
+    // no ROM handed over, or a game that will not start.
+    let candidates = vpw_render::bake::field_scale_candidates(&scene);
+    let observed = observe_groups(&vpx, &candidates, observe_seconds);
+    let groups = if observed.is_empty() {
+        log::info!("bake: grouping by names and colours (no machine to watch)");
+        vpw_render::bake::gi_groups(&scene)
+    } else {
+        log::info!(
+            "bake: the machine grouped {} lamps into {} groups",
+            observed.iter().map(Vec::len).sum::<usize>(),
+            observed.len()
+        );
+        vpw_render::bake::gi_groups_from_names(&scene, &observed)
+    };
+    let out = js_sys::Object::new();
+    if groups.is_empty() {
+        js_sys::Reflect::set(&out, &"layers".into(), &JsValue::from_f64(0.0))?;
+        return Ok(out.into());
+    }
+    let bake = vpw_render::bake::bake_gi_set(&scene, &groups, vpw_render::bake::INDIRECT_SAMPLES);
+
+    let mut data: Vec<u8> = Vec::new();
+    for layer in &bake.layers {
+        for &texel in layer {
+            data.extend_from_slice(&texel.to_le_bytes());
+        }
+    }
+    let names = js_sys::Array::new();
+    for group in &groups {
+        let list = js_sys::Array::new();
+        for name in &group.names {
+            list.push(&JsValue::from_str(name));
+        }
+        names.push(&list);
+    }
+    js_sys::Reflect::set(&out, &"width".into(), &JsValue::from_f64(bake.width as f64))?;
+    js_sys::Reflect::set(
+        &out,
+        &"height".into(),
+        &JsValue::from_f64(bake.height as f64),
+    )?;
+    js_sys::Reflect::set(
+        &out,
+        &"layers".into(),
+        &JsValue::from_f64(bake.layers.len() as f64),
+    )?;
+    js_sys::Reflect::set(&out, &"data".into(), &js_sys::Uint8Array::from(&data[..]))?;
+    js_sys::Reflect::set(&out, &"groups".into(), &names)?;
+    Ok(out.into())
+}
+
+/// Installs a traced bake into the running player — this session's, or one
+/// the cache kept from an earlier visit.
+#[wasm_bindgen(js_name = applyGiBake)]
+pub fn apply_gi_bake(
+    width: u32,
+    height: u32,
+    layers: u32,
+    data: &[u8],
+    groups: js_sys::Array,
+) -> Result<(), JsValue> {
+    let per_layer = (width * height * 4) as usize;
+    let expect = per_layer * layers as usize * 2;
+    if data.len() != expect || layers == 0 {
+        return Err(JsValue::from_str(&format!(
+            "bake data is {} bytes where {expect} were expected",
+            data.len()
+        )));
+    }
+    let mut split = Vec::with_capacity(layers as usize);
+    for l in 0..layers as usize {
+        let bytes = &data[l * per_layer * 2..(l + 1) * per_layer * 2];
+        split.push(
+            bytes
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|c| u16::from_le_bytes(*c))
+                .collect::<Vec<u16>>(),
+        );
+    }
+    let bake = vpw_render::bake::GiBakeSet {
+        width,
+        height,
+        layers: split,
+    };
+    let group_names: Vec<Vec<String>> = groups
+        .iter()
+        .map(|g| {
+            js_sys::Array::from(&g)
+                .iter()
+                .filter_map(|n| n.as_string())
+                .collect()
+        })
+        .collect();
+    PLAYER.with(|p| {
+        if let Some(player) = p.borrow().as_ref() {
+            player
+                .borrow_mut()
+                .renderer
+                .apply_gi_bake(&bake, &group_names);
+        }
+    });
     Ok(())
+}
+
+/// The player's day/night, 0 to 1, or any negative number for the table's own.
+///
+/// The renderer replaces the table's global emission scale with it, exactly as
+/// the original's user mode does (`Renderer.cpp:377-398`). Plenty of tables
+/// are authored dark on purpose — F-14 asks for 8% — and how dark a room the
+/// player sits in is the player's call, which is why the original carries the
+/// very same override in its settings.
+#[wasm_bindgen(js_name = setDayNight)]
+pub fn set_day_night(scale: f32) {
+    PLAYER.with(|p| {
+        if let Some(player) = p.borrow().as_ref() {
+            player
+                .borrow_mut()
+                .renderer
+                .set_day_night((scale >= 0.0).then_some(scale));
+        }
+    });
+}
+
+/// Zooms the camera by one wheel notch, in or out.
+#[wasm_bindgen(js_name = cameraZoom)]
+pub fn camera_zoom(out: bool) {
+    PLAYER.with(|p| {
+        if let Some(player) = p.borrow().as_ref() {
+            let mut player = player.borrow_mut();
+            let factor = if out { 1.1 } else { 1.0 / 1.1 };
+            let camera = &mut player.renderer.camera;
+            camera.distance = (camera.distance * factor).clamp(100.0, 50_000.0);
+        }
+    });
 }
 
 /// Loads a table into the already started player.
@@ -1282,14 +1653,12 @@ pub async fn start(canvas_id: String) -> Result<(), JsValue> {
 /// calling.
 #[wasm_bindgen(js_name = loadTable)]
 pub fn load_table(bytes: &[u8]) -> Result<SceneStats, JsValue> {
-    let window = web_sys::window().ok_or_else(|| JsValue::from_str("no window object"))?;
-
-    let t0 = now(&window);
+    let t0 = clock_ms();
     let vpx = vpin::vpx::from_bytes(bytes)
         .map_err(|e| JsValue::from_str(&format!("could not read the .vpx: {e}")))?;
-    let t1 = now(&window);
+    let t1 = clock_ms();
     let mut scene = vpw_table::geometry::extract(&vpx);
-    let t2 = now(&window);
+    let t2 = clock_ms();
 
     PLAYER.with(|p| {
         let borrow = p.borrow();
@@ -1324,7 +1693,7 @@ pub fn load_table(bytes: &[u8]) -> Result<SceneStats, JsValue> {
         // run yet, so a lamp's fade has nothing to advance over — it should
         // start wherever the file left it, not somewhere along a ramp.
         sync(&mut table, &mut player.renderer, 0.0);
-        let t3 = now(&window);
+        let t3 = clock_ms();
 
         {
             let engine = table.engine.borrow();
@@ -1363,134 +1732,4 @@ pub fn load_table(bytes: &[u8]) -> Result<SceneStats, JsValue> {
             upload_ms: t3 - t2,
         })
     })
-}
-
-/// Hooks up dragging and the wheel to move the camera.
-///
-/// It is provisional: once the original's `ViewSetup` is in, the camera will be
-/// fixed by the table and this stays only for inspection mode.
-fn connect_controls(
-    canvas: &web_sys::HtmlCanvasElement,
-    player: &Rc<RefCell<Player>>,
-) -> Result<(), JsValue> {
-    connect_pointer(canvas, player)?;
-    connect_keyboard(player)?;
-    Ok(())
-}
-
-/// The listeners that belong to the canvas, which is the half that has to be
-/// done again when the canvas changes.
-///
-/// Kept apart from the keyboard on purpose. These die with the element they are
-/// on, so re-attaching to a new canvas has to redo them; the keyboard's are on
-/// `window`, which outlives every canvas, and doing *those* again would leave
-/// two sets of handlers delivering every keypress to the table twice — and
-/// another set for every trip through the menu.
-fn connect_pointer(
-    canvas: &web_sys::HtmlCanvasElement,
-    player: &Rc<RefCell<Player>>,
-) -> Result<(), JsValue> {
-    use web_sys::{MouseEvent, WheelEvent};
-
-    let p = player.clone();
-    let down = Closure::wrap(Box::new(move |e: MouseEvent| {
-        let mut p = p.borrow_mut();
-        p.camera_controls.dragging = true;
-        p.camera_controls.last = (e.client_x() as f32, e.client_y() as f32);
-    }) as Box<dyn FnMut(MouseEvent)>);
-    canvas.add_event_listener_with_callback("mousedown", down.as_ref().unchecked_ref())?;
-    down.forget();
-
-    let p = player.clone();
-    let up = Closure::wrap(Box::new(move |_: MouseEvent| {
-        p.borrow_mut().camera_controls.dragging = false;
-    }) as Box<dyn FnMut(MouseEvent)>);
-    canvas.add_event_listener_with_callback("mouseup", up.as_ref().unchecked_ref())?;
-    canvas.add_event_listener_with_callback("mouseleave", up.as_ref().unchecked_ref())?;
-    up.forget();
-
-    let p = player.clone();
-    let mouse_move = Closure::wrap(Box::new(move |e: MouseEvent| {
-        let mut p = p.borrow_mut();
-        if !p.camera_controls.dragging {
-            return;
-        }
-        let (x, y) = (e.client_x() as f32, e.client_y() as f32);
-        let (dx, dy) = (x - p.camera_controls.last.0, y - p.camera_controls.last.1);
-        p.camera_controls.last = (x, y);
-        p.renderer.camera.azimuth -= dx * 0.3;
-        p.renderer.camera.inclination = (p.renderer.camera.inclination + dy * 0.3).clamp(5.0, 89.0);
-    }) as Box<dyn FnMut(MouseEvent)>);
-    canvas.add_event_listener_with_callback("mousemove", mouse_move.as_ref().unchecked_ref())?;
-    mouse_move.forget();
-
-    let p = player.clone();
-    let wheel = Closure::wrap(Box::new(move |e: WheelEvent| {
-        e.prevent_default();
-        let mut p = p.borrow_mut();
-        let factor = if e.delta_y() > 0.0 { 1.1 } else { 1.0 / 1.1 };
-        p.renderer.camera.distance = (p.renderer.camera.distance * factor).clamp(100.0, 50_000.0);
-    }) as Box<dyn FnMut(WheelEvent)>);
-    canvas.add_event_listener_with_callback("wheel", wheel.as_ref().unchecked_ref())?;
-    wheel.forget();
-    Ok(())
-}
-
-/// Wires the keyboard to the table.
-///
-/// The listeners go on `window` and not on the canvas: a `<canvas>` does not
-/// take focus unless it is given a `tabindex`, so keys aimed at it would end up
-/// nowhere. The flip side is that they also fire while the menu is open, which
-/// is harmless because with no table loaded there is nothing to move.
-///
-/// # Why the `keyup` on `blur` matters
-///
-/// Alt-tabbing away with a flipper held down means the `keyup` is delivered to
-/// whatever window took the focus. Without releasing everything on `blur`, you
-/// come back to a table with a flipper standing up and no way to lower it.
-fn connect_keyboard(player: &Rc<RefCell<Player>>) -> Result<(), JsValue> {
-    use web_sys::KeyboardEvent;
-
-    let window = web_sys::window().ok_or_else(|| JsValue::from_str("no window object"))?;
-
-    let key = |event: &str, pressed: bool| -> Result<(), JsValue> {
-        let p = player.clone();
-        let handler = Closure::wrap(Box::new(move |e: KeyboardEvent| {
-            // Auto-repeat is not a new press. The controls guard against it
-            // anyway, but leaving it out saves fifteen calls a second per key.
-            if pressed && e.repeat() {
-                return;
-            }
-            let mut player = p.borrow_mut();
-            let Some(table) = &mut player.table else {
-                return;
-            };
-            if pressed && e.code() == "Enter" {
-                table.new_ball();
-                e.prevent_default();
-                return;
-            }
-            if table.key(&e.code(), pressed) {
-                // Space scrolls the page and the arrows move the caret; a table
-                // that jumps every time you nudge is unplayable.
-                e.prevent_default();
-            }
-        }) as Box<dyn FnMut(KeyboardEvent)>);
-        window.add_event_listener_with_callback(event, handler.as_ref().unchecked_ref())?;
-        handler.forget();
-        Ok(())
-    };
-    key("keydown", true)?;
-    key("keyup", false)?;
-
-    let p = player.clone();
-    let blur = Closure::wrap(Box::new(move |_: web_sys::Event| {
-        if let Some(table) = &mut p.borrow_mut().table {
-            table.controls.release_all(&mut table.engine.borrow_mut());
-        }
-    }) as Box<dyn FnMut(web_sys::Event)>);
-    window.add_event_listener_with_callback("blur", blur.as_ref().unchecked_ref())?;
-    blur.forget();
-
-    Ok(())
 }
