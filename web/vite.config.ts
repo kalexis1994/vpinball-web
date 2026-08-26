@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { extname, join, resolve } from 'node:path';
+import { execSync } from 'node:child_process';
 import { defineConfig, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
 
@@ -300,7 +301,21 @@ self.addEventListener('fetch', (event) => {
 `;
 }
 
+/** The commit this page was built from, for the boot line in the console.
+ *
+ * It exists because "are you actually running the fix?" turned out to be the
+ * hardest question in a debugging session across two machines. One line at
+ * boot answers it for ever. */
+function buildStamp(): string {
+  try {
+    return execSync('git log -1 --format=%h·%cd --date=format:%Y-%m-%d·%H:%M').toString().trim();
+  } catch {
+    return 'unknown';
+  }
+}
+
 export default defineConfig({
+  define: { __VPW_BUILD__: JSON.stringify(buildStamp()) },
   // GitHub Pages serves a project site from `/<repo>/`, not from the root, so
   // every asset URL has to carry that prefix. Taken from the environment rather
   // than written in: the dev server and a local `vite preview` both live at the

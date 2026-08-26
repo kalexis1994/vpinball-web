@@ -134,7 +134,16 @@ export function Player({ table, title, source, rom, onExit }: Props) {
         // about what happened, which is exactly what was so hard to track
         // down the first time.
         console.error('[player] the load failed:', e);
-        setError(e instanceof Error ? e.message : String(e));
+        const message = e instanceof Error ? e.message : String(e);
+        // A refused graphics context has a cause the player can act on and
+        // the raw message does not name: browsers cap live WebGL contexts
+        // per process, and a session's worth of crashed or forgotten tabs
+        // can spend the whole allowance.
+        setError(
+          message.includes('create the surface')
+            ? `${message} — the browser refused a graphics context. Closing other tabs of this page, or restarting the browser, usually gives it back.`
+            : message,
+        );
       }
     })();
 

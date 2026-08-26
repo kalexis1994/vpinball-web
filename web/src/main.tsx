@@ -3,6 +3,11 @@ import { createRoot } from 'react-dom/client';
 import { App } from './App';
 import './styles.css';
 
+// The one line that answers "which build is this tab actually running?" —
+// which, across two machines and a phone, is the hardest question in a
+// debugging session. If a fix "did not work", check this first.
+console.info(`[build] ${__VPW_BUILD__}`);
+
 const root = document.getElementById('root');
 if (!root) throw new Error('missing #root in index.html');
 
