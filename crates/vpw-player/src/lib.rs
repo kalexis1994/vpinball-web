@@ -262,7 +262,11 @@ impl Player {
             .as_ref()
             .map_or(0, |t| t.machine().sound_stats().1);
         if let Some((fps, tps)) = self.stats.tick(now_ms, ticks, made) {
-            log::info!(
+            // Debug, not info: the HUD reads these same numbers through
+            // `loopStats`, and a console that scrolls once a second buries
+            // anything worth reading in it. Chrome's "Verbose" level brings
+            // the line back when the HUD is not enough.
+            log::debug!(
                 "{fps:.1} fps | {tps:.0} physics ticks/s (target 1000) | \
                  sound board {:.0} samples/s (target 24242)",
                 self.stats.sound_rate
