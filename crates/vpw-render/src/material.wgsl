@@ -454,6 +454,15 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
     if (is_metal && !mirror_pass) {
         let v_dir = normalize(frame.eye.xyz - in.world);
         let r = (2.0 * dot(n, v_dir)) * n - v_dir;
+        // Near the silhouette a curved metal compresses everything behind it
+        // into the last sliver of outline, so almost none of it is actually
+        // seen. Neither the planar sample nor a glint lobe can compress —
+        // they paint the field-just-behind, or the lamp-just-behind, across
+        // a wide band at full size, and that band continues the background
+        // straight through the outline. That continuation *is* the glass-ball
+        // illusion; where the geometry says "compressed to nothing", both
+        // fade to nothing instead.
+        let rim = smoothstep(0.08, 0.35, ndv);
         if (r.z < -0.02 && in.world.z > 0.0) {
             let t = in.world.z / -r.z;
             let hit = in.world + r * t;
@@ -475,7 +484,7 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
                 // metre back. The original's ball keeps its reflection local
                 // to the ball for the same reason; a quarter-metre half-life
                 // is that locality.
-                let fade = steep * steep / (1.0 + t / 250.0);
+                let fade = steep * steep * rim / (1.0 + t / 250.0);
                 // A cross of taps rather than one: the reflection of a
                 // rolling ball is soft, and one texel of a far hit is glass
                 // again. The spread grows with the distance the ray flew.
@@ -516,7 +525,7 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
             let d = length(to);
             if (d * at.w < 1.5) {
                 let glint = pow(max(dot(r, to / d), 0.0), 150.0);
-                color = color + abs(lamp_color.rgb) * glint * 8.0;
+                color = color + abs(lamp_color.rgb) * glint * 8.0 * rim;
             }
         }
     }
@@ -558,7 +567,13 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
     // playfield and the flat tops of the things on it mirror and the walls do
     // not. The original calls those two numbers magic and says they came from
     // looking at it.
-    if (frame.mirror.w > 0.0) {
+    // Not on metal. The probe is the floor's own reflection, sampled in
+    // screen space — on the floor that is exactly right, and on the crown of
+    // a ball (whose normal also faces up) it paints the mirrored field over
+    // the steel at the ball's own pixels: the background, worn as a hat,
+    // reading as a hole straight through the ball. A metal's reflections are
+    // its own — environment, mirrored field, glints — all directional.
+    if (frame.mirror.w > 0.0 && !is_metal) {
         // Half a texel off, so the hardware's own filtering blurs it a little —
         // the original's trick, and cheaper than blurring.
         //
