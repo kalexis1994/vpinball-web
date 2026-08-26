@@ -350,8 +350,12 @@ fn ball_wear(image: &vpw_table::geometry::Image) -> Option<vpw_table::geometry::
             // The mark is the colour itself. Decals of this era are additive
             // maps — black adds nothing, a bright stroke is a scratch — and
             // their alpha is noise (F-14's "Scratches" never rises above 43).
-            let mark = texel[..3].iter().copied().max().unwrap_or(0);
-            [255 - mark, 255 - mark, 255 - mark, 255]
+            let mark = texel[..3].iter().copied().max().unwrap_or(0) as u32;
+            // Well under half strength: wear is something noticed on the
+            // second look, and at full weight the ball reads as damaged
+            // rather than played.
+            let dim = 255 - (mark * 2 / 5) as u8;
+            [dim, dim, dim, 255]
         })
         .collect();
     Some(vpw_table::geometry::Image {

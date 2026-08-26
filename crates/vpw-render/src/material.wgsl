@@ -532,7 +532,7 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
         let worn = vec3<f32>(1.0) - texel.rgb;
         let room = gi_baked(in.world) + frame.gi_bounce.rgb + vec3<f32>(0.05) * frame.emission.a;
         let glow = mix(room, vec3<f32>(dot(room, vec3<f32>(0.334))), 0.7);
-        color = color + worn * glow * 0.45;
+        color = color + worn * glow * 0.2;
         // The lamps, mirrored: a highlight where the reflected ray runs near
         // a bulb. The exponent is the ball's polish; the scale keeps a lamp's
         // pinpoint at the brightness its halo would show.
