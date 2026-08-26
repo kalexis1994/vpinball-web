@@ -545,11 +545,6 @@ pub fn material_slot(
     if playfield {
         data.extra[3] = 2.0;
     }
-    // And 3.0 is the ball: the one metal whose whole look is a dedicated
-    // reflection path (`BallShader.hlsl` in the original).
-    if material.is_some_and(|m| m.name == "vpw-ball") {
-        data.extra[3] = 3.0;
-    }
     let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("vpw-material"),
         contents: bytemuck::bytes_of(&data),

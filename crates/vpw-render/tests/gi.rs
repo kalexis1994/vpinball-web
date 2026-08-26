@@ -10,7 +10,7 @@ use vpw_math::{Mat4, Vec3};
 use vpw_render::Camera;
 use vpw_render::offscreen::Offscreen;
 use vpw_table::geometry::{
-    Bounds, Lighting, Material, Mesh, MeshKind, Scene, TablePhysics, Vertex,
+    Bounds, Image, Lighting, Material, Mesh, MeshKind, Scene, TablePhysics, Vertex,
 };
 use vpw_table::light::{Fader, Light};
 
@@ -370,43 +370,102 @@ fn strings_of_different_colours_become_their_own_groups() {
     assert_eq!(at(red_layer, 2), 0.0, "and no blue in the red layer");
 }
 
-/// Steel shows the light around it: a metal surface must brighten under the
-/// baked GI, or a ball over a lit field reads as a glass marble — dark steel
-/// with the field's light living in a map the metal never read.
+/// Steel shows the light around it — by reflection, which is the only way a
+/// metal answers. A metal wall standing on the lit field must mirror the
+/// field: its reflected rays dive to the floor, and the floor's baked light
+/// comes back off the steel. (A flat ambient once stood in for this and made
+/// every sphere look like wax; this is the test that replaced it.)
 #[test]
-fn a_metal_surface_shows_the_baked_light() {
+fn a_metal_wall_mirrors_the_baked_field() {
     let Some(mut gpu) = gpu() else { return };
     let mut scene = scene_with(1.0, "GI_1", false);
-    scene.materials[0].is_metal = true; // the floor's material
+
+    // The floor needs a picture: the planar reflection samples the field's
+    // image, and a field painted by material alone reflects the blank.
+    scene.images.push(Image {
+        name: "wood".into(),
+        encoded: None,
+        rgba: Some(vec![255u8; 8 * 8 * 4]),
+        width: 8,
+        height: 8,
+        has_alpha: false,
+        alpha_test: -1.0,
+        redrawn: false,
+    });
+    scene.playfield_image = "wood".into();
+    scene.meshes[0].image = "wood".into();
+
+    // A steel fin mid-field, its face toward the camera, standing where the
+    // lamp lights the floor in front of it.
+    let v = |x: f32, z: f32| Vertex {
+        pos: [x, 500.0, z],
+        normal: [0.0, 1.0, 0.0],
+        uv: [0.0, 0.0],
+    };
+    scene.materials.push(vpw_table::geometry::Material {
+        name: "steel".into(),
+        base_color: [0.85, 0.85, 0.88],
+        glossy_color: [1.0, 1.0, 1.0],
+        clearcoat_color: [0.0; 3],
+        is_metal: true,
+        roughness: 0.95,
+        wrap_lighting: 0.0,
+        glossy_image_lerp: 1.0,
+        edge: 1.0,
+        edge_alpha: 1.0,
+        thickness: 0.05,
+        opacity: 1.0,
+        opacity_active: false,
+    });
+    scene.meshes.push(Mesh {
+        name: "fin".into(),
+        vertices: vec![
+            v(350.0, 0.0),
+            v(650.0, 0.0),
+            v(650.0, 120.0),
+            v(350.0, 120.0),
+        ],
+        indices: vec![0, 1, 2, 0, 2, 3],
+        transform: Mat4::IDENTITY,
+        image: String::new(),
+        material: "steel".into(),
+        visible: true,
+        kind: MeshKind::Wall,
+    });
 
     let mut camera = Camera::framing(
         Vec3::new(0.0, 0.0, 0.0),
         Vec3::new(TABLE, TABLE, 0.0),
         W as f32 / H as f32,
     );
-    camera.inclination = 89.0;
+    camera.inclination = 40.0;
 
-    let sample = |pixels: &[u8]| {
-        let (x, y) = (W / 2 + W / 5, H / 2);
-        let i = ((y * W + x) * 4) as usize;
-        pixels[i] as i32 + pixels[i + 1] as i32 + pixels[i + 2] as i32
+    let wall_sample = |pixels: &[u8]| {
+        // The fin's face lands mid-frame under this framing; take the
+        // brightest pixel of a small window on it, since the exact row
+        // depends on the projection.
+        let mut best = 0i32;
+        for y in H * 2 / 5..H * 3 / 5 {
+            for x in W * 2 / 5..W * 3 / 5 {
+                let i = ((y * W + x) * 4) as usize;
+                best = best.max(pixels[i] as i32 + pixels[i + 1] as i32 + pixels[i + 2] as i32);
+            }
+        }
+        best
     };
 
     let uploaded = gpu.upload(&scene);
     gpu.upload_lights(&scene);
     gpu.set_bloom(0.0);
-    let before = sample(&gpu.render(&uploaded, &camera));
+    let before = wall_sample(&gpu.render(&uploaded, &camera));
     let baked = gpu.bake_gi(&scene);
     assert_eq!(baked, 1);
-    let after = sample(&gpu.render(&uploaded, &camera));
+    let after = wall_sample(&gpu.render(&uploaded, &camera));
 
-    // Before the bake the lamp reaches the metal as a point light; after it
-    // the light lives in the map, and the metal must still show it.
     assert!(
-        after + 40 > before,
-        "the metal went dark when the light was baked: before {before}, after {after}"
+        after > before + 30,
+        "the steel does not mirror the baked field: before {before}, after {after}"
     );
-    assert!(after > 40, "the metal shows no baked light at all: {after}");
 }
 
 /// A table that ships its own lightmaps gets none of the departure: no

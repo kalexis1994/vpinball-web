@@ -436,28 +436,22 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
     // answers direction, not averages — so the metals split: the ball gets
     // the original's dedicated treatment below, and every other metal part
     // keeps a modest ambient so rails and posts do not go black.
-    // The reflection probe renders this same shader with a mirrored eye, and
-    // the ball's planar trick makes no sense from under the floor: the rays
-    // land nowhere and the mirrored ball comes out black — which the field
-    // then wears as a dark cutout around the real one. The probe's pass is
-    // the one with a clip plane, so in it the ball takes the plain lit-metal
-    // path and its reflection looks like a ball.
+    // Every metal: `BallShader.hlsl`'s idea for the ball, generalised. What
+    // any polished part on a pinball reflects is overwhelmingly the playfield
+    // beside it, so the reflected eye ray either dives below the horizon —
+    // intersect the playfield plane, sample its picture there, and light
+    // that texel with the same baked GI the floor itself wears — or it
+    // escapes upward into the environment map, which the metal path already
+    // has. On top, the frame's GI bulbs as specular glints: the sharp
+    // highlights are most of what makes chrome read as chrome. A small
+    // ambient keeps the faces no reflection reaches from going black.
+    //
+    // Not in the reflection probe's pass (the one with a clip plane): the
+    // planar trick makes no sense from under the floor, and a mirrored metal
+    // computed with it comes out black — which the field then wears as a
+    // dark cutout around the real part.
     let mirror_pass = frame.clip.z != 0.0;
-    let is_ball = material.extra.w > 2.5 && !mirror_pass;
-    if (is_metal && !is_ball) {
-        color = color + gi_diffuse(in.world, n, material.base_color.rgb)
-            + material.base_color.rgb * gi_baked(in.world);
-    }
-
-    // The ball: `BallShader.hlsl`'s idea, on this port's light. What a
-    // pinball reflects is overwhelmingly the playfield it hovers over, so the
-    // reflected eye ray either dives below the horizon — intersect the
-    // playfield plane, sample its picture there, and light that texel with
-    // the same baked GI the floor itself wears — or it escapes upward into
-    // the environment map, which the metal path above already added. On top,
-    // the frame's GI bulbs as specular pinpoints: the sharp highlights are
-    // most of what makes chrome read as chrome.
-    if (is_ball) {
+    if (is_metal && !mirror_pass) {
         let v_dir = normalize(frame.eye.xyz - in.world);
         let r = (2.0 * dot(n, v_dir)) * n - v_dir;
         if (r.z < -0.02 && in.world.z > 0.0) {
@@ -465,7 +459,26 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
             let hit = in.world + r * t;
             let uv = (hit.xy - frame.field.xy) * frame.field.zw;
             if (uv.x >= 0.0 && uv.x <= 1.0 && uv.y >= 0.0 && uv.y <= 1.0) {
-                let texel = textureSampleLevel(field_tex, samp, uv, 0.0).rgb;
+                // Steep rays only. At the sphere's rim the reflected ray
+                // grazes on almost straight, lands just behind the ball, and
+                // a sharp sample there continues the background through the
+                // silhouette — which reads as a glass ball, not a steel one.
+                // On real steel that grazing band is compressed to nothing
+                // and scattered by wear; squaring the steepness is that, and
+                // it leaves the belly — the field genuinely mirrored under
+                // the ball — at full strength.
+                let steep = clamp(-r.z, 0.0, 1.0);
+                let fade = steep * steep;
+                // A cross of taps rather than one: the reflection of a
+                // rolling ball is soft, and one texel of a far hit is glass
+                // again. The spread grows with the distance the ray flew.
+                let spread = min(t * 0.002, 0.01);
+                var texel = vec3<f32>(0.0);
+                texel = texel + textureSampleLevel(field_tex, samp, uv + vec2<f32>(spread, 0.0), 0.0).rgb;
+                texel = texel + textureSampleLevel(field_tex, samp, uv - vec2<f32>(spread, 0.0), 0.0).rgb;
+                texel = texel + textureSampleLevel(field_tex, samp, uv + vec2<f32>(0.0, spread), 0.0).rgb;
+                texel = texel + textureSampleLevel(field_tex, samp, uv - vec2<f32>(0.0, spread), 0.0).rgb;
+                texel = texel * 0.25;
                 // The picture times its light is only the field's base coat:
                 // the field a player actually sees also wears its halos and
                 // its lit inserts, which live in no texture this can sample.
@@ -473,7 +486,7 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
                 // reflection sits at the brightness of the wood beside it.
                 let lit = texel * (gi_baked(hit) + frame.gi_bounce.rgb
                     + vec3<f32>(0.05) * frame.emission.a) * 2.5;
-                color = color + material.base_color.rgb * lit;
+                color = color + material.base_color.rgb * lit * fade;
             }
         }
         // The lamps, mirrored: a highlight where the reflected ray runs near
