@@ -53,10 +53,17 @@ fn main() {
     // VPW_NOBALL=1 photographs the same framing with no ball at all, for
     // telling an artifact around the ball from the artwork under it.
     let no_ball = std::env::var("VPW_NOBALL").is_ok();
+    // VPW_SPIN=degrees rolls the ball about the x axis before the photo: two
+    // shots at different angles are the proof that the wear turns with the
+    // ball while the reflections stay put.
+    let spin: f32 = std::env::var("VPW_SPIN")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0.0);
     let radius = 25.0;
     let m = Mat4::from_translation(Vec3::new(x, y, radius))
         * Mat4::from_scale(Vec3::splat(radius))
-        * Mat4::from_quat(Quat::IDENTITY);
+        * Mat4::from_quat(Quat::from_rotation_x(spin.to_radians()));
     if !no_ball {
         gpu.dynamic
             .as_mut()

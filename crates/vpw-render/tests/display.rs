@@ -121,6 +121,7 @@ fn scene() -> Scene {
         },
         lights: Vec::new(),
         env_image: String::new(),
+        ball_decal: String::new(),
         flashers: Vec::new(),
     }
 }

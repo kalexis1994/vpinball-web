@@ -198,13 +198,31 @@ impl DynamicParts {
 
         let first_ball = parts.len();
         let (ball_first, ball_count) = push_mesh(ball, &mut vertices, &mut indices);
+        // The wear the ball carries: the table's own decal when it brought
+        // one (`BLIF`), the made-here scratches when it did not. It rides the
+        // mesh's own UVs, and the mesh turns with the physics' quaternion —
+        // which is what finally makes the roll *visible*: a perfect mirror
+        // looks the same from every orientation, scuffs do not.
+        //
+        // A table's decal is authored for the original's blending — marks in
+        // the colour channels, coverage in the alpha, meant to be added over
+        // its ball image — and fed to the material path raw it *becomes* the
+        // ball: alpha near zero everywhere, so the steel vanishes and only
+        // the scratches float. `ball_wear` folds it into the one shape the
+        // shader wants: a multiplicative map, white where the steel is
+        // untouched, dimmed where a mark scatters what the mirror would have
+        // returned.
+        let decal = scene
+            .image(&scene.ball_decal)
+            .and_then(ball_wear)
+            .unwrap_or_else(vpw_table::ball::scratches);
         for _ in 0..MAX_BALLS {
             parts.push(make_part(
                 device,
                 ball_first,
                 ball_count,
                 Some(ball_material),
-                None,
+                Some(&decal),
                 Mat4::IDENTITY,
                 false,
             ));
@@ -303,4 +321,47 @@ impl DynamicParts {
             pass.draw_indexed(p.first_index..p.first_index + p.index_count, 0, 0..1);
         }
     }
+}
+
+/// A table's ball decal, folded into the wear map the shader expects.
+///
+/// The original blends the decal over its ball image — marks in the colour
+/// channels, coverage in the alpha (`BallShader.hlsl`, scratches mode). The
+/// material path here has no second layer to blend: the ball's one texture
+/// multiplies its reflections. So the decal becomes that multiplier — white
+/// where it covers nothing, dimmed in proportion to how much mark it carries —
+/// which is what a scratch does to a mirror: scatter part of what it would
+/// have returned. `None` when the image cannot be decoded, and the caller
+/// falls back to the scratches made in `vpw_table::ball`.
+fn ball_wear(image: &vpw_table::geometry::Image) -> Option<vpw_table::geometry::Image> {
+    let rgba: std::borrow::Cow<[u8]> = match (&image.rgba, &image.encoded) {
+        (Some(px), _) => std::borrow::Cow::Borrowed(px),
+        (None, Some(bytes)) => {
+            std::borrow::Cow::Owned(image::load_from_memory(bytes).ok()?.to_rgba8().into_raw())
+        }
+        (None, None) => return None,
+    };
+    if rgba.len() < (image.width * image.height * 4) as usize {
+        return None;
+    }
+    let px = rgba
+        .chunks_exact(4)
+        .flat_map(|texel| {
+            // The mark is the colour itself. Decals of this era are additive
+            // maps — black adds nothing, a bright stroke is a scratch — and
+            // their alpha is noise (F-14's "Scratches" never rises above 43).
+            let mark = texel[..3].iter().copied().max().unwrap_or(0);
+            [255 - mark, 255 - mark, 255 - mark, 255]
+        })
+        .collect();
+    Some(vpw_table::geometry::Image {
+        name: "vpw-ball-wear".into(),
+        encoded: None,
+        rgba: Some(px),
+        width: image.width,
+        height: image.height,
+        has_alpha: false,
+        alpha_test: -1.0,
+        redrawn: false,
+    })
 }

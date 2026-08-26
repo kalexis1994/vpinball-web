@@ -511,9 +511,23 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
                 let contact = smoothstep(30.0, 180.0, t);
                 let lit = texel * (gi_baked(hit) + frame.gi_bounce.rgb
                     + vec3<f32>(0.05) * frame.emission.a) * 2.5;
-                color = color + material.base_color.rgb * lit * fade * contact;
+                // Through the wear: a scuff scatters what the mirror
+                // would have returned, and the scuffs ride the mesh's UVs —
+                // the physics' quaternion turns them, which is what makes a
+                // rolling ball visibly roll.
+                color = color + material.base_color.rgb * texel.rgb * lit * fade * contact;
             }
         }
+        // The wear scatters what the mirror gave up. A scuff is not black
+        // paint: the light it refuses to mirror it throws everywhere instead,
+        // which is why scratches on a ball under a lit playfield read as
+        // faint bright marks — and why the roll is visible at all on a dark
+        // table. Fed by the same baked field light the reflections use, so a
+        // ball in a dark corner stays dark, wear and all.
+        let worn = vec3<f32>(1.0) - texel.rgb;
+        color = color + worn
+            * (gi_baked(in.world) + frame.gi_bounce.rgb + vec3<f32>(0.05) * frame.emission.a)
+            * 0.6;
         // The lamps, mirrored: a highlight where the reflected ray runs near
         // a bulb. The exponent is the ball's polish; the scale keeps a lamp's
         // pinpoint at the brightness its halo would show.
@@ -525,7 +539,7 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
             let d = length(to);
             if (d * at.w < 1.5) {
                 let glint = pow(max(dot(r, to / d), 0.0), 150.0);
-                color = color + abs(lamp_color.rgb) * glint * 8.0 * rim;
+                color = color + abs(lamp_color.rgb) * texel.rgb * glint * 8.0 * rim;
             }
         }
     }

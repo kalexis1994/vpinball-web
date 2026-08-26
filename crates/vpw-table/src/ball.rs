@@ -84,6 +84,71 @@ pub fn material() -> Material {
     }
 }
 
+/// The wear a ball earns: thin scuffs over the polish, made here.
+///
+/// This is what makes the roll **visible**. The physics spins the ball and the
+/// mesh turns with it, but a perfect mirror looks identical from every
+/// orientation — everything it shows depends on the view and the normal, not
+/// on which side of the sphere faces you. The original ships a scuffed decal
+/// in its `Assets/` for exactly this reason, and a table can bring its own
+/// (`BLIF`); this is the fallback for tables that do not.
+///
+/// The texture is multiplicative — white leaves the steel alone, a scuff dims
+/// it — because that is what a scratch does: scatter light the mirror would
+/// have returned. Deterministic on purpose, so every ball on every table
+/// carries the same wear and a pixel test can rely on it.
+pub fn scratches() -> crate::geometry::Image {
+    const W: usize = 256;
+    const H: usize = 256;
+    let mut px = vec![255u8; W * H * 4];
+
+    // A small linear congruential generator: enough randomness for scuffs,
+    // no dependency, and the same picture every run.
+    let mut state: u32 = 0x2b5d_11a7;
+    let mut rand = move || {
+        state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        (state >> 8) as f32 / 16_777_216.0
+    };
+
+    // Each scuff is a short random walk: a starting point, a heading that
+    // drifts, a depth that fades in and out along its length. Drawn wrapping
+    // horizontally, because the sphere's UV seam is a meridian and a scuff
+    // that stops dead at it would draw the seam on the ball.
+    for _ in 0..160 {
+        let mut x = rand() * W as f32;
+        let mut y = rand() * H as f32;
+        let mut heading = rand() * std::f32::consts::TAU;
+        let len = 8.0 + rand() * 40.0;
+        let depth = 10.0 + rand() * 35.0;
+        let steps = len as usize;
+        for i in 0..steps {
+            heading += (rand() - 0.5) * 0.4;
+            x += heading.cos();
+            y += heading.sin();
+            // In and out: a scuff is deepest in its middle.
+            let along = i as f32 / steps as f32;
+            let bite = depth * (1.0 - (2.0 * along - 1.0).abs());
+            let xi = x.rem_euclid(W as f32) as usize % W;
+            let yi = (y.max(0.0) as usize).min(H - 1);
+            let at = (yi * W + xi) * 4;
+            for c in 0..3 {
+                px[at + c] = px[at + c].saturating_sub(bite as u8);
+            }
+        }
+    }
+
+    crate::geometry::Image {
+        name: "vpw-ball-scratches".into(),
+        encoded: None,
+        rgba: Some(px),
+        width: W as u32,
+        height: H as u32,
+        has_alpha: false,
+        alpha_test: -1.0,
+        redrawn: false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -132,5 +197,31 @@ mod tests {
         // goes black.
         assert_eq!(inputs.glossy_color, [0.0; 3]);
         assert_eq!(inputs.alpha, 1.0);
+    }
+
+    #[test]
+    fn the_scratches_are_wear_on_white() {
+        let img = scratches();
+        let px = img.rgba.as_ref().unwrap();
+        assert_eq!(px.len(), (img.width * img.height * 4) as usize);
+        // Multiplicative wear: mostly untouched steel, nothing brighter than
+        // white, and enough scuffed texels that a roll is actually visible.
+        let mut worn = 0usize;
+        for texel in px.chunks_exact(4) {
+            assert_eq!(texel[3], 255, "wear has no transparency");
+            if texel[0] < 250 {
+                worn += 1;
+            }
+        }
+        let total = (img.width * img.height) as usize;
+        assert!(worn > total / 200, "hardly any wear: {worn} texels");
+        assert!(worn < total / 4, "more scuff than steel: {worn} texels");
+    }
+
+    #[test]
+    fn the_wear_is_the_same_every_time() {
+        // A pixel test elsewhere may rely on the ball's look, so the wear has
+        // to come out identical run after run.
+        assert_eq!(scratches().rgba, scratches().rgba);
     }
 }

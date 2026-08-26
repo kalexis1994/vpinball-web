@@ -391,6 +391,12 @@ pub struct Scene {
     /// the table never set one, which is when the renderer uses the map that
     /// ships with Visual Pinball (`Renderer.cpp:208-210`).
     pub env_image: String,
+    /// The wear on the ball — `BLIF`, the decal every ball wears over its
+    /// steel. Resolved against `images`; empty when the table never set one,
+    /// which is when the renderer falls back to the scratches it makes
+    /// itself ([`crate::ball::scratches`]), the same way the original falls
+    /// back to the scuffed ball in its `Assets/`.
+    pub ball_decal: String,
     pub lighting: Lighting,
     /// Every lamp the table has, lit or not.
     ///
@@ -692,6 +698,7 @@ pub fn extract(vpx: &VPX) -> Scene {
         // `Option` in the file because 10.01 did not write the tag; a
         // missing one means the same as an empty one.
         env_image: g.env_image.clone().unwrap_or_default(),
+        ball_decal: g.ball_image_front.clone(),
         lighting: lighting(vpx),
         physics: table_physics(vpx),
         lights,
