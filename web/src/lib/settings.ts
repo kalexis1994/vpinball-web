@@ -23,6 +23,12 @@ export interface Settings {
   volume: number;
   /** Which of the named views the camera starts in. */
   camera: CameraView;
+  /**
+   * Day/night, 0 to 1, or `null` for the table's own. Plenty of tables are
+   * authored dark on purpose — F-14 asks for 8% — and Visual Pinball's own
+   * settings carry exactly this override for exactly that reason.
+   */
+  brightness: number | null;
 }
 
 const DEFAULTS: Settings = {
@@ -34,6 +40,8 @@ const DEFAULTS: Settings = {
   // the first thing anybody wants is to see what they have loaded. The overhead
   // view is the one you switch to once you want to *play* it.
   camera: 'front',
+  // The table's own, until the player says otherwise: the author lit the room.
+  brightness: null,
 };
 
 let current: Settings = load();
@@ -63,6 +71,11 @@ function clean(s: Partial<Settings>): Partial<Settings> {
   // nobody asked for is worse than one at the default.
   if (CAMERA_VIEWS.includes(s.camera as CameraView)) {
     out.camera = s.camera as CameraView;
+  }
+  if (s.brightness === null) {
+    out.brightness = null;
+  } else if (typeof s.brightness === 'number' && Number.isFinite(s.brightness)) {
+    out.brightness = Math.min(1, Math.max(0, s.brightness));
   }
   return out;
 }

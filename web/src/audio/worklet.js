@@ -29,33 +29,47 @@ class PlayfieldProcessor extends AudioWorkletProcessor {
     /** Frames of silence played for want of anything else. */
     this.starved = 0;
     this.running = true;
+    /**
+     * Where the samples come from. The node's own port by default; when the
+     * game runs in a worker, the page hands over one end of a channel whose
+     * other end is the worker's, and the samples flow worker → here without
+     * the page in between. The reports go back the way the samples came,
+     * because that is who decides how much to send next.
+     */
+    this.feed = null;
 
-    this.port.onmessage = (event) => {
-      const data = event.data;
-      if (data === 'stop') {
-        this.running = false;
-        return;
-      }
-      if (data === 'flush') {
-        this.queue = [];
-        this.queued = 0;
-        this.offset = 0;
-        return;
-      }
-      if (!(data instanceof Float32Array)) return;
+    this.port.onmessage = (event) => this.take(event.data);
+  }
 
-      this.queue.push(data);
-      this.queued += data.length / 2;
-      // If the game has run far ahead — which happens when a tab comes back
-      // from the background owing a second of catch-up — keep the newest and
-      // drop the rest. Playing it all would put the sound permanently behind
-      // the picture.
-      while (this.queued > MAX_QUEUED_FRAMES && this.queue.length > 1) {
-        const dropped = this.queue.shift();
-        this.queued -= dropped.length / 2 - this.offset;
-        this.offset = 0;
-      }
-    };
+  take(data) {
+    if (data === 'stop') {
+      this.running = false;
+      return;
+    }
+    if (data === 'flush') {
+      this.queue = [];
+      this.queued = 0;
+      this.offset = 0;
+      return;
+    }
+    if (data && data.port instanceof MessagePort) {
+      this.feed = data.port;
+      this.feed.onmessage = (event) => this.take(event.data);
+      return;
+    }
+    if (!(data instanceof Float32Array)) return;
+
+    this.queue.push(data);
+    this.queued += data.length / 2;
+    // If the game has run far ahead — which happens when a tab comes back
+    // from the background owing a second of catch-up — keep the newest and
+    // drop the rest. Playing it all would put the sound permanently behind
+    // the picture.
+    while (this.queued > MAX_QUEUED_FRAMES && this.queue.length > 1) {
+      const dropped = this.queue.shift();
+      this.queued -= dropped.length / 2 - this.offset;
+      this.offset = 0;
+    }
   }
 
   process(_inputs, outputs) {
@@ -88,12 +102,12 @@ class PlayfieldProcessor extends AudioWorkletProcessor {
       }
     }
 
-    // Tell the main thread how far ahead it is, so it knows how much to send
+    // Tell whoever feeds us how far ahead it is, so it knows how much to send
     // next time. Once per block is 375 messages a second at 48 kHz, which is
     // more than anybody needs; every sixteenth block is about 22 ms.
     this.reports = (this.reports ?? 0) + 1;
     if (this.reports % 16 === 0) {
-      this.port.postMessage({ queued: this.queued, starved: this.starved });
+      (this.feed ?? this.port).postMessage({ queued: this.queued, starved: this.starved });
     }
 
     return this.running;

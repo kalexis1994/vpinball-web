@@ -42,10 +42,14 @@ crates/
   vpw-bus       Memory bus trait, shared by the CPUs
   vpw-m6800     Motorola MC6800/MC6808 CPU (the one in Williams System 11)
   vpw-m6809     Motorola MC6809 CPU (the CS sound board, and the WPC families)
+  vpw-arm7      ARM7TDMI CPU (the one on Stern's sound board)
+  vpw-at91      Atmel AT91 SoC around that ARM, and the sound board built on it
   vpw-audio     Audio chips: DAC, CVSD HC55516 and YM2151 (FM)
   vpw-pia6821   Motorola MC6821 PIA: all of System 11's I/O
   vpw-s11       Williams System 11 machine: main board and the two sound boards
   vpw-wpc       Williams Pinball Controller: the hardware of the 90s
+  vpw-ws        Sega/Stern Whitestar machine: 6809E, the DMD and the AT91 board
+  vpw-bench     The sound board with plain C exports, to measure wasm vs native
   vpw-vbscript  VBScript interpreter: the language a table's rules are in
   vpw-game      A table being played: physics, script and the wire between
   vpw-player    The only wasm<->JS boundary: player + vpw-table bindings
@@ -130,6 +134,19 @@ what gives tables the look they have: it is `lightLoop` from `Material.fxh`
 with its energy conservation, the two scene lights with the ashikhmin/blinn
 BRDF, and the environment map with its convolved irradiance.
 
+With one departure: **the general illumination is light**. The original draws
+every bulb as a screen-space halo that mostly *modulates* the pixel under it —
+its own comment calls that "a very crude approximation of real lighting"
+(`light.cpp:830`) — so a playfield the table's own lighting leaves black stays
+black under thirty lit bulbs, where the real machine's GI string pours real
+light onto the wood and glows in a dark arcade. Here the brightest lit bulbs
+are also fed to the material loop as point lights, with the same centre, range
+and falloff their halos use, so what the author tuned keeps meaning the same
+thing — plus their first bounce off the glass and the plastics, flat and in
+their average colour, because direct light ends at each bulb's falloff and a
+real machine keeps no black patches. `gi_diffuse` in `material.wgsl` is the
+whole of it, and `crates/vpw-render/tests/gi.rs` is the proof.
+
 ## Build
 
 Requires the wasm target and a `wasm-bindgen-cli` of the same version as the
@@ -148,9 +165,17 @@ npm --prefix web install
 npm --prefix web run dev
 ```
 
-Open <http://localhost:8091>. You need a browser with WebGPU (Chrome/Edge 113+,
-Safari 18+, Firefox 141+). On entering a table the console prints fps and
-physics ticks per second.
+Open <http://localhost:8091>. WebGPU is used where the browser grants it
+(Chrome/Edge 113+, Safari 18+, Firefox 141+), and **WebGL2 where it does not**:
+the renderer was built inside WebGL2's limits on purpose, and wgpu's GL backend
+is the same room through an older door. That includes the door with no lock on
+it — WebGPU requires a secure context and plain HTTP over the LAN is not one,
+but WebGL2 predates the requirement, so a phone pointed at the dev server's
+LAN address just works. `?gpu=gl` on the URL forces the GL backend, which is
+how that path gets exercised on a desktop that would never take it; the
+console names the door that was opened either way.
+
+On entering a table the console prints fps and physics ticks per second.
 
 ## Playing
 
@@ -169,6 +194,25 @@ The physics runs at a fixed 1000 Hz, decoupled from the frame rate, exactly as
 in the original. The HUD shows both numbers: a physics rate below 1000 means the
 simulation is falling behind and the table is running in slow motion, which
 looks like lag but is not.
+
+## Where the player runs
+
+The player — the wasm module, the game loop, the renderer and the audio
+production — runs in a **Web Worker**, drawing on an `OffscreenCanvas`, so the
+simulation does not compete with React, garbage collection and the browser for
+the main thread, and parsing a 100 MB table freezes nothing. The page keeps
+what only a page can do: the DOM, the input events, the `AudioContext` a
+browser will only start from a user gesture, and IndexedDB. The samples flow
+worker → audio thread on a `MessageChannel` of their own, so a busy page
+cannot starve the sound either.
+
+Not every browser grants a GPU inside a worker, so the choice is made per
+browser, on evidence: the page asks a fresh worker to actually obtain a WebGPU
+adapter — or, failing that, a real WebGL2 context — before transferring the
+canvas, because a transfer cannot be taken back; and it falls back to running
+the whole player on the main thread, which stays a first-class path.
+`?host=main` on the URL forces the fallback, which is how the path only some
+browsers take gets exercised on one that does not need it.
 
 The table's own script runs: its parts answer to their names, the physics'
 events reach its handlers, and its timers tick on table time. And the machine
@@ -294,6 +338,27 @@ cargo run --release -p vpw-wpc --example wpc_boot -- /path/t2_l8.zip 5 dmd
 
 # Boot the 468 sets in the manifest
 cargo run --release -p vpw-wpc --example wpc_batch --     crates/vpw-wpc/tests/data/rom_sets.tsv /path/roms 4
+```
+
+## The Whitestar emulator
+
+`vpw-ws` is Sega and Stern's platform from 1995 to 2004: a 6809E main board, a
+second 6809 driving the 128×32 dot matrix through a CRTC, and — on the Stern
+games — a sound board that is a computer of its own: an Atmel AT91 with an
+ARM7TDMI at 40 MHz (`vpw-arm7` and `vpw-at91`) that boots a two-megabyte BIOS
+and does all its mixing in software. There is no path to a single note of Lord
+of the Rings that does not go through emulating that processor.
+
+```bash
+# Boot a game and watch for the signs of life: bank switching, the switch
+# strobe, the lamp sweep
+cargo run --release -p vpw-ws --example ws_boot -- /path/lotr.zip 5
+
+# Boot just the sound board and watch the remap and the first samples
+cargo run --release -p vpw-at91 --example at91_boot -- /path/lotr.zip 10
+
+# Ask it for one sound after another and list which commands answer
+cargo run --release -p vpw-at91 --example sweep -- /path/lotr.zip
 ```
 
 ## Tests

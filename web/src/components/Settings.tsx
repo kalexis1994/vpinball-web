@@ -21,6 +21,7 @@ interface Props {
 export function Settings({ onBack }: Props) {
   const [volume, setVolume] = useState(() => settings().volume);
   const [camera, setCamera] = useState<CameraView>(() => settings().camera);
+  const [brightness, setBrightness] = useState<number | null>(() => settings().brightness);
 
   // Keep the screen honest if something else changed them — the camera has a
   // key of its own, and it can have been pressed while this screen was open
@@ -28,6 +29,7 @@ export function Settings({ onBack }: Props) {
   useEffect(() => {
     setVolume(settings().volume);
     setCamera(settings().camera);
+    setBrightness(settings().brightness);
   }, []);
 
   return (
@@ -62,6 +64,51 @@ export function Settings({ onBack }: Props) {
           </span>
           <span className="setting-hint">
             Applies straight away, and is remembered for next time.
+          </span>
+        </label>
+      </section>
+
+      <section className="section">
+        <h2 className="section-head">Lighting</h2>
+
+        <label className="setting" htmlFor="brightness">
+          <span className="setting-label">
+            Day / night
+            <span className="setting-value mono">
+              {brightness === null ? 'table' : `${Math.round(brightness * 100)}%`}
+            </span>
+          </span>
+          <span className="setting-control">
+            <input
+              id="brightness"
+              className="slider"
+              type="range"
+              min={0}
+              max={1}
+              step={0.01}
+              value={brightness ?? 0.25}
+              onChange={(e) => {
+                const next = Number(e.target.value);
+                setBrightness(next);
+                updateSettings({ brightness: next });
+              }}
+            />
+            <button
+              type="button"
+              className={`choice${brightness === null ? ' choice-on' : ''}`}
+              aria-pressed={brightness === null}
+              onClick={() => {
+                setBrightness(null);
+                updateSettings({ brightness: null });
+              }}
+            >
+              Table&apos;s
+            </button>
+          </span>
+          <span className="setting-hint">
+            How bright the room is. Some tables are lit dark on purpose — F-14
+            asks for 8% — and this is the same override Visual Pinball carries
+            in its own settings. It applies while a table is playing.
           </span>
         </label>
       </section>

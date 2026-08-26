@@ -4,6 +4,8 @@ import { readTableFile } from '../lib/library';
 import { onSettingsChange, settings, updateSettings, type CameraView } from '../lib/settings';
 import {
   TELEMETRY_WINDOW_S,
+  connectInput,
+  hidePlayer,
   loadTable,
   loopStats,
   mark,
@@ -11,6 +13,7 @@ import {
   nextCameraView,
   saveMachineState,
   setCameraView,
+  setDayNight,
   setTelemetry,
   startPlayer,
   type Loop,
@@ -40,14 +43,14 @@ const PHASES: Record<Phase, string> = {
   ready: '',
 };
 
-/** The keys the player answers to. Mirrors `vpw_table::controls`. */
 /**
- * Game view: mounts the canvas, starts the wasm player and hands it the table.
+ * Game view: mounts the canvas, starts the player and hands it the table.
  *
- * The keyboard is **not** wired up here: the wasm side listens on `window`
- * itself, so a keypress reaches the physics without crossing this component and
- * without waiting for React to re-render. The one key this owns is `Escape`,
- * because leaving is a UI decision and not a table one.
+ * The table's own keys are wired by `connectInput` (`lib/input.ts`), outside
+ * React, so a keypress reaches the physics without waiting for a re-render.
+ * The keys this component owns are the UI's: `Escape` because leaving is a UI
+ * decision and not a table one, `C` for the camera and `B` for the telemetry
+ * mark.
  */
 export function Player({ table, title, source, rom, onExit }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -72,11 +75,18 @@ export function Player({ table, title, source, rom, onExit }: Props) {
   useEffect(() => {
     let alive = true;
     let timer: number | undefined;
+    let disconnectInput: (() => void) | undefined;
 
     void (async () => {
       try {
-        await startPlayer('playfield');
+        const canvas = canvasRef.current;
+        if (!canvas) throw new Error('the canvas never mounted');
+        await startPlayer(canvas);
         if (!alive) return;
+
+        // The listeners live on the page for both of the player's homes — a
+        // worker has no DOM to listen on — and die with this view.
+        disconnectInput = connectInput(canvas);
 
         setPhase('loading');
         const s = await loadTable(key, () =>
@@ -98,6 +108,8 @@ export function Player({ table, title, source, rom, onExit }: Props) {
         // camera is the renderer's and does not survive a reload, so this is
         // what makes the setting mean anything.
         await setCameraView(settings().camera);
+        // And the stored day/night, on the same terms.
+        await setDayNight(settings().brightness);
         setPhase('ready');
 
         timer = window.setInterval(() => {
@@ -131,6 +143,10 @@ export function Player({ table, title, source, rom, onExit }: Props) {
       document.removeEventListener('visibilitychange', save);
       save();
       if (timer !== undefined) window.clearInterval(timer);
+      disconnectInput?.();
+      // A worker cannot see this canvas unmount; it has to be told, or the
+      // ball drains while somebody reads the table list.
+      hidePlayer();
       void stopAudio();
     };
   }, [key]);
@@ -181,6 +197,9 @@ export function Player({ table, title, source, rom, onExit }: Props) {
       onSettingsChange((s) => {
         setView(s.camera);
         void setCameraView(s.camera);
+        // The lighting slider works while a table is playing behind the
+        // settings screen, the same way the volume does.
+        void setDayNight(s.brightness);
       }),
     [],
   );

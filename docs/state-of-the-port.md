@@ -1,6 +1,6 @@
 # State of the port
 
-_25 August 2026. A snapshot of what is emulated, how faithfully, how it was
+_26 August 2026. A snapshot of what is emulated, how faithfully, how it was
 checked, and what is known to be missing. `what-is-missing.md` is the running
 backlog; `parity.md` is the file-by-file ledger against the original. This is
 the view from above both._
@@ -70,7 +70,14 @@ TypeScript for the page. Thirty-two commits in this stretch.
 - The page: table library in IndexedDB, ROM import, a PWA that works
   offline, touch controls that are the cabinet's buttons, a headless
   screenshot and a headless table runner for everything that cannot be
-  judged by eye.
+  judged by eye. The player itself runs in a worker over an
+  `OffscreenCanvas` where the browser grants a GPU there — probed by
+  obtaining a real adapter or a real WebGL2 context, because a transferred
+  canvas cannot be taken back — with the main-thread path kept whole as the
+  fallback; the renderer takes WebGPU or WebGL2 by the same evidence, which
+  is what lets a phone on plain-HTTP LAN play without a secure context.
+  `?host=main` and `?gpu=gl` force the paths a capable browser would never
+  take.
 
 ## How faithful, and how that was found out
 
@@ -135,13 +142,12 @@ landed since; the rest are open.
 **Machine**
 - ✓ coin-door and flipper switches, fast flips, coil pulse accumulation,
   memory protect, sound-board status lines
-- the DMD's 15 Hz PWM integration (`dedmd.c:225`): the two-bit frame is
-  shown raw, so the game's intermediate shades strobe where PinMAME's are
-  steady
-- the AT91's `PS_PCER` / `PS_PCDR` decode is off by one register — latent,
-  because reset already has the timer clocks on
-- a 32-bit store to the sample port makes two samples where the reference
-  makes one; a few peripheral read offsets (`TC_IMR`, `PIO_OSR`)
+- ✓ the DMD's 15 Hz PWM integration (`dedmd.c:225`): the two-bit frame goes
+  through the eye's low-pass now instead of being shown raw
+- ✓ the AT91's `PS_PCER`/`PS_PCDR` decode (it was one register down, so an
+  enable was a disable), the word store to the sample port (one sample, not
+  two), and the `TC_IMR`/`PIO_OSR` read offsets — each read against
+  `at91.c`/`desound.c`, and the bus decode has its own test file now
 - other Whitestar expander boards (servo, magnets, mini-DMDs, Titanic)
 
 **Sound level.** The music of a Whitestar game is a setting of the machine,
@@ -160,18 +166,49 @@ is what a cabinet has and this does not.
 **Table**
 - ✓ slope from the difficulty, gravity, day/night scale, bloom, flipper
   rubber, wall normals, bumper cap
-- the **insert image** (`IMG1`): a lit insert is a coloured halo, not the
-  lit artwork. Needs the table extent in the light builder, a texture
-  binding in the light pass, and the `PS_LightWithTexel` blend. The most
-  visible remaining gap.
+- ✓ the **insert image** (`IMG1`): a lit insert is its artwork, lit
 - ✓ **flashers**: the polygon, both pictures and the four filters, the
   painted and the additive blend, every script member, and the DMD mode
   that a 10.8 table places its display with. Not yet: the `Display`,
   `AlphaSeg` and external modes (plugin displays), ball shadows on a
   flasher, and a lightmap flasher snaps with its lamp's switch rather than
   following its fade
-- the table's own **environment map** (`EIMG`) — the bundled one is always
-  used, and on many tables the environment is the only light source
+- ✓ the table's own **environment map** (`EIMG`), with the bundled one kept
+  as the fallback
+- ✓ the **general illumination illuminates**: the brightest lit bulbs reach
+  the material loop as point lights, and their first bounce fills the corners
+  no bulb reaches — a deliberate departure, because the original's halos
+  *modulate* what is under them and modulating a black playfield produces
+  black, where a real machine's GI string lights the wood and its glass and
+  plastics scatter the rest
+- ✓ and the strings' share of it is **baked**: the GI lamps are grouped by
+  what switches together (colour-clustered — F-14's warm, red and blue
+  strings come out as their own layers), traced once per table against the
+  table's own meshes on the CPU — direct with shadows plus one diffuse
+  bounce, which is light turning a corner and a wall's colour on the wood
+  beside it (`vpw-render/src/bake.rs`, ~5 s for F-14's four groups) — and
+  each layer is scaled by its group's **live level**, so the light show that
+  flashes red against blue flashes the maps. In the browser the trace runs
+  in a worker of its own after the table loads and the result is kept in
+  IndexedDB, so a table pays for its bake exactly once. A table that ships
+  its own lightmap flashers gets none of this — the whole departure switches
+  off, because its author already did the light transport. The grouping is
+  the **machine's own answer**: the bake worker boots the game headless,
+  runs half a minute of attract, and groups the lamps whose switching
+  histories came out identical — on F-14 that put the whole GI on one relay,
+  which is what a System 11 wires, where guessing by colour had invented
+  three independent strings. Names and colours remain the fallback for a
+  table with no ROM. And the halo of every bulb is **capped** (`fs_bulb`):
+  the authors tuned the modulate blend against the original's darker field,
+  and over the field the departure lights, a slingshot lamp at eighty was a
+  flash grenade — the soft cap leaves small halos as tuned and walks the
+  huge ones down to a bulb's worth of glare, while a baked lamp's halo also
+  shrinks to hug its bulb, its field-lighting job now done by the map
+- ✓ a player-side **day/night** — the original's user-mode override
+  (`Renderer.cpp:377`), because plenty of tables are authored dark on purpose
+  (F-14 asks for 0.08) — and the head's score display drawn **emissive**: a
+  plasma panel is a light, not a lit thing, and through the light loop it
+  vanished into the dark room the table asked for
 - tone-mapper selection and the colour-grade LUT
 - decals, text boxes, display reels, light sequences, editor-placed balls,
   built-in-shape primitives (posts and pegs with no mesh are invisible
@@ -204,8 +241,7 @@ seen.
 
 ## Next
 
-1. The insert image: the one thing a player sees on every table that is not
-   there.
-2. The table's own environment map.
-3. The DMD PWM filter, so the display looks like the machine's.
-4. A third table, of a third family, to find what two have not.
+1. A third table, of a third family, to find what two have not. The three
+   items that used to stand ahead of it — the insert image, the table's own
+   environment map, the DMD's PWM filter — have landed, and the way to find
+   the next three is to play a table that has not been played.

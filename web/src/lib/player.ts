@@ -1,59 +1,57 @@
-// Startup of the wasm player, with a memory of what was already done.
+// The page's side of the player, wherever the player runs.
 //
-// React in strict mode mounts every effect **twice** in development. With
-// nothing to stop it, that means downloading the table twice —111 MB each
-// time— and parsing it twice. The second pass blocks the main thread for
-// several seconds and leaves the UI frozen, even though the canvas already
-// shows the table loaded by the first one.
+// Everything here goes through the host (`host.ts`): a worker with the wasm
+// module in it when the browser can, this thread when it cannot. The functions
+// keep the shapes the components already use, so nothing above this file knows
+// there are two homes.
 //
-// The fix is not a React trick: the wasm player is a real singleton —it lives
-// in a `thread_local` of the module— so starting it and loading a table into
-// it are operations that only make sense once. This module keeps that promise
-// around and reuses it.
+// The memoisation is the other half of the job. React in strict mode mounts
+// every effect **twice** in development; with nothing to stop it, that means
+// downloading the table twice —111 MB each time— and parsing it twice. The
+// player is a real singleton — one wasm instance in one home — so starting it
+// and loading a table into it are operations that only make sense once, and
+// this module keeps those promises around and reuses them.
 
-import { readMachineState, readRom, writeMachineState } from './library';
+import { getHost, type PlayerHost } from './host';
+import { connectInput } from './input';
+import type { Loop, SceneStats } from './hostShared';
+import {
+  BAKE_VERSION,
+  readBake,
+  readMachineState,
+  readRom,
+  writeBake,
+  writeMachineState,
+  type GiBake,
+} from './library';
+import BakeWorker from './bake.worker?worker';
+import { provideLibraries } from './scripts';
+import type { BakeRequest, BakeResponse } from './bake.worker';
 import { CAMERA_VIEWS, type CameraView } from './settings';
 import type { ParsedTable, RomInfo } from './types';
 
-type Wasm = typeof import('../wasm/vpw_player.js');
-
-export interface LoadStats {
-  meshes: number;
-  vertices: number;
-  triangles: number;
-  textures: number;
-  drawCalls: number;
-  drawCallsNaive: number;
-  parseMs: number;
-  extractMs: number;
-  uploadMs: number;
+export interface LoadStats extends SceneStats {
   bytes: number;
   fetchMs: number;
 }
 
-let wasmReady: Promise<Wasm> | null = null;
-/** The module once it has resolved, for the few reads that cannot afford to
+/** The host once it has resolved, for the few reads that cannot afford to
  * await. See {@link plungerPull}. */
-let live: Wasm | null = null;
-/** The wasm module and its script libraries: fetched once, whatever happens
- * to the canvas afterwards. See {@link startPlayer}. */
-let ready: Promise<Wasm> | null = null;
+let live: PlayerHost | null = null;
+/** The host with the script libraries already handed over. */
+let ready: Promise<PlayerHost> | null = null;
 /** Resolves once the player has been started at least once. The calls below
  * that only make sense against a running player wait on this. */
 let started: Promise<void> | null = null;
 /** Key of the loaded table, so the work is not repeated. */
 let loaded: { key: string; stats: Promise<LoadStats> } | null = null;
 
-/** Loads and initialises the wasm module. Idempotent. */
-export function initWasm(): Promise<Wasm> {
-  wasmReady ??= (async () => {
-    const wasm = await import('../wasm/vpw_player.js');
-    const url = (await import('../wasm/vpw_player_bg.wasm?url')).default;
-    await wasm.default({ module_or_path: url });
-    live = wasm;
-    return wasm;
-  })();
-  return wasmReady;
+/** The host, remembered for the synchronous reads. */
+function host(): Promise<PlayerHost> {
+  return getHost().then((h) => {
+    live = h;
+    return h;
+  });
 }
 
 /**
@@ -78,40 +76,23 @@ export function releasePlunger(): void {
  *
  * Synchronous, unlike everything else here, because it is read once per
  * animation frame by the on-screen plunger and a promise per frame to fetch one
- * float is a promise per frame too many. It answers `null` until the module has
- * resolved, which is exactly the period during which there is no table anyway.
+ * float is a promise per frame too many. On the worker path the position is
+ * pushed to the page every frame, so this reads a cached number; it answers
+ * `null` until the host has resolved, which is exactly the period during which
+ * there is no table anyway.
  */
 export function plungerPull(): number | null {
   return live?.plungerPull() ?? null;
 }
 
-/**
- * Visual Pinball's script library, bundled with the app.
- *
- * A table's script is not self-contained: it opens by pulling in `core.vbs`
- * and the library for its machine — `s11.vbs`, `sam.vbs` — **by name, at run
- * time**. In Visual Pinball those are files in a Scripts folder. There is no
- * folder here, so they are bundled and handed to the player before any table
- * is loaded. Without them a table loads and rolls a ball around, and nothing
- * scores.
- *
- * They are GPL-3.0, the same licence as this project, and come from Visual
- * Pinball's own `scripts/` directory.
- */
-const LIBRARIES = import.meta.glob('../scripts/*.vbs', {
-  query: '?raw',
-  import: 'default',
-  eager: true,
-}) as Record<string, string>;
-
 /** Hands the bundled libraries to the player. Idempotent. */
-async function provideLibraries(): Promise<void> {
-  const wasm = await initWasm();
-  if (wasm.scriptLibraryCount() > 0) return;
-  for (const [path, text] of Object.entries(LIBRARIES)) {
-    const name = path.slice(path.lastIndexOf('/') + 1);
-    wasm.addScriptLibrary(name, text);
-  }
+async function provideHostLibraries(h: PlayerHost): Promise<void> {
+  if ((await h.call<number>('scriptLibraryCount')) > 0) return;
+  const pending: Promise<void>[] = [];
+  provideLibraries((name, text) => {
+    pending.push(h.call('addScriptLibrary', [name, text]));
+  });
+  await Promise.all(pending);
 }
 
 /**
@@ -122,7 +103,7 @@ async function provideLibraries(): Promise<void> {
  * A table whose ROM is missing still loads: the ball rolls, the flippers work,
  * and nothing scores, which is the honest outcome rather than a failure.
  */
-async function provideRom(wasm: Wasm, rom: RomInfo | undefined): Promise<void> {
+async function provideRom(h: PlayerHost, rom: RomInfo | undefined): Promise<void> {
   // Both of these used to be silent, and both leave the player with a table
   // that renders, rolls a ball, takes a coin and starts nothing — because the
   // rules of the game are on a board that was never handed over.
@@ -135,12 +116,12 @@ async function provideRom(wasm: Wasm, rom: RomInfo | undefined): Promise<void> {
     console.warn(`[player] the ROM "${rom.name}" is not loaded; import ${rom.name}.zip`);
     return;
   }
-  wasm.addRom(rom.name, zip);
+  await h.call('addRom', [rom.name, zip]);
 
   // And the machine's own memory, so it is the same machine as last time,
   // settings and high scores included.
   const saved = await readMachineState(rom.name);
-  if (saved) wasm.restoreMachineState(rom.name, saved);
+  if (saved) await h.call('restoreMachineState', [rom.name, saved]);
   runningSet = rom.name;
 }
 
@@ -172,34 +153,63 @@ let runningSet: string | null = null;
  * is a machine that forgets its high scores every time.
  */
 export async function saveMachineState(): Promise<void> {
-  if (!runningSet) return;
-  const wasm = await initWasm();
-  const data = wasm.machineState();
+  if (!runningSet || !started) return;
+  const h = await host();
+  const data = await h.call<Uint8Array | undefined>('machineState');
   if (data) await writeMachineState(runningSet, data);
 }
 
 /**
  * Starts the player on the canvas, or moves it there.
  *
- * Every call reaches `wasm.start`, which is what makes coming back from the
- * menu work: React unmounts the canvas on the way out and builds a **new**
- * element on the way back, and only the wasm side can see that the element
+ * Every call reaches the host's `start`, which is what makes coming back from
+ * the menu work: React unmounts the canvas on the way out and builds a **new**
+ * element on the way back, and only the player's side can see that the element
  * changed. Memoising this away — which it used to do — left the renderer
  * drawing into the canvas from the first visit, so the second one had sound and
  * controls and a black rectangle where the table should be.
  *
- * What is memoised is the expensive half: fetching the wasm and handing over
- * the script libraries. Those are the same whatever canvas is in front of us.
+ * What is memoised is the expensive half: choosing the host, fetching the wasm
+ * and handing over the script libraries. Those are the same whatever canvas is
+ * in front of us.
  */
-export function startPlayer(canvasId: string): Promise<void> {
+export function startPlayer(canvas: HTMLCanvasElement): Promise<void> {
   ready ??= (async () => {
-    const wasm = await initWasm();
-    await provideLibraries();
-    return wasm;
+    const h = await host();
+    await provideHostLibraries(h);
+    return h;
   })();
-  const attached = ready.then((wasm) => wasm.start(canvasId));
+  // One start at a time. React in strict mode runs the effect twice, and two
+  // starts in flight both find no player yet and both build a renderer — the
+  // "already on this canvas" answer only exists once the first has finished.
+  // Chaining through the previous start, whatever became of it, is what lets
+  // the second call see the first one's work.
+  const attached = (starting ?? Promise.resolve()).then(
+    async () => (await ready!).start(canvas),
+    async () => (await ready!).start(canvas),
+  );
+  starting = attached;
   started ??= attached;
   return attached;
+}
+
+/** The start in flight, so a second one waits for it. */
+let starting: Promise<void> | null = null;
+
+/**
+ * Wires the keyboard and the pointer to the player. Returns the unwiring.
+ * Re-exported so the component that mounts the canvas has one module to talk
+ * to; the wiring itself lives in `input.ts`.
+ */
+export { connectInput };
+
+/**
+ * Tells the player nobody is looking at it, so a worker-side loop can hold the
+ * clocks the way the main-thread loop does when its canvas leaves the
+ * document. Safe to call before anything started.
+ */
+export function hidePlayer(): void {
+  live?.setVisible(false);
 }
 
 /**
@@ -236,96 +246,128 @@ export function loadTable(
   if (loaded?.key === cacheKey) return loaded.stats;
 
   const stats = (async () => {
-    const wasm = await initWasm();
-    await provideRom(wasm, rom);
+    const h = await host();
+    await provideRom(h, rom);
     const t0 = performance.now();
     const bytes = await fetchBytes();
     const fetchMs = performance.now() - t0;
 
-    // A breather so the browser can paint the notice before it locks up:
-    // parsing a 100 MB table is synchronous and takes a while.
-    //
-    // With `setTimeout` and not with `requestAnimationFrame`: rAF **does not
-    // fire** while the tab is not visible, so awaiting it leaves the load hung
-    // forever if the user opened the table in a background tab.
-    await new Promise((r) => setTimeout(r, 0));
-
-    const s = wasm.loadTable(bytes);
-    return {
-      meshes: s.meshes,
-      vertices: s.vertices,
-      triangles: s.triangles,
-      textures: s.textures,
-      drawCalls: s.drawCalls,
-      drawCallsNaive: s.drawCallsNaive,
-      parseMs: s.parseMs,
-      extractMs: s.extractMs,
-      uploadMs: s.uploadMs,
-      bytes: bytes.byteLength,
-      fetchMs,
-    };
+    // The bytes are moved, not copied: on the worker path this is 111 MB that
+    // would otherwise exist twice while the copy is in flight.
+    const size = bytes.byteLength;
+    const s = await h.call<SceneStats>('loadTable', [bytes], [bytes.buffer as ArrayBuffer]);
+    // The lightmaps, in the background: from the cache when a visit already
+    // paid for them, traced in the bake worker when not. The table is already
+    // playing either way; the light arrives when it arrives.
+    void ensureGiBake(key, fetchBytes, rom).catch((e) => {
+      console.warn('[bake] the GI bake failed:', e);
+    });
+    return { ...s, bytes: size, fetchMs };
   })();
 
   loaded = { key: cacheKey, stats };
   // If it fails, forget it so it can be retried.
   stats.catch(() => {
-    if (loaded?.key === key) loaded = null;
+    if (loaded?.key === cacheKey) loaded = null;
   });
   return stats;
 }
 
-/** What the HUD shows: the loop's numbers plus the state of the game. */
-export interface Loop {
-  fps: number;
-  /** Physics ticks per second. The target is 1000. */
-  tps: number;
-  balls: number;
-  tilt: boolean;
-  /** Tilt warnings so far. The fourth one ends the ball. */
-  warnings: number;
-  /** How close the plumb is to the ring, from 0 to 1. */
-  tiltRisk: number;
-  /** How many of the table's own script handlers have run. */
-  handlerCalls: number;
-  /** Whether the machine's ROM is loaded and executing. */
-  romRunning: boolean;
-  /** The set that is running, or empty. */
-  romName: string;
-  /** Whether this machine has a sound board of its own that loaded. */
-  soundBoard: boolean;
-  /** Samples a second it is making. A working one is a shade over 24000. */
-  soundRate: number;
-  /** What the machine last said about itself, mostly why a ROM would not load. */
-  notice: string;
+/** The bakes already being traced or applied, so a strict-mode double mount
+ * does not trace twice. */
+const baking = new Set<string>();
+
+/**
+ * Sees to it that the table's GI lightmaps are installed: from IndexedDB if a
+ * past visit traced them, from the bake worker if not — in which case they are
+ * also put away for every visit after.
+ */
+async function ensureGiBake(
+  key: string,
+  fetchBytes: () => Promise<Uint8Array>,
+  rom?: RomInfo,
+): Promise<void> {
+  if (baking.has(key)) return;
+  baking.add(key);
+  const h = await host();
+
+  const apply = (bake: GiBake) =>
+    bake.layers > 0
+      ? h
+          .call('applyGiBake', [
+            bake.width,
+            bake.height,
+            bake.layers,
+            new Uint8Array(bake.data),
+            bake.groups,
+          ])
+          .then(() => console.info(`[bake] GI lightmaps on: ${bake.layers} groups`))
+      : Promise.resolve();
+
+  const cached = await readBake(key);
+  if (cached) {
+    await apply(cached);
+    return;
+  }
+
+  // A fresh copy of the table: the load transferred its own away. And the
+  // ROM beside it, so the baker can boot the machine and watch which lamps
+  // it switches together instead of guessing from names.
+  const bytes = await fetchBytes();
+  const zip = rom?.name ? ((await readRom(rom.name)) ?? (await devRom(rom.name))) : null;
+  const result = await new Promise<BakeResponse>((resolve, reject) => {
+    // A worker per bake, and gone straight after: it holds a wasm instance
+    // and the whole table, which is not a thing to keep around idle.
+    const worker = new BakeWorker();
+    worker.onmessage = (e: MessageEvent<BakeResponse>) => {
+      worker.terminate();
+      resolve(e.data);
+    };
+    worker.onerror = (e) => {
+      worker.terminate();
+      reject(new Error(e.message || 'the bake worker crashed'));
+    };
+    const request: BakeRequest = {
+      key,
+      bytes: bytes.buffer as ArrayBuffer,
+      rom: rom?.name && zip ? { name: rom.name, zip: zip.buffer as ArrayBuffer } : undefined,
+    };
+    const transfer: ArrayBuffer[] = [bytes.buffer as ArrayBuffer];
+    if (request.rom) transfer.push(request.rom.zip);
+    worker.postMessage(request, transfer);
+  });
+  if (!result.ok) {
+    console.warn('[bake] the trace failed:', result.error);
+    baking.delete(key);
+    return;
+  }
+
+  const bake: GiBake = {
+    version: BAKE_VERSION,
+    width: result.width,
+    height: result.height,
+    layers: result.layers,
+    data: result.data,
+    groups: result.groups,
+  };
+  // Stored even when there was nothing to bake, so a table with no GI string
+  // is not re-parsed on every visit to find that out again.
+  await writeBake(key, bake);
+  await apply(bake);
 }
+
+export type { Loop };
 
 /** The state of the last second, or `null` if the player never started. */
 export async function loopStats(): Promise<Loop | null> {
   if (!started) return null;
-  const wasm = await initWasm();
-  const l = wasm.loopStats();
-  if (!l) return null;
-  return {
-    fps: l.fps,
-    tps: l.physicsTicksPerSecond,
-    balls: l.balls,
-    tilt: l.tilt,
-    warnings: l.warnings,
-    tiltRisk: l.tiltRisk,
-    handlerCalls: l.handlerCalls,
-    romRunning: l.romRunning,
-    romName: l.romName,
-    soundBoard: l.soundBoard,
-    soundRate: l.soundRate,
-    notice: l.notice,
-  };
+  return (await host()).call<Loop | null>('loopStats');
 }
 
 /** Puts a new ball in front of the plunger, clearing any tilt. */
 export async function newBall(): Promise<void> {
   if (!started) return;
-  const wasm = await initWasm();
-  wasm.newBall();
+  await (await host()).call('newBall');
 }
 
 /**
@@ -338,13 +380,13 @@ export async function newBall(): Promise<void> {
  */
 export async function pressKey(code: string, pressed: boolean): Promise<void> {
   if (!started) return;
-  (await initWasm()).pressKey(code, pressed);
+  await (await host()).call('pressKey', [code, pressed]);
 }
 
 /** Lets go of everything. For a touch that was cancelled, or leaving the game. */
 export async function releaseAllKeys(): Promise<void> {
   if (!started) return;
-  (await initWasm()).releaseAllKeys();
+  await (await host()).call('releaseAllKeys');
 }
 
 // -- where the player looks from ---------------------------------------------
@@ -359,14 +401,24 @@ export async function releaseAllKeys(): Promise<void> {
  */
 export async function setCameraView(view: CameraView): Promise<void> {
   if (!started) return;
-  (await initWasm()).setCameraView(view);
+  await (await host()).call('setCameraView', [view]);
 }
 
 /** Where it is looking from now, or `null` before the player has started. */
 export async function cameraView(): Promise<CameraView | null> {
   if (!started) return null;
-  const name = (await initWasm()).cameraView();
+  const name = await (await host()).call<string>('cameraView');
   return CAMERA_VIEWS.includes(name as CameraView) ? (name as CameraView) : null;
+}
+
+/**
+ * The player's day/night, 0 to 1, or `null` for the table's own lighting.
+ * Plenty of tables are authored dark on purpose; this is the same override
+ * Visual Pinball's own settings carry.
+ */
+export async function setDayNight(brightness: number | null): Promise<void> {
+  if (!started) return;
+  await (await host()).call('setDayNight', [brightness ?? -1]);
 }
 
 /** The next view round, for a key that cycles rather than choosing. */
@@ -388,7 +440,7 @@ export function nextCameraView(from: CameraView): CameraView {
  */
 export async function displayImage(width: number, height: number): Promise<Uint8Array | null> {
   if (!started) return null;
-  const rgba = (await initWasm()).displayImage(width, height);
+  const rgba = await (await host()).call<Uint8Array>('displayImage', [width, height]);
   return rgba.length > 0 ? rgba : null;
 }
 
@@ -396,7 +448,7 @@ export async function displayImage(width: number, height: number): Promise<Uint8
  * fractions of the canvas, or `null` when it is not in shot. */
 export async function backboxRect(): Promise<[number, number, number, number] | null> {
   if (!started) return null;
-  const r = (await initWasm()).backboxRect();
+  const r = await (await host()).call<Float32Array>('backboxRect');
   return r.length === 4 ? [r[0], r[1], r[2], r[3]] : null;
 }
 
@@ -409,7 +461,7 @@ export async function backboxRect(): Promise<[number, number, number, number] | 
  */
 export async function displays(): Promise<[string, string]> {
   if (!started) return ['', ''];
-  const rows = (await initWasm()).displays();
+  const rows = await (await host()).call<string[]>('displays');
   return [rows[0] ?? '', rows[1] ?? ''];
 }
 
@@ -421,13 +473,13 @@ export const TELEMETRY_WINDOW_S = 30;
 /** Starts or stops keeping the rolling record. */
 export async function setTelemetry(on: boolean): Promise<void> {
   if (!started) return;
-  (await initWasm()).setTelemetry(on);
+  await (await host()).call('setTelemetry', [on]);
 }
 
 /** Samples and edges currently held, as `[samples, events]`. */
 export async function telemetryHeld(): Promise<[number, number]> {
   if (!started) return [0, 0];
-  const held = (await initWasm()).telemetryHeld();
+  const held = await (await host()).call<Uint32Array>('telemetryHeld');
   return [held[0] ?? 0, held[1] ?? 0];
 }
 
@@ -452,10 +504,10 @@ export interface Mark {
  */
 export async function mark(seconds = TELEMETRY_WINDOW_S): Promise<Mark | null> {
   if (!started) return null;
-  const wasm = await initWasm();
+  const h = await host();
 
   const at = new Date();
-  const json = wasm.telemetryDump(seconds, at.toISOString());
+  const json = await h.call<string | undefined>('telemetryDump', [seconds, at.toISOString()]);
   if (!json) return null;
 
   // `2026-08-22T04-19-07` — colons are not allowed in a file name on Windows,

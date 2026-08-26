@@ -1,4 +1,4 @@
-// Getting the game's sound out of wasm and into the speakers.
+// Getting the game's sound out of the player and into the speakers.
 //
 // The game mixes everything itself and hands over interleaved stereo, so there
 // is no Web Audio graph to speak of: one worklet node, one gain, the
@@ -11,12 +11,19 @@
 // and resumed on the first click or keypress.
 //
 // **The game's clock is not the audio clock.** The game produces sound in
-// bursts, once per animation frame, at whatever rate the browser is painting.
-// The device wants an even stream. The worklet holds a queue between the two,
-// and this module keeps that queue at a target depth: too shallow and a slow
-// frame is heard as a gap, too deep and the sound lags behind the picture.
+// bursts, once per animation frame, at whatever rate its frames come. The
+// device wants an even stream. The worklet holds a queue between the two, and
+// the pump keeps that queue at a target depth: too shallow and a slow frame is
+// heard as a gap, too deep and the sound lags behind the picture.
+//
+// Where the pump runs depends on where the player does. On the main thread it
+// is here, on an animation frame of this page. In a worker the pump lives with
+// the game (`game.worker.ts`) and pushes straight to the worklet through a
+// `MessageChannel` this module wires up — the page is not on the path at all,
+// so a busy page cannot starve the sound. The gain stays here either way: it
+// is the page's volume knob.
 
-import { initWasm } from './player';
+import { getHost, type PlayerHost } from './host';
 import { onSettingsChange, settings } from './settings';
 
 /** How much audio to keep queued ahead, in seconds.
@@ -39,16 +46,25 @@ class Engine {
   private context: AudioContext;
   private node: AudioWorkletNode;
   private gain: GainNode;
+  private host: PlayerHost;
   /** Frames the worklet says it still has. Updated about 45 times a second. */
   private queued = 0;
   /** Frames of silence the worklet has had to invent. A running count. */
   private starved = 0;
+  /** Whether a render is already in flight, so the pump never overlaps itself. */
+  private rendering = false;
   private stopped = false;
 
-  private constructor(context: AudioContext, node: AudioWorkletNode, gain: GainNode) {
+  private constructor(
+    context: AudioContext,
+    node: AudioWorkletNode,
+    gain: GainNode,
+    host: PlayerHost,
+  ) {
     this.context = context;
     this.node = node;
     this.gain = gain;
+    this.host = host;
     this.node.port.onmessage = (event: MessageEvent<Report>) => {
       this.queued = event.data.queued;
       this.starved = event.data.starved;
@@ -56,12 +72,13 @@ class Engine {
   }
 
   static async create(): Promise<Engine> {
-    const wasm = await initWasm();
+    const host = await getHost();
     // Asked for at the game's own rate. The browser resamples if the device
     // cannot do it, which is one resampling; asking for the device's rate would
     // mean resampling the sound board's stream here as well.
+    const rate = await host.call<number>('audioRate');
     const context = new AudioContext({
-      sampleRate: wasm.audioRate(),
+      sampleRate: rate,
       latencyHint: 'interactive',
     });
 
@@ -79,7 +96,16 @@ class Engine {
     const gain = context.createGain();
     node.connect(gain).connect(context.destination);
 
-    return new Engine(context, node, gain);
+    // When the game lives in a worker, the samples flow worker → worklet on a
+    // channel of their own; each end gets a port. The node's own port stays
+    // here for `stop` and `flush`.
+    if (host.kind === 'worker') {
+      const channel = new MessageChannel();
+      node.port.postMessage({ port: channel.port1 }, [channel.port1]);
+      host.attachAudio(channel.port2, rate);
+    }
+
+    return new Engine(context, node, gain, host);
   }
 
   get rate(): number {
@@ -88,6 +114,11 @@ class Engine {
 
   get state(): AudioContextState {
     return this.context.state;
+  }
+
+  /** Whether this page has to pump, or the worker is doing it. */
+  get pumpsHere(): boolean {
+    return this.host.kind === 'main';
   }
 
   /** Frames of silence played for want of anything to play. */
@@ -112,11 +143,12 @@ class Engine {
   /**
    * Renders whatever is needed to keep the queue at its target depth.
    *
-   * Call it once per animation frame, after the game has stepped: the samples
-   * it produces are the ones belonging to the time that just passed.
+   * Main-thread path only — the worker pumps for itself. Call it once per
+   * animation frame; the samples it produces are the ones belonging to the
+   * time that just passed.
    */
-  pump(wasm: Awaited<ReturnType<typeof initWasm>>): void {
-    if (this.stopped || this.context.state !== 'running') return;
+  pump(): void {
+    if (this.stopped || this.rendering || this.context.state !== 'running') return;
 
     const target = this.rate * TARGET_SECONDS;
     const want = Math.min(
@@ -125,14 +157,22 @@ class Engine {
     );
     if (want <= 0) return;
 
-    const pcm = wasm.renderAudio(want);
-    if (pcm.length === 0) return;
-
-    // Counted here rather than waiting for the worklet's next report, which
-    // arrives every 22 ms and would otherwise let a burst of frames each think
-    // the queue is still empty and send the same audio several times over.
-    this.queued += pcm.length / 2;
-    this.node.port.postMessage(pcm, [pcm.buffer]);
+    // Counted before the render lands rather than waiting for the worklet's
+    // next report, which arrives every 22 ms and would otherwise let a burst
+    // of frames each think the queue is still empty and send the same audio
+    // several times over. The in-flight flag covers the await.
+    this.rendering = true;
+    this.host
+      .call<Float32Array>('renderAudio', [want])
+      .then((pcm) => {
+        this.rendering = false;
+        if (pcm.length === 0) return;
+        this.queued += pcm.length / 2;
+        this.node.port.postMessage(pcm, [pcm.buffer as ArrayBuffer]);
+      })
+      .catch(() => {
+        this.rendering = false;
+      });
   }
 
   /** Throws away what is queued. For when a table is swapped underneath. */
@@ -168,15 +208,14 @@ export function audio(): Promise<Engine> {
  * that is the only place a browser will start an `AudioContext`. Calling it
  * again once it is running is harmless.
  *
- * The pump runs on its own animation frame rather than being called from the
- * game's: the game loop lives in wasm and does not call out. It does not need
- * to be in step — the queue between the two is what absorbs the difference —
- * only to run about as often, which `requestAnimationFrame` gives for free.
- * It also stops when the tab is hidden, which is exactly right: the game stops
- * there too.
+ * On the main-thread path the pump runs on its own animation frame here; it
+ * does not need to be in step with the game — the queue between the two is
+ * what absorbs the difference — only to run about as often. It also stops when
+ * the tab is hidden, which is exactly right: the game stops there too. On the
+ * worker path there is nothing to run here at all.
  */
 export async function startAudio(): Promise<void> {
-  const [live, wasm] = await Promise.all([audio(), initWasm()]);
+  const [live, host] = await Promise.all([audio(), getHost()]);
   try {
     await live.resume();
   } catch (e) {
@@ -188,9 +227,9 @@ export async function startAudio(): Promise<void> {
   // Subscribing rather than reading once is what lets the settings screen move
   // the slider while a table is playing behind it.
   live.setVolume(settings().volume);
-  wasm.setVolume(1);
+  void host.call('setVolume', [1]);
   unsubscribe ??= onSettingsChange((s) => live.setVolume(s.volume));
-  if (pumping) return;
+  if (!live.pumpsHere || pumping) return;
 
   // The pump runs on its own animation frame, so nothing on the Rust side ever
   // sees how long it took — and a hitch the player feels has to come from
@@ -204,12 +243,12 @@ export async function startAudio(): Promise<void> {
     }
     const idle = performance.now() - lastEnd;
     const t = performance.now();
-    live.pump(wasm);
+    live.pump();
     const took = performance.now() - t;
-    if (took > 8) wasm.notePause('audio pump', took);
+    if (took > 8) void host.call('notePause', ['audio pump', took]);
     // And the gap before it: if nothing ran for a long time, the browser was
     // busy with something that is neither the pump nor the frame.
-    if (idle > 34) wasm.notePause('nothing ran', idle);
+    if (idle > 34) void host.call('notePause', ['nothing ran', idle]);
     lastEnd = performance.now();
     pumping = requestAnimationFrame(tick);
   };
@@ -241,9 +280,9 @@ export async function stopAudio(): Promise<void> {
  * wants to change the volume without changing the setting.
  */
 export async function setVolume(volume: number): Promise<void> {
-  const [live, wasm] = await Promise.all([audio(), initWasm()]);
+  const [live, host] = await Promise.all([audio(), getHost()]);
   live.setVolume(volume);
-  wasm.setVolume(1);
+  void host.call('setVolume', [1]);
 }
 
 export type { Engine };

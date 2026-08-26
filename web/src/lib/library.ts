@@ -10,13 +10,14 @@ import ParseWorker from './parse.worker?worker';
 import type { ParseRequest, ParseResponse } from './parse.worker';
 
 const DB_NAME = 'vpinball-web';
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 
 const STORE_TABLES = 'tables'; // TableEntry, keyPath: id
 const STORE_FILES = 'files'; // Blob of the .vpx, key: id
 const STORE_THUMBS = 'thumbs'; // Blob of the screenshot, key: id
 const STORE_ROMS = 'roms'; // Blob of the ROM zip, key: set name, lowercased
 const STORE_SAVES = 'saves'; // The machine's CMOS, key: set name, lowercased
+const STORE_BAKES = 'bakes'; // A GiBake, key: the table's load key
 
 export class StorageUnavailable extends Error {
   constructor() {
@@ -43,7 +44,7 @@ function openDb(): Promise<IDBDatabase> {
       if (!db.objectStoreNames.contains(STORE_TABLES)) {
         db.createObjectStore(STORE_TABLES, { keyPath: 'id' });
       }
-      for (const name of [STORE_FILES, STORE_THUMBS, STORE_ROMS, STORE_SAVES]) {
+      for (const name of [STORE_FILES, STORE_THUMBS, STORE_ROMS, STORE_SAVES, STORE_BAKES]) {
         if (!db.objectStoreNames.contains(name)) db.createObjectStore(name);
       }
     };
@@ -295,4 +296,40 @@ export async function storageUsage(): Promise<{ usage: number; quota: number } |
   if (!navigator.storage?.estimate) return null;
   const { usage = 0, quota = 0 } = await navigator.storage.estimate();
   return { usage, quota };
+}
+
+// -- the baked lightmaps ------------------------------------------------------
+
+/**
+ * A traced GI bake, exactly as the wasm baker hands it over and the player
+ * takes it back. Tens of millions of rays went into `data`, which is the
+ * whole reason it is kept: the second visit to a table pays nothing.
+ */
+export interface GiBake {
+  /** Bump when the baker's output changes shape or meaning. */
+  version: number;
+  width: number;
+  height: number;
+  layers: number;
+  /** The layers' half floats, one after another. */
+  data: ArrayBuffer;
+  /** Each layer's lamp names, for finding the lamps again. */
+  groups: string[][];
+}
+
+/** The baker's current output shape. */
+export const BAKE_VERSION = 3;
+
+export async function readBake(key: string): Promise<GiBake | null> {
+  const bake = await transact([STORE_BAKES], 'readonly', (tx) =>
+    promisify(tx.objectStore(STORE_BAKES).get(key) as IDBRequest<GiBake | undefined>),
+  );
+  // A bake from an older baker is not half-usable: the shapes moved.
+  return bake && bake.version === BAKE_VERSION ? bake : null;
+}
+
+export async function writeBake(key: string, bake: GiBake): Promise<void> {
+  await transact([STORE_BAKES], 'readwrite', (tx) =>
+    promisify(tx.objectStore(STORE_BAKES).put(bake, key)),
+  );
 }

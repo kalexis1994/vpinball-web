@@ -307,7 +307,10 @@ export default defineConfig({
   // root, and hardcoding the repository name would break both.
   base: process.env.VPW_BASE ?? '/',
   plugins: [react(), debugAssets(), telemetrySink(), pwa()],
-  server: { port: 8091 },
+  // `host: true` binds every interface, not just loopback, so a phone on the
+  // same network can open the dev server — which is where "good performance on
+  // modest devices" actually gets measured.
+  server: { port: 8091, host: true },
   // The .wasm comfortably exceeds Vite's inline limit; let it be served as a
   // separate file so the browser can cache it.
   build: { assetsInlineLimit: 0 },
