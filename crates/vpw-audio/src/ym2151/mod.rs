@@ -1072,7 +1072,13 @@ impl Ym2151 {
     /// and the phase (vibrato) of the operators that have it enabled. It is
     /// what separates a flat tone from a living one.
     fn advance_lfo(&mut self) {
-        self.lfo_timer += self.lfo_timer_add;
+        // Wrapping, as the chip's own counter is: with the LFO switched off
+        // (`lfo_overflow == 0` — F-14 sits in attract exactly so) nothing
+        // ever subtracts from this, and the sum crosses `u32::MAX` after a
+        // few minutes of play. The original's C rolls over in silence
+        // (`ym2151.c`, unsigned arithmetic); a debug build here turned that
+        // rollover into the panic that froze the table.
+        self.lfo_timer = self.lfo_timer.wrapping_add(self.lfo_timer_add);
         if self.lfo_overflow != 0 && self.lfo_timer >= self.lfo_overflow {
             self.lfo_timer -= self.lfo_overflow;
             self.lfo_counter += self.lfo_counter_add;
@@ -1279,5 +1285,29 @@ impl Ym2151 {
             .iter()
             .filter(|op| op.state != EgState::Off)
             .count()
+    }
+}
+
+#[cfg(test)]
+mod lfo_tests {
+    use super::*;
+
+    /// The crash that took minutes to arrive and a week to name.
+    ///
+    /// With the LFO switched off (`lfo_overflow == 0`) nothing ever subtracts
+    /// from `lfo_timer`, so it climbs by `lfo_timer_add` every sample until
+    /// it crosses `u32::MAX` — the real chip's counter rolls over in silence,
+    /// and a debug build's overflow check turned that rollover into a panic
+    /// that wedged the whole player mid-frame. F-14 sits in attract in
+    /// exactly this state.
+    #[test]
+    fn the_lfo_timer_rolls_over_in_silence() {
+        let mut chip = Ym2151::new(3_579_545, 44_100);
+        chip.lfo_timer = u32::MAX - 1;
+        chip.lfo_overflow = 0;
+        assert!(chip.lfo_timer_add > 0, "the add must be live for the test");
+        for _ in 0..8 {
+            chip.advance_lfo();
+        }
     }
 }
