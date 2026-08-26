@@ -524,10 +524,15 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
         // faint bright marks — and why the roll is visible at all on a dark
         // table. Fed by the same baked field light the reflections use, so a
         // ball in a dark corner stays dark, wear and all.
+        // Mostly desaturated, and that is the point. Fed the field's light
+        // raw, a scuff over a green insert glows insert-green — the exact
+        // colour of the backdrop beside it — and the marks read as slits cut
+        // through the ball. Worn steel scatters towards white in the eye
+        // long before it does in the physics, and white marks read as wear.
         let worn = vec3<f32>(1.0) - texel.rgb;
-        color = color + worn
-            * (gi_baked(in.world) + frame.gi_bounce.rgb + vec3<f32>(0.05) * frame.emission.a)
-            * 0.6;
+        let room = gi_baked(in.world) + frame.gi_bounce.rgb + vec3<f32>(0.05) * frame.emission.a;
+        let glow = mix(room, vec3<f32>(dot(room, vec3<f32>(0.334))), 0.7);
+        color = color + worn * glow * 0.45;
         // The lamps, mirrored: a highlight where the reflected ray runs near
         // a bulb. The exponent is the ball's polish; the scale keeps a lamp's
         // pinpoint at the brightness its halo would show.
