@@ -613,10 +613,8 @@ pub fn render_audio(frames: usize) -> Vec<f32> {
 /// believes.
 #[wasm_bindgen(js_name = pressKey)]
 pub fn press_key(code: &str, pressed: bool) {
-    PLAYER.with(|p| {
-        if let Some(player) = p.borrow().as_ref()
-            && let Some(table) = player.borrow_mut().table.as_mut()
-        {
+    with_player(|player| {
+        if let Some(table) = player.table.as_mut() {
             table.key(code, pressed);
         }
     });
@@ -664,13 +662,9 @@ pub fn display_image(width: u32, height: u32) -> Vec<u8> {
 /// somewhere else rather than to hide it.
 #[wasm_bindgen(js_name = backboxRect)]
 pub fn backbox_rect() -> Vec<f32> {
-    PLAYER.with(|p| {
-        p.borrow()
-            .as_ref()
-            .and_then(|player| player.borrow().renderer.backbox_screen_rect())
-            .map(|r| r.to_vec())
-            .unwrap_or_default()
-    })
+    with_player(|player| player.renderer.backbox_screen_rect().map(|r| r.to_vec()))
+        .flatten()
+        .unwrap_or_default()
 }
 
 /// The two rows of the machine's score display, as text.
@@ -685,18 +679,14 @@ pub fn backbox_rect() -> Vec<f32> {
 /// still rolls a ball, it just has nothing to say.
 #[wasm_bindgen(js_name = displays)]
 pub fn displays() -> Vec<String> {
-    PLAYER.with(|p| {
-        let player = p.borrow();
-        let Some(player) = player.as_ref() else {
-            return Vec::new();
-        };
-        let player = player.borrow();
+    with_player(|player| {
         let Some(table) = player.table.as_ref() else {
             return Vec::new();
         };
         let (upper, lower) = table.machine().displays();
         vec![upper, lower]
     })
+    .unwrap_or_default()
 }
 
 /// Where the player is looking at the machine from.
@@ -706,12 +696,7 @@ pub fn displays() -> Vec<String> {
 /// nobody can read six months later.
 #[wasm_bindgen(js_name = cameraView)]
 pub fn camera_view() -> String {
-    PLAYER.with(|p| {
-        p.borrow()
-            .as_ref()
-            .map(|player| view_name(player.borrow().renderer.view()).to_string())
-            .unwrap_or_default()
-    })
+    with_player(|player| view_name(player.renderer.view()).to_string()).unwrap_or_default()
 }
 
 /// Moves to one of the named views. Anything unrecognised is ignored.
@@ -726,11 +711,7 @@ pub fn set_camera_view(name: &str) {
         log::warn!("unknown camera view '{name}'; leaving it where it is");
         return;
     };
-    PLAYER.with(|p| {
-        if let Some(player) = p.borrow().as_ref() {
-            player.borrow_mut().renderer.set_view(view);
-        }
-    });
+    with_player(|player| player.renderer.set_view(view));
 }
 
 /// The views there are, in the order a key cycles through them.
@@ -759,10 +740,8 @@ fn view_from_name(name: &str) -> Option<View> {
 /// a flipper held by a finger that is no longer there stays up for ever.
 #[wasm_bindgen(js_name = releaseAllKeys)]
 pub fn release_all_keys() {
-    PLAYER.with(|p| {
-        if let Some(player) = p.borrow().as_ref()
-            && let Some(table) = player.borrow_mut().table.as_mut()
-        {
+    with_player(|player| {
+        if let Some(table) = player.table.as_mut() {
             table.controls.release_all(&mut table.engine.borrow_mut());
         }
     });
@@ -771,10 +750,8 @@ pub fn release_all_keys() {
 /// Master volume, 0 to 1.
 #[wasm_bindgen(js_name = setVolume)]
 pub fn set_volume(volume: f32) {
-    PLAYER.with(|p| {
-        if let Some(player) = p.borrow().as_ref()
-            && let Some(table) = player.borrow_mut().table.as_mut()
-        {
+    with_player(|player| {
+        if let Some(table) = player.table.as_mut() {
             table.set_volume(volume);
         }
     });
@@ -841,12 +818,11 @@ pub fn restore_machine_state(set: String, data: Vec<u8>) {
 /// Returns nothing if no ROM is running.
 #[wasm_bindgen(js_name = machineState)]
 pub fn machine_state() -> Option<Vec<u8>> {
-    PLAYER.with(|p| {
-        let player = p.borrow();
-        let player = player.as_ref()?.borrow();
+    with_player(|player| {
         let machine = player.table.as_ref()?.machine();
         machine.is_running().then(|| machine.cmos())
     })
+    .flatten()
 }
 
 /// How many ROMs the page has handed over.
@@ -886,14 +862,6 @@ thread_local! {
     static WEDGED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-/// Runs `f` on the live player, or on nobody.
-///
-/// `try_borrow` rather than `borrow`, and the difference only matters after a
-/// disaster: a panic mid-frame aborts the wasm instance without unwinding, so
-/// the frame's borrow is never returned and the cell stays borrowed forever.
-/// Every caller that then panics in turn buries the one error that names the
-/// real fault under sixty a second saying "already borrowed". This says what
-/// happened once, quietly returns nothing, and leaves the console legible.
 /// Says, once, that the player is beyond saving and why the console looks the
 /// way it does.
 fn wedged_notice() {
@@ -906,6 +874,16 @@ fn wedged_notice() {
     }
 }
 
+/// Runs `f` on the live player, or on nobody.
+///
+/// **Every** export that touches the player goes through here — that is the
+/// rule, and it is about what the console looks like after a disaster. A
+/// panic mid-frame aborts the wasm instance without unwinding, so the frame's
+/// borrow is never returned and the cell stays borrowed forever; every export
+/// that then demands the borrow panics in turn, several times a second, and
+/// the one error that names the real fault scrolls away under a wall of
+/// "already borrowed". Trying the borrow instead turns all of that into one
+/// line and silence.
 fn with_player<R>(f: impl FnOnce(&mut Player) -> R) -> Option<R> {
     PLAYER.with(|p| {
         let outer = p.try_borrow().ok()?;
@@ -1020,10 +998,8 @@ impl LoopStats {
 /// the rod back on its own, because a key has no position to give.
 #[wasm_bindgen(js_name = holdPlunger)]
 pub fn hold_plunger(travel: f32) {
-    PLAYER.with(|p| {
-        if let Some(player) = p.borrow().as_ref()
-            && let Some(table) = player.borrow_mut().table.as_mut()
-        {
+    with_player(|player| {
+        if let Some(table) = player.table.as_mut() {
             table.hold_plunger(travel);
         }
     });
@@ -1032,10 +1008,8 @@ pub fn hold_plunger(travel: f32) {
 /// Lets go of a rod that was being held. The shot comes from where it is.
 #[wasm_bindgen(js_name = releasePlunger)]
 pub fn release_plunger() {
-    PLAYER.with(|p| {
-        if let Some(player) = p.borrow().as_ref()
-            && let Some(table) = player.borrow_mut().table.as_mut()
-        {
+    with_player(|player| {
+        if let Some(table) = player.table.as_mut() {
             table.let_go_of_plunger();
         }
     });
@@ -1099,10 +1073,8 @@ pub fn loop_stats() -> Option<LoopStats> {
 /// Puts a new ball in front of the plunger, clearing any tilt.
 #[wasm_bindgen(js_name = newBall)]
 pub fn new_ball() {
-    PLAYER.with(|p| {
-        if let Some(player) = p.borrow().as_ref()
-            && let Some(table) = &mut player.borrow_mut().table
-        {
+    with_player(|player| {
+        if let Some(table) = &mut player.table {
             table.new_ball();
         }
     });
@@ -1114,10 +1086,8 @@ pub fn new_ball() {
 /// who is playing rather than debugging should not be carrying it.
 #[wasm_bindgen(js_name = setTelemetry)]
 pub fn set_telemetry(on: bool) {
-    PLAYER.with(|p| {
-        if let Some(player) = p.borrow().as_ref()
-            && let Some(table) = player.borrow().table.as_ref()
-        {
+    with_player(|player| {
+        if let Some(table) = player.table.as_ref() {
             table.set_telemetry(on);
         }
     });
@@ -1126,15 +1096,9 @@ pub fn set_telemetry(on: bool) {
 /// Whether the record is being kept.
 #[wasm_bindgen(js_name = telemetryEnabled)]
 pub fn telemetry_enabled() -> bool {
-    PLAYER.with(|p| {
-        p.borrow()
-            .as_ref()
-            .and_then(|player| {
-                let player = player.borrow();
-                player.table.as_ref().map(|t| t.telemetry_enabled())
-            })
-            .unwrap_or(false)
-    })
+    with_player(|player| player.table.as_ref().map(|t| t.telemetry_enabled()))
+        .flatten()
+        .unwrap_or(false)
 }
 
 /// The last `seconds` of the record, as JSON, or `None` if no table is loaded.
@@ -1144,30 +1108,24 @@ pub fn telemetry_enabled() -> bool {
 /// to somebody reading the file later, so the wall clock goes in here.
 #[wasm_bindgen(js_name = telemetryDump)]
 pub fn telemetry_dump(seconds: f64, note: &str) -> Option<String> {
-    PLAYER.with(|p| {
-        let player = p.borrow();
-        let player = player.as_ref()?;
-        let player = player.borrow();
+    with_player(|player| {
         let table = player.table.as_ref()?;
         table.telemetry_mark(note);
         Some(table.telemetry_dump(seconds, note))
     })
+    .flatten()
 }
 
 /// How much history is being held: samples, then edges.
 #[wasm_bindgen(js_name = telemetryHeld)]
 pub fn telemetry_held() -> Vec<u32> {
-    PLAYER.with(|p| {
-        p.borrow()
-            .as_ref()
-            .and_then(|player| {
-                let player = player.borrow();
-                let table = player.table.as_ref()?;
-                let (samples, events) = table.telemetry_held();
-                Some(vec![samples as u32, events as u32])
-            })
-            .unwrap_or_default()
+    with_player(|player| {
+        let table = player.table.as_ref()?;
+        let (samples, events) = table.telemetry_held();
+        Some(vec![samples as u32, events as u32])
     })
+    .flatten()
+    .unwrap_or_default()
 }
 
 /// Records something outside the frame that held the main thread.
@@ -1182,12 +1140,7 @@ pub fn telemetry_held() -> Vec<u32> {
 /// hand over anything it thinks was slow without having to decide first.
 #[wasm_bindgen(js_name = notePause)]
 pub fn note_pause(source: &str, ms: f32) {
-    PLAYER.with(|p| {
-        let player = p.borrow();
-        let Some(player) = player.as_ref() else {
-            return;
-        };
-        let player = player.borrow();
+    with_player(|player| {
         let Some(table) = player.table.as_ref() else {
             return;
         };
@@ -1369,7 +1322,10 @@ fn reattach(
     width: u32,
     height: u32,
 ) -> Result<(), JsValue> {
-    let mut running = player.borrow_mut();
+    let mut running = player.try_borrow_mut().map_err(|_| {
+        wedged_notice();
+        JsValue::from_str("the player is wedged after an earlier crash; reload the page")
+    })?;
     running
         .renderer
         .attach(target, width, height)
@@ -1437,19 +1393,16 @@ fn install_and_run(renderer: TableRenderer, surface: Surface) {
 /// main-thread path, which measures for itself.
 #[wasm_bindgen(js_name = resizeSurface)]
 pub fn resize_surface(width: u32, height: u32) {
-    PLAYER.with(|p| {
-        if let Some(player) = p.borrow().as_ref() {
-            let mut player = player.borrow_mut();
-            let (width, height) = (width.max(1), height.max(1));
-            match &player.surface {
-                Surface::Offscreen { canvas, .. } => {
-                    canvas.set_width(width);
-                    canvas.set_height(height);
-                }
-                Surface::Dom { .. } => return,
+    with_player(|player| {
+        let (width, height) = (width.max(1), height.max(1));
+        match &player.surface {
+            Surface::Offscreen { canvas, .. } => {
+                canvas.set_width(width);
+                canvas.set_height(height);
             }
-            player.renderer.resize(width, height);
+            Surface::Dom { .. } => return,
         }
+        player.renderer.resize(width, height);
     });
 }
 
@@ -1461,12 +1414,9 @@ pub fn resize_surface(width: u32, height: u32) {
 /// not drain while somebody reads the table list.
 #[wasm_bindgen(js_name = setVisible)]
 pub fn set_visible(visible: bool) {
-    PLAYER.with(|p| {
-        if let Some(player) = p.borrow().as_ref() {
-            let mut player = player.borrow_mut();
-            if let Surface::Offscreen { visible: v, .. } = &mut player.surface {
-                *v = visible;
-            }
+    with_player(|player| {
+        if let Surface::Offscreen { visible: v, .. } = &mut player.surface {
+            *v = visible;
         }
     });
 }
@@ -1482,13 +1432,10 @@ pub fn set_visible(visible: bool) {
 /// inspection.
 #[wasm_bindgen(js_name = cameraOrbit)]
 pub fn camera_orbit(dx: f32, dy: f32) {
-    PLAYER.with(|p| {
-        if let Some(player) = p.borrow().as_ref() {
-            let mut player = player.borrow_mut();
-            let camera = &mut player.renderer.camera;
-            camera.azimuth -= dx * 0.3;
-            camera.inclination = (camera.inclination + dy * 0.3).clamp(5.0, 89.0);
-        }
+    with_player(|player| {
+        let camera = &mut player.renderer.camera;
+        camera.azimuth -= dx * 0.3;
+        camera.inclination = (camera.inclination + dy * 0.3).clamp(5.0, 89.0);
     });
 }
 
@@ -1637,13 +1584,8 @@ pub fn apply_gi_bake(
                 .collect()
         })
         .collect();
-    PLAYER.with(|p| {
-        if let Some(player) = p.borrow().as_ref() {
-            player
-                .borrow_mut()
-                .renderer
-                .apply_gi_bake(&bake, &group_names);
-        }
+    with_player(|player| {
+        player.renderer.apply_gi_bake(&bake, &group_names);
     });
     Ok(())
 }
@@ -1657,26 +1599,20 @@ pub fn apply_gi_bake(
 /// very same override in its settings.
 #[wasm_bindgen(js_name = setDayNight)]
 pub fn set_day_night(scale: f32) {
-    PLAYER.with(|p| {
-        if let Some(player) = p.borrow().as_ref() {
-            player
-                .borrow_mut()
-                .renderer
-                .set_day_night((scale >= 0.0).then_some(scale));
-        }
+    with_player(|player| {
+        player
+            .renderer
+            .set_day_night((scale >= 0.0).then_some(scale));
     });
 }
 
 /// Zooms the camera by one wheel notch, in or out.
 #[wasm_bindgen(js_name = cameraZoom)]
 pub fn camera_zoom(out: bool) {
-    PLAYER.with(|p| {
-        if let Some(player) = p.borrow().as_ref() {
-            let mut player = player.borrow_mut();
-            let factor = if out { 1.1 } else { 1.0 / 1.1 };
-            let camera = &mut player.renderer.camera;
-            camera.distance = (camera.distance * factor).clamp(100.0, 50_000.0);
-        }
+    with_player(|player| {
+        let factor = if out { 1.1 } else { 1.0 / 1.1 };
+        let camera = &mut player.renderer.camera;
+        camera.distance = (camera.distance * factor).clamp(100.0, 50_000.0);
     });
 }
 
@@ -1699,7 +1635,10 @@ pub fn load_table(bytes: &[u8]) -> Result<SceneStats, JsValue> {
         let player = borrow
             .as_ref()
             .ok_or_else(|| JsValue::from_str("the player is not started"))?;
-        let mut player = player.borrow_mut();
+        let mut player = player.try_borrow_mut().map_err(|_| {
+            wedged_notice();
+            JsValue::from_str("the player is wedged after an earlier crash; reload the page")
+        })?;
 
         // The physics comes out of the same parse as the geometry. Building the
         // table also takes the moving parts **out** of `scene`, so this has to
