@@ -18,6 +18,5 @@ vpw-ws = { version = "0.1.0", path = "../vpw-ws" }
 miniz_oxide = "0.8"
 
 [dev-dependencies]
-zip = "6"
 pollster = "0.4"
 vpw-render = { version = "0.1.0", path = "../vpw-render" }

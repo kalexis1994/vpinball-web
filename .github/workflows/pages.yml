@@ -55,6 +55,12 @@ jobs:
       - name: Lints
         run: cargo clippy --workspace --all-targets
 
+      # The player is `#[cfg(target_arch = "wasm32")]` all the way down, so the
+      # workspace pass above sees an empty crate. This is the one surface the
+      # page actually talks to; lint it for the target it is written for.
+      - name: Lints, wasm surface
+        run: cargo clippy -p vpw-player --target wasm32-unknown-unknown
+
       # The tests that need a real table or a real ROM skip themselves and say
       # so: neither is in the repository, and neither can be. The rest — the
       # physics, the CPUs, the sound chips, the interpreter — do not need one.

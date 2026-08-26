@@ -21,8 +21,8 @@ out: this is a player and does not have them.
 | | |
 |---|---|
 | runtime functions in the files this port claims | 322 |
-| named somewhere in the port | 198 (61%) |
-| never mentioned | 124 |
+| named somewhere in the port | 209 (64%) |
+| never mentioned | 113 |
 
 ## PhysicsEngine.cpp — 4/17
 
@@ -57,11 +57,10 @@ Every runtime function has a counterpart by name.
 
 Every runtime function has a counterpart by name.
 
-## core.c — 7/59
+## core.c — 13/59
 
 Never mentioned in the port:
 
-- [ ] `OnSolenoid` (core.c:68)
 - [ ] `OnStateChange` (core.c:69)
 - [ ] `vp_getSolMask64` (core.c:70)
 - [ ] `vp_getDip` (core.c:71)
@@ -83,11 +82,8 @@ Never mentioned in the port:
 - [ ] `core_textOut` (core.c:1895)
 - [ ] `core_setLamp` (core.c:2092)
 - [ ] `core_setLampBlank` (core.c:2099)
-- [ ] `core_getSw` (core.c:2117)
-- [ ] `core_getSwCol` (core.c:2122)
 - [ ] `core_setSw` (core.c:2136)
 - [ ] `core_updInvSw` (core.c:2155)
-- [ ] `core_getSol` (core.c:2173)
 - [ ] `core_getPulsedSol` (core.c:2230)
 - [ ] `core_getAllSol` (core.c:2242)
 - [ ] `core_getAllPhysicSols` (core.c:2286)
@@ -108,8 +104,6 @@ Never mentioned in the port:
 - [ ] `core_write_pwm_output_8b` (core.c:3346)
 - [ ] `core_write_masked_pwm_output_8b` (core.c:3363)
 - [ ] `core_write_pwm_output_lamp_matrix` (core.c:3381)
-- [ ] `core_dmd_pwm_init` (core.c:3478)
-- [ ] `core_dmd_submit_frame` (core.c:3579)
 - [ ] `core_sound_throttle_adj` (core.c:3913)
 - [ ] `core_get_dmd_data` (core.c:3961)
 - [ ] `machine_add_timer` (core.c:3978)
@@ -121,15 +115,13 @@ Never mentioned in the port:
 - [ ] `Flipper::UpdatePhysicsSettings` (flipper.cpp:193)
 - [ ] `Flipper::SetVertices` (flipper.cpp:272)
 
-## gate.cpp — 6/11
+## gate.cpp — 8/11
 
 Never mentioned in the port:
 
 - [ ] `Gate::SetGateType` (gate.cpp:33)
 - [ ] `Gate::GetOpenAngle` (gate.cpp:145)
-- [ ] `Gate::SetOpenAngle` (gate.cpp:150)
 - [ ] `Gate::GetCloseAngle` (gate.cpp:169)
-- [ ] `Gate::SetCloseAngle` (gate.cpp:172)
 
 ## hitball.cpp — 14/15
 
@@ -167,13 +159,9 @@ Never mentioned in the port:
 - [ ] `HitTarget::SetMeshType` (hittarget.cpp:39)
 - [ ] `HitTarget::TransformVertices` (hittarget.cpp:423)
 
-## kicker.cpp — 14/17
+## kicker.cpp — 17/17
 
-Never mentioned in the port:
-
-- [ ] `Kicker::KickXYZ` (kicker.cpp:704)
-- [ ] `Kicker::KickZ` (kicker.cpp:763)
-- [ ] `KickerHitCircle::DoChangeBallVelocity` (kicker.cpp:1043)
+Every runtime function has a counterpart by name.
 
 ## quadtree.cpp — 8/17
 

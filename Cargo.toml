@@ -6,7 +6,7 @@ members = ["crates/*"]
 version = "0.1.0"
 edition = "2024"
 license = "GPL-3.0-or-later"
-repository = "https://github.com/vpinball/vpinball"
+repository = "https://github.com/kalexis1994/vpinball-web"
 
 [workspace.dependencies]
 vpw-arm7     = { path = "crates/vpw-arm7" }
