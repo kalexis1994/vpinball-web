@@ -2171,6 +2171,7 @@ version = "0.1.0"
 dependencies = [
  "vpw-arm7",
  "vpw-at91",
+ "vpw-audio",
  "vpw-bus",
  "vpw-m6809",
  "zip",

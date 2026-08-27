@@ -35,13 +35,23 @@ fn main() {
             machine.load_display_rom(d).expect("it fits");
         }
         if with_sound {
-            let s = set.sound;
-            if let (Some(b), Some(u7), [Some(a), Some(bb), Some(c), Some(d)]) = (
-                find(&roms, s.bios),
-                find(&roms, s.u7),
-                s.samples.map(|n| find(&roms, n)),
-            ) {
-                machine.load_sound(b, u7, [a, bb, c, d]);
+            match set.sound {
+                vpw_ws::games::Sound::At91 { bios, u7, samples } => {
+                    if let (Some(b), Some(u7), [Some(a), Some(bb), Some(c), Some(d)]) = (
+                        find(&roms, bios),
+                        find(&roms, u7),
+                        samples.map(|n| find(&roms, n)),
+                    ) {
+                        machine.load_sound(b, u7, [a, bb, c, d]);
+                    }
+                }
+                vpw_ws::games::Sound::Bsmt { u7, samples } => {
+                    if let (Some(u7), [Some(a), Some(bb), Some(c), Some(d)]) =
+                        (find(&roms, u7), samples.map(|n| find(&roms, n)))
+                    {
+                        machine.load_sound_bsmt(u7, [a, bb, c, d]);
+                    }
+                }
             }
         }
         machine.board.switches.set_dedicated(0, false);

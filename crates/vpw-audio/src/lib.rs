@@ -27,6 +27,7 @@
 //! ```
 
 pub mod biquad;
+pub mod bsmt2000;
 mod cvsd;
 mod dac;
 mod dcblock;

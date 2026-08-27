@@ -27,12 +27,25 @@ pub struct Game {
     pub fast_flips: Option<u16>,
 }
 
-/// The five images a Stern sound board is built from.
+/// The images a game's sound board is built from — and which board that is.
+///
+/// Two generations wore the same connector. Sega and early Stern shipped the
+/// BSMT2000 board: a 6809 whose whole firmware is `u7`, no BIOS anywhere.
+/// From LOTR on, an AT91 emulates that chip in software and carries the
+/// two-megabyte `bios.u8` beside the game's images.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Sound {
-    pub bios: &'static str,
-    pub u7: &'static str,
-    pub samples: [&'static str; 4],
+pub enum Sound {
+    /// The AT91 generation. See [`vpw_at91`] by way of `crate::sound`.
+    At91 {
+        bios: &'static str,
+        u7: &'static str,
+        samples: [&'static str; 4],
+    },
+    /// The BSMT2000 generation. See `crate::de2s`.
+    Bsmt {
+        u7: &'static str,
+        samples: [&'static str; 4],
+    },
 }
 
 /// Every set this knows.
@@ -43,16 +56,12 @@ pub struct Sound {
 const GAMES: &[Game] = &[
     Game {
         // South Park (Sega 1999): the other end of the Whitestar era. Same
-        // main board and display board as LOTR; the sound board is not the
-        // AT91 but its ancestor, the Data East BSMT2000 board (`se.c:357`
-        // initialises `SNDBRD_DE2S` for this generation) — so the zip has no
-        // `bios.u8`, the sound entries below never all match, and the loader
-        // takes the silent path until that board exists here.
+        // main board and display board as LOTR; the sound board is the
+        // BSMT2000 generation (`se.c:357` initialises `SNDBRD_DE2S`).
         set: "sprk_103",
         cpu: "spkcpu",
         display: "spdsp",
-        sound: Sound {
-            bios: "bios.u8",
+        sound: Sound::Bsmt {
             u7: "spku7",
             samples: ["spku17", "spku21", "spku36", "spku37"],
         },
@@ -71,7 +80,7 @@ const GAMES: &[Game] = &[
         set: "lotr",
         cpu: "lotrcpua",
         display: "lotrdspa",
-        sound: Sound {
+        sound: Sound::At91 {
             bios: "bios.u8",
             u7: "lotr-u7",
             samples: ["lotr-u17", "lotr-u21", "lotr-u36", "lotr-u37"],

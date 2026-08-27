@@ -49,18 +49,28 @@ fn main() {
             display.len() / 1024
         );
     }
-    // The sound board, if the zip has all five of its images.
-    let sound = set.sound;
-    match (
-        find(&roms, sound.bios),
-        find(&roms, sound.u7),
-        sound.samples.map(|n| find(&roms, n)),
-    ) {
-        (Some(bios), Some(u7), [Some(a), Some(b), Some(c), Some(d)]) => {
-            machine.load_sound(bios, u7, [a, b, c, d]);
-            println!("loading the sound board's five images");
+    // The sound board, if the zip has all of its images.
+    match set.sound {
+        vpw_ws::games::Sound::At91 { bios, u7, samples } => match (
+            find(&roms, bios),
+            find(&roms, u7),
+            samples.map(|n| find(&roms, n)),
+        ) {
+            (Some(bios), Some(u7), [Some(a), Some(b), Some(c), Some(d)]) => {
+                machine.load_sound(bios, u7, [a, b, c, d]);
+                println!("loading the sound board's five images");
+            }
+            _ => println!("the sound board's images are not all here; running silent"),
+        },
+        vpw_ws::games::Sound::Bsmt { u7, samples } => {
+            match (find(&roms, u7), samples.map(|n| find(&roms, n))) {
+                (Some(u7), [Some(a), Some(b), Some(c), Some(d)]) => {
+                    machine.load_sound_bsmt(u7, [a, b, c, d]);
+                    println!("loading the BSMT board's images");
+                }
+                _ => println!("the sound board's images are not all here; running silent"),
+            }
         }
-        _ => println!("the sound board's images are not all here; running silent"),
     }
     println!("reset vector -> pc {:04x}", machine.cpu.pc);
     println!();
@@ -135,6 +145,10 @@ fn main() {
         seconds / real
     );
     if let Some(s) = &machine.sound {
+        let vpw_ws::AnySound::At91(s) = s else {
+            println!("sound: the BSMT generation; ws_boot only inspects the AT91");
+            return;
+        };
         let (taken, reads, enabled, pc) = s.diagnostics();
         println!("  sound board     pc {pc:08x}, aic enabled {enabled:08x}");
         println!("    fast irqs     {taken}");

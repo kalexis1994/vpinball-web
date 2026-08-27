@@ -484,17 +484,24 @@ impl Machine {
         // The sound board is a third processor with five images of its own. A
         // set without them plays silently rather than not at all, which is
         // what a machine with the sound board unplugged does.
-        let sound = game.sound;
         let images_for = |name: &str| pick_like(images, name);
-        match (
-            images_for(sound.bios),
-            images_for(sound.u7),
-            sound.samples.map(images_for),
-        ) {
-            (Some(bios), Some(u7), [Some(a), Some(b), Some(c), Some(d)]) => {
-                machine.load_sound(bios, u7, [a, b, c, d]);
+        match game.sound {
+            vpw_ws::games::Sound::At91 { bios, u7, samples } => {
+                match (images_for(bios), images_for(u7), samples.map(images_for)) {
+                    (Some(bios), Some(u7), [Some(a), Some(b), Some(c), Some(d)]) => {
+                        machine.load_sound(bios, u7, [a, b, c, d]);
+                    }
+                    _ => log::warn!("{}: the sound board's images are not all here", game.set),
+                }
             }
-            _ => log::warn!("{}: the sound board's images are not all here", game.set),
+            vpw_ws::games::Sound::Bsmt { u7, samples } => {
+                match (images_for(u7), samples.map(images_for)) {
+                    (Some(u7), [Some(a), Some(b), Some(c), Some(d)]) => {
+                        machine.load_sound_bsmt(u7, [a, b, c, d]);
+                    }
+                    _ => log::warn!("{}: the sound board's images are not all here", game.set),
+                }
+            }
         }
         if let Some(saved) = cmos {
             let ram = machine.board.ram_mut();

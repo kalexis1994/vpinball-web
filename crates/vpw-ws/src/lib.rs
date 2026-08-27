@@ -34,6 +34,7 @@
 //! > otherwise the flickering lamps during modes are always on!
 
 pub mod board;
+pub mod de2s;
 pub mod dmd;
 pub mod games;
 pub mod io;
@@ -82,8 +83,10 @@ pub struct Whitestar {
     pub board: Board,
     /// The display, if this game's board was given one. See [`dmd::Dmd`].
     pub dmd: Option<Box<dmd::Dmd>>,
-    /// The sound board, if this game's was given its ROMs. See [`sound`].
-    pub sound: Option<Box<sound::SoundBoard>>,
+    /// The sound board, if this game's was given its ROMs — the AT91
+    /// generation ([`sound`]) or the BSMT2000 one ([`de2s`]), whichever the
+    /// game shipped with.
+    pub sound: Option<AnySound>,
     /// Cycles since reset.
     cycle: u64,
     next_firq: u64,
@@ -94,6 +97,55 @@ pub struct Whitestar {
     /// How many FIRQs have been raised, for finding out whether the board is
     /// taking them at all.
     pub firqs: u64,
+}
+
+/// One of the two sound boards a Whitestar game can carry.
+///
+/// An enum and not a trait object, because there are exactly two and the
+/// machine wants to speak to each in its own dialect: the AT91 answers the
+/// CPU board on PLIN and SST0, the BSMT board never does.
+pub enum AnySound {
+    /// The AT91 generation: LOTR and later Stern. See [`sound`].
+    At91(Box<sound::SoundBoard>),
+    /// The BSMT2000 generation: Sega and early Stern. See [`de2s`].
+    Bsmt(Box<de2s::De2s>),
+}
+
+impl AnySound {
+    fn send(&mut self, command: u8) {
+        match self {
+            Self::At91(s) => s.send(command),
+            Self::Bsmt(s) => s.send(command),
+        }
+    }
+
+    fn catch_up(&mut self, game_cycle: u64) {
+        match self {
+            Self::At91(s) => s.catch_up(game_cycle),
+            Self::Bsmt(s) => s.catch_up(game_cycle),
+        }
+    }
+
+    fn produced(&self) -> u64 {
+        match self {
+            Self::At91(s) => s.produced,
+            Self::Bsmt(s) => s.produced,
+        }
+    }
+
+    fn take_audio(&mut self) -> Vec<(i16, i16)> {
+        match self {
+            Self::At91(s) => s.take_audio(),
+            Self::Bsmt(s) => s.take_audio(),
+        }
+    }
+
+    fn take_audio_at(&mut self, rate: u32) -> Vec<f32> {
+        match self {
+            Self::At91(s) => s.take_audio_at(rate),
+            Self::Bsmt(s) => s.take_audio_at(rate),
+        }
+    }
 }
 
 impl Whitestar {
@@ -142,7 +194,14 @@ impl Whitestar {
         for (i, image) in samples.iter().enumerate() {
             board.board_mut().load_samples(i, image);
         }
-        self.sound = Some(Box::new(board));
+        self.sound = Some(AnySound::At91(Box::new(board)));
+    }
+
+    /// Gives the machine the earlier generation's sound board instead: the
+    /// 6809-and-BSMT2000 one, which has no BIOS — the program in `u7` is the
+    /// whole firmware.
+    pub fn load_sound_bsmt(&mut self, u7: &[u8], samples: [&[u8]; 4]) {
+        self.sound = Some(AnySound::Bsmt(Box::new(de2s::De2s::new(u7, samples))));
     }
 
     /// The stereo samples the sound board has made since this was last asked.
@@ -162,7 +221,7 @@ impl Whitestar {
     /// a second is one doing its job with nothing to say.
     pub fn sound_stats(&self) -> (bool, u64) {
         match &self.sound {
-            Some(s) => (true, s.produced),
+            Some(s) => (true, s.produced()),
             None => (false, 0),
         }
     }
@@ -223,10 +282,13 @@ impl Whitestar {
                 sound.send(self.board.sound_latch);
             }
             sound.catch_up(self.cycle);
-            // And it answers back on two lines the CPU board reads as ports:
-            // PLIN at `$3500` and SSTO in bit 1 of `$3700` (`se.c:734`).
-            self.board.sound_plin = sound.plin();
-            self.board.sound_sst0 = sound.sst0();
+            // The AT91 answers back on two lines the CPU board reads as
+            // ports: PLIN at `$3500` and SSTO in bit 1 of `$3700`
+            // (`se.c:734`). The BSMT board has no such wires.
+            if let AnySound::At91(s) = sound {
+                self.board.sound_plin = s.plin();
+                self.board.sound_sst0 = s.sst0();
+            }
         }
 
         // The display board runs on its own 2 MHz clock, which is this one's,
