@@ -218,6 +218,12 @@ export function Player({ table, title, source, rom, onExit }: Props) {
       // neither `Action::from_key_code` nor `vp_key_code` maps it — so cycling
       // the view does not also do something on the playfield.
       if (e.code === 'KeyC' && !e.repeat) {
+        if (settings().flat) {
+          // The flat renderer holds the camera, and a key that silently does
+          // nothing reads as a bug. Say why, where the tilt notice lives.
+          setNotice('The flat renderer holds the camera — switch to Full 3D in Settings to move it.');
+          return;
+        }
         const next = nextCameraView(settings().camera);
         // Through the setting rather than straight to the player, so the key
         // and the menu cannot disagree and the choice outlives the session.

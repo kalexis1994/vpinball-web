@@ -54,6 +54,15 @@ function host(): Promise<PlayerHost> {
   });
 }
 
+// A back door for the terminal, in development only: any player op, straight
+// from the console. `__vpw.call('displayImage', [512, 128])` is how a bug
+// that only shows on one machine gets diagnosed on that machine.
+if (import.meta.env.DEV) {
+  (window as unknown as Record<string, unknown>).__vpw = {
+    call: (op: string, args: unknown[] = []) => host().then((h) => h.call(op, args)),
+  };
+}
+
 /**
  * Holds the shooter rod where a finger is holding it, from 0 at rest to 1 drawn
  * all the way back.

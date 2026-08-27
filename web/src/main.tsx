@@ -63,6 +63,25 @@ function watchForUpdates(registration: ServiceWorkerRegistration): void {
   });
 }
 
+// The dev server evicts any service worker squatting on its origin. A machine
+// that once opened a *production* build on this same address keeps that
+// build's worker registered, and the worker serves its cached shell over
+// whatever the dev server has — which reads as "I reloaded and nothing
+// changed", for days. One reload after this runs, the origin is clean.
+if (import.meta.env.DEV && 'serviceWorker' in navigator) {
+  void navigator.serviceWorker.getRegistrations().then((registrations) => {
+    for (const r of registrations) {
+      console.warn('[dev] unregistering a stale service worker; reload once more');
+      void r.unregister();
+    }
+  });
+  if ('caches' in window) {
+    void caches.keys().then((keys) => {
+      for (const k of keys) void caches.delete(k);
+    });
+  }
+}
+
 if (import.meta.env.PROD && 'serviceWorker' in navigator) {
   window.addEventListener('load', () => {
     const base = import.meta.env.BASE_URL;
