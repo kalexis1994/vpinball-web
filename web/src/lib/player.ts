@@ -524,9 +524,13 @@ export function nextCameraView(from: CameraView): CameraView {
  * size — the caller keeps what it already drew rather than being handed a
  * megabyte of unchanged pixels ten times a second.
  */
-export async function displayImage(width: number, height: number): Promise<Uint8Array | null> {
+export async function displayImage(
+  width: number,
+  height: number,
+  refresh = false,
+): Promise<Uint8Array | null> {
   if (!started) return null;
-  const rgba = await (await host()).call<Uint8Array>('displayImage', [width, height]);
+  const rgba = await (await host()).call<Uint8Array>('displayImage', [width, height, refresh]);
   return rgba.length > 0 ? rgba : null;
 }
 

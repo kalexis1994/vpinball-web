@@ -860,7 +860,7 @@ pub fn press_key(code: &str, pressed: bool) {
 /// call at this size. A megabyte of unchanged pixels ten times a second is a
 /// megabyte of unchanged pixels: the caller keeps what it already drew.
 #[wasm_bindgen(js_name = displayImage)]
-pub fn display_image(width: u32, height: u32) -> Vec<u8> {
+pub fn display_image(width: u32, height: u32, refresh: bool) -> Vec<u8> {
     with_player(|player| {
         let Some(table) = player.table.as_ref() else {
             return Vec::new();
@@ -869,6 +869,13 @@ pub fn display_image(width: u32, height: u32) -> Vec<u8> {
         // deserves both: a row of segments, or a panel of dots. The dots are
         // digested rather than kept — four thousand bytes against a frame
         // time — and either way an unchanged display costs nothing to ask.
+        //
+        // `refresh` bypasses the unchanged-answer skip for a caller that has
+        // nothing on its canvas yet. The skip remembers only that *somebody*
+        // was told, and in development React mounts every component twice: the
+        // first mount's poll collects the picture, dies, and the mount that
+        // stays would otherwise wait for the machine to change a display that
+        // — on a game-over screen — holds still for minutes.
         let (dots, dw, dh) = table.machine().dmd();
         if !dots.is_empty() {
             let digest: Vec<u16> = dots
@@ -876,7 +883,7 @@ pub fn display_image(width: u32, height: u32) -> Vec<u8> {
                 .map(|c| c.iter().map(|&d| u16::from(d)).sum())
                 .collect();
             let asked = (digest, width, height);
-            if player.display_sent.as_ref() == Some(&asked) {
+            if !refresh && player.display_sent.as_ref() == Some(&asked) {
                 return Vec::new();
             }
             player.display_sent = Some(asked);
@@ -887,7 +894,7 @@ pub fn display_image(width: u32, height: u32) -> Vec<u8> {
             return Vec::new();
         }
         let asked = (segments.clone(), width, height);
-        if player.display_sent.as_ref() == Some(&asked) {
+        if !refresh && player.display_sent.as_ref() == Some(&asked) {
             return Vec::new();
         }
         player.display_sent = Some(asked);

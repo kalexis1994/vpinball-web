@@ -30,6 +30,10 @@ interface Props {
 
 export function ScoreDisplay({ view }: Props) {
   const canvas = useRef<HTMLCanvasElement | null>(null);
+  /** The newest picture, kept until the canvas exists to draw it on. The
+   * first picture always arrives before the canvas: the canvas is only
+   * rendered once `lit`, and `lit` is what the first picture switches on. */
+  const pending = useRef<Uint8Array | null>(null);
   const [narrow, setNarrow] = useState(() => window.innerWidth < NARROW_PX);
   const [inShot, setInShot] = useState(false);
   const [lit, setLit] = useState(false);
@@ -83,17 +87,23 @@ export function ScoreDisplay({ view }: Props) {
   // actually said something new — so a still display costs nothing at all.
   useEffect(() => {
     let alive = true;
+    // Until a picture has arrived it asks for a refresh: the player's
+    // change-skip remembers that *somebody* was told, and that somebody can
+    // be a mount of this component that no longer exists.
+    let received = false;
     const timer = window.setInterval(() => {
-      void displayImage(SIZE.width, SIZE.height).then((rgba) => {
+      void displayImage(SIZE.width, SIZE.height, !received).then((rgba) => {
         if (!alive || !rgba) return;
-        const ctx = canvas.current?.getContext('2d');
-        if (!ctx) return;
-        ctx.putImageData(
-          new ImageData(new Uint8ClampedArray(rgba), SIZE.width, SIZE.height),
-          0,
-          0,
-        );
+        received = true;
+        pending.current = rgba;
+        // Lit first, drawn second: the canvas does not exist until `lit`
+        // renders it, so the picture waits in the ref and the effect below
+        // paints it the moment the canvas is real. Doing the paint here and
+        // the flag after was the deadlock that kept this panel dark: the
+        // first picture hit a null canvas, the change-skip then had nothing
+        // new to say, and `lit` never came.
         setLit(true);
+        paint();
       });
     }, 100);
     return () => {
@@ -101,6 +111,22 @@ export function ScoreDisplay({ view }: Props) {
       window.clearInterval(timer);
     };
   }, []);
+
+  // The catch-up paint, for the picture that arrived before the canvas.
+  useEffect(() => {
+    paint();
+  }, [lit]);
+
+  function paint() {
+    const ctx = canvas.current?.getContext('2d');
+    if (!ctx || !pending.current) return;
+    ctx.putImageData(
+      new ImageData(new Uint8ClampedArray(pending.current), SIZE.width, SIZE.height),
+      0,
+      0,
+    );
+    pending.current = null;
+  }
 
   // Nothing to show: a table with no ROM rolls a ball perfectly well and has no
   // score, and an empty panel floating over it is furniture.
