@@ -822,6 +822,16 @@ pub fn render_audio(frames: usize) -> Vec<f32> {
     .unwrap_or_default()
 }
 
+/// One frame by hand: physics, machine, render — exactly what the rAF loop
+/// runs, callable when rAF will not fire. A hidden tab freezes
+/// `requestAnimationFrame` and with it the whole player, which makes every
+/// "does it actually run" question unanswerable from a harness; this is the
+/// answer's crank. `__vpw.call('pump')` from the console turns it.
+#[wasm_bindgen]
+pub fn pump() {
+    with_player(|player| player.frame(clock_ms()));
+}
+
 /// Presses or releases a key, by the same `KeyboardEvent.code` the keyboard
 /// handler uses.
 ///
