@@ -96,6 +96,13 @@ pub struct Controls {
     /// Whether the table was already tilted the last time we looked, so
     /// everything is released once and not on every frame.
     tilt_seen: bool,
+    /// Which flipper buttons are physically held, whatever the flippers are
+    /// doing about it. Kept so the relay coming back finds the buttons where
+    /// the player left them.
+    holding: [bool; 2],
+    /// Whether the machine is giving the flippers power. See
+    /// [`Controls::set_flippers_powered`].
+    powered: bool,
 }
 
 impl Controls {
@@ -117,6 +124,28 @@ impl Controls {
             pulling: false,
             nudging: [false; 3],
             tilt_seen: false,
+            holding: [false; 2],
+            powered: true,
+        }
+    }
+
+    /// Follows the machine's flipper relay.
+    ///
+    /// A real machine cuts flipper power between balls, in the operator's
+    /// menu and on a tilt — the same relay that silences the flipper sound —
+    /// and a button held across the cut behaves like the real thing: the
+    /// flipper falls when the power goes, and rises again the moment it
+    /// comes back, which is also what `vpmFlips` does (`core.vbs:2132`).
+    pub fn set_flippers_powered(&mut self, engine: &mut Engine, powered: bool) {
+        if self.powered == powered {
+            return;
+        }
+        self.powered = powered;
+        let tilt = engine.is_tilted();
+        for (side, &held) in [&self.left, &self.right].into_iter().zip(&self.holding) {
+            for &i in side {
+                engine.set_flipper_solenoid(i, held && powered && !tilt);
+            }
         }
     }
 
@@ -144,13 +173,15 @@ impl Controls {
         let tilt = engine.is_tilted();
         match action {
             Action::LeftFlipper => {
+                self.holding[0] = pressed;
                 for &i in &self.left {
-                    engine.set_flipper_solenoid(i, pressed && !tilt);
+                    engine.set_flipper_solenoid(i, pressed && !tilt && self.powered);
                 }
             }
             Action::RightFlipper => {
+                self.holding[1] = pressed;
                 for &i in &self.right {
-                    engine.set_flipper_solenoid(i, pressed && !tilt);
+                    engine.set_flipper_solenoid(i, pressed && !tilt && self.powered);
                 }
             }
             Action::Plunger => {

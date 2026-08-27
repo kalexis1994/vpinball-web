@@ -246,6 +246,38 @@ impl TableRenderer {
         Some([min_x, min_y, max_x - min_x, max_y - min_y])
     }
 
+    /// Where the playfield lands on screen, as `[left, top, width, height]`
+    /// in fractions of the canvas — the companion of
+    /// [`Self::backbox_screen_rect`], for whoever wants to lay furniture in
+    /// the space *beside* the table: in the overhead view a wide window
+    /// leaves gutters either side, and that is where the score panel fits
+    /// without covering a single flipper.
+    pub fn playfield_screen_rect(&self) -> Option<[f32; 4]> {
+        let (table, _) = self.framing?;
+        let (w, h) = self.gpu.size();
+        let vp = self.camera.view_projection(w as f32 / h as f32);
+        let (mut min_x, mut min_y) = (f32::MAX, f32::MAX);
+        let (mut max_x, mut max_y) = (f32::MIN, f32::MIN);
+        for i in 0..4 {
+            let corner = Vec3::new(
+                if i & 1 == 0 { table.min.x } else { table.max.x },
+                if i & 2 == 0 { table.min.y } else { table.max.y },
+                0.0,
+            );
+            let clip = vp * corner.extend(1.0);
+            if clip.w <= 0.0 {
+                return None;
+            }
+            let x = (clip.x / clip.w + 1.0) * 0.5;
+            let y = (1.0 - clip.y / clip.w) * 0.5;
+            min_x = min_x.min(x);
+            max_x = max_x.max(x);
+            min_y = min_y.min(y);
+            max_y = max_y.max(y);
+        }
+        Some([min_x, min_y, max_x - min_x, max_y - min_y])
+    }
+
     /// Where the player is looking from.
     pub fn view(&self) -> crate::camera::View {
         self.view

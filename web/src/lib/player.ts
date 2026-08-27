@@ -521,6 +521,15 @@ export async function displayImage(width: number, height: number): Promise<Uint8
   return rgba.length > 0 ? rgba : null;
 }
 
+/** Where the playfield is on screen: `[left, top, width, height]`, in
+ * fractions of the canvas, or `null` when there is no table. What the score
+ * panel uses to sit in the gutter beside the table rather than on it. */
+export async function playfieldRect(): Promise<[number, number, number, number] | null> {
+  if (!started) return null;
+  const r = await (await host()).call<Float32Array>('playfieldRect');
+  return r.length === 4 ? [r[0], r[1], r[2], r[3]] : null;
+}
+
 /** Where the machine's head is on screen: `[left, top, width, height]`, in
  * fractions of the canvas, or `null` when it is not in shot. */
 export async function backboxRect(): Promise<[number, number, number, number] | null> {

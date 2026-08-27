@@ -14,7 +14,7 @@
 // none above it, and a panel that covers the flippers is worse than no panel.
 
 import { useEffect, useRef, useState } from 'react';
-import { backboxRect, displayImage } from '../lib/player';
+import { backboxRect, displayImage, playfieldRect } from '../lib/player';
 import type { CameraView } from '../lib/settings';
 
 /** Below this the overhead view is the whole screen and nothing else fits. */
@@ -33,6 +33,9 @@ export function ScoreDisplay({ view }: Props) {
   const [narrow, setNarrow] = useState(() => window.innerWidth < NARROW_PX);
   const [inShot, setInShot] = useState(false);
   const [lit, setLit] = useState(false);
+  /** Where the table's right edge lands, 0..1, when the gutter beside it is
+   * worth using; `null` keeps the panel in its corner. */
+  const [gutter, setGutter] = useState<number | null>(null);
 
   useEffect(() => {
     const onResize = () => setNarrow(window.innerWidth < NARROW_PX);
@@ -40,15 +43,34 @@ export function ScoreDisplay({ view }: Props) {
     return () => window.removeEventListener('resize', onResize);
   }, []);
 
-  // Whether the head is in the picture. Asked again on a change of view and on
-  // a slow beat besides, because the framing also moves when the window changes
-  // shape and there is no event for "the renderer reframed".
+  // Whether the head is in the picture, and where the table's edges are.
+  // Asked again on a change of view and on a slow beat besides, because the
+  // framing also moves when the window changes shape and there is no event
+  // for "the renderer reframed".
   useEffect(() => {
     let alive = true;
-    const ask = () =>
+    const ask = () => {
       void backboxRect().then((r) => {
         if (alive) setInShot(r !== null);
       });
+      // Overhead on a wide window leaves gutters either side of the table;
+      // the panel moves into the right one when it fits with padding to
+      // spare, and stays in its corner when it would not.
+      if (view === 'overhead') {
+        void playfieldRect().then((r) => {
+          if (!alive) return;
+          if (!r) {
+            setGutter(null);
+            return;
+          }
+          const right = r[0] + r[2];
+          const room = (1 - right) * window.innerWidth;
+          setGutter(room >= 220 ? right : null);
+        });
+      } else {
+        setGutter(null);
+      }
+    };
     ask();
     const timer = window.setInterval(ask, 500);
     return () => {
@@ -85,12 +107,26 @@ export function ScoreDisplay({ view }: Props) {
   // score, and an empty panel floating over it is furniture.
   if (!lit || inShot || (narrow && view === 'overhead')) return null;
 
+  // In the gutter: centred on the free strip beside the table, vertically
+  // centred, never wider than the strip leaves after its padding.
+  const side =
+    gutter !== null
+      ? {
+          left: `calc(${((gutter + 1) / 2) * 100}% )`,
+          right: 'auto' as const,
+          top: '50%',
+          transform: 'translate(-50%, -50%)',
+          width: `min(22rem, calc(${(1 - gutter) * 100}vw - 3rem))`,
+        }
+      : undefined;
+
   return (
     <canvas
       className="score"
       ref={canvas}
       width={SIZE.width}
       height={SIZE.height}
+      style={side}
       aria-hidden="true"
     />
   );

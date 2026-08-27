@@ -408,6 +408,14 @@ impl Player {
             if table.controls.check_tilt(&mut table.engine.borrow_mut()) {
                 log::trace!("tilt");
             }
+            // The machine's flipper relay has the last word: between balls
+            // and in the menus the flippers go dead — which the flipper
+            // *sound* already did, hanging off the same relay, and a flipper
+            // that moves silently is a flipper the machine said no to.
+            let powered = table.machine().flippers_enabled();
+            table
+                .controls
+                .set_flippers_powered(&mut table.engine.borrow_mut(), powered);
             // The new frame event, before anything is drawn and after the
             // parts have been brought up to date — the original's order
             // (`player.cpp:2132`). It is script work like `game_sync` above,
@@ -871,6 +879,16 @@ pub fn display_image(width: u32, height: u32) -> Vec<u8> {
 ///
 /// Empty when the head is not in shot, which is the signal to put the score
 /// somewhere else rather than to hide it.
+/// Where the playfield lands on screen, as fractions, or empty when there is
+/// no table. The page uses it to park the score panel in the gutter beside
+/// the table instead of on top of it.
+#[wasm_bindgen(js_name = playfieldRect)]
+pub fn playfield_rect() -> Vec<f32> {
+    with_player(|player| player.renderer.playfield_screen_rect().map(|r| r.to_vec()))
+        .flatten()
+        .unwrap_or_default()
+}
+
 #[wasm_bindgen(js_name = backboxRect)]
 pub fn backbox_rect() -> Vec<f32> {
     with_player(|player| player.renderer.backbox_screen_rect().map(|r| r.to_vec()))

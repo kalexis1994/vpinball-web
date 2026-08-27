@@ -754,6 +754,28 @@ impl Machine {
         }
     }
 
+    /// Whether the machine is giving the flippers power right now.
+    ///
+    /// The same wire the flipper *sound* hangs off, which is what makes the
+    /// two agree. On a System 11 the flippers share the switched-solenoid
+    /// relay: between balls, in the operator's menu and on a tilt they go
+    /// dead together with the slingshots (`core_updateSw(locals.ssEn)`,
+    /// `s11.c:358`). On a Whitestar it is the fast-flips flag the ROM keeps
+    /// in its own RAM, which is exactly what `vpmFlips` polls to decide
+    /// whether a flipper key does anything at all (`core.vbs:2132`); a
+    /// firmware from before that flag keeps its flippers live, because this
+    /// port cannot read a relay the ROM never reports. A machine that is not
+    /// running keeps them powered too: a table without its ROM still flips.
+    pub fn flippers_enabled(&self) -> bool {
+        if !self.is_running() {
+            return true;
+        }
+        match &*self.board.borrow() {
+            Hardware::S11(b) => b.board.solenoids.special_enabled(),
+            Hardware::Whitestar(b) => b.board.fast_flip_addr.is_none() || b.board.fast_flips(),
+        }
+    }
+
     /// Every display digit whose segments changed since the last time this was
     /// asked, as `(digit, which segments changed, what they are now)`.
     ///
