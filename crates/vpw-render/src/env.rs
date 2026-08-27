@@ -220,7 +220,7 @@ impl EnvMap {
             match scene.image(&scene.env_image) {
                 Some(img) => match Self::from_image(device, queue, img) {
                     Some(map) => {
-                        log::info!("environment map: table image {:?}", img.name);
+                        log::trace!("environment map: table image {:?}", img.name);
                         return map;
                     }
                     None => log::warn!(
@@ -234,7 +234,7 @@ impl EnvMap {
                 ),
             }
         } else {
-            log::info!("environment map: table names none, using {DEFAULT_SOURCE}");
+            log::trace!("environment map: table names none, using {DEFAULT_SOURCE}");
         }
         Self::default_map(device, queue).expect("the default environment map has to be loadable")
     }

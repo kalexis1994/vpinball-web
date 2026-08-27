@@ -321,7 +321,7 @@ async function ensureGiBake(
             new Uint8Array(bake.data),
             bake.groups,
           ])
-          .then(() => console.info(`[bake] GI lightmaps on: ${bake.layers} groups`))
+          .then(() => console.debug(`[bake] GI lightmaps on: ${bake.layers} groups`))
       : Promise.resolve();
 
   const cached = await readBake(key);
@@ -469,7 +469,7 @@ export async function setEnvironment(env: Environment): Promise<void> {
     const bytes = await roomBytes;
     const copy = bytes.slice();
     const on = await h.call<boolean>('setEnvironment', [copy], [copy.buffer as ArrayBuffer]);
-    if (on) console.info('[env] the room is on');
+    if (on) console.debug('[env] the room is on');
     else console.warn('[env] the player declined the room (no table yet, or the map did not decode)');
   } catch (e) {
     roomBytes = null;

@@ -73,10 +73,10 @@ async function choose(): Promise<PlayerHost> {
       // driver hung — must not hold the whole page on a spinner.
       const capable = await withTimeout(rpc.call<boolean>('probe', [forceWebGl()]), 8_000);
       if (capable) {
-        console.info('[player] running in a worker');
+        console.debug('[player] running in a worker');
         return workerHost(rpc);
       }
-      console.info('[player] no GPU in a worker here; using the main thread');
+      console.debug('[player] no GPU in a worker here; using the main thread');
     } catch (e) {
       console.warn('[player] worker probe failed; using the main thread:', e);
     }

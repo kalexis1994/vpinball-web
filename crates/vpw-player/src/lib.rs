@@ -25,14 +25,44 @@ use wasm_bindgen::prelude::*;
 /// Self-rescheduling closure that drives `requestAnimationFrame`.
 type RafClosure = Closure<dyn FnMut(f64)>;
 
+/// The player's own console logger, replacing the `console_log` crate for
+/// two reasons it could not be configured around. It has no per-module
+/// filter, so opening the gate to our trace chatter also let naga narrate
+/// every WGSL overload resolution — pages of it per shader. And it mapped
+/// `debug` to `console.log`, which Chrome *shows*; here everything below
+/// `info` goes to `console.debug`, the one channel Chrome keeps behind its
+/// Verbose switch. Foreign crates speak only when something is wrong.
+struct ConsoleLogger;
+
+impl log::Log for ConsoleLogger {
+    fn enabled(&self, meta: &log::Metadata) -> bool {
+        meta.target().starts_with("vpw") || meta.level() <= log::Level::Warn
+    }
+
+    fn log(&self, record: &log::Record) {
+        if !self.enabled(record.metadata()) {
+            return;
+        }
+        let msg = wasm_bindgen::JsValue::from_str(&format!("{}", record.args()));
+        match record.level() {
+            log::Level::Error => web_sys::console::error_1(&msg),
+            log::Level::Warn => web_sys::console::warn_1(&msg),
+            log::Level::Info => web_sys::console::info_1(&msg),
+            log::Level::Debug | log::Level::Trace => web_sys::console::debug_1(&msg),
+        }
+    }
+
+    fn flush(&self) {}
+}
+
 /// Initialises logging and the panic hook. Idempotent.
 #[wasm_bindgen(start)]
 pub fn init() {
     console_error_panic_hook::set_once();
-    // Debug and up: the once-a-second stats line logs at debug, which the
-    // console hides behind its Verbose switch — present when wanted, silent
-    // otherwise. The logger has to let it through for the switch to matter.
-    let _ = console_log::init_with_level(log::Level::Debug);
+    static LOGGER: ConsoleLogger = ConsoleLogger;
+    if log::set_logger(&LOGGER).is_ok() {
+        log::set_max_level(log::LevelFilter::Trace);
+    }
 }
 
 /// Loop statistics, so we have numbers from day one: the point of the port is
@@ -219,7 +249,7 @@ impl Player {
             let t = (t as usize).min(SCALES.len() - 1);
             if t != self.scale_tier {
                 self.scale_tier = t;
-                log::info!("pinned to {:.0}% resolution", SCALES[t] * 100.0);
+                log::trace!("pinned to {:.0}% resolution", SCALES[t] * 100.0);
                 self.apply_scale();
             }
             return;
@@ -255,7 +285,7 @@ impl Player {
             && self.scale_tier > 0
         {
             self.scale_tier -= 1;
-            log::info!(
+            log::trace!(
                 "no frames gained: back to {:.0}% and standing down for a minute",
                 SCALES[self.scale_tier] * 100.0
             );
@@ -278,9 +308,9 @@ impl Player {
             // good while; the ladder has found its level.
             if self.climbed_ago <= 5 {
                 self.climb_lockout = 300;
-                log::info!("that resolution did not hold; staying down for a while");
+                log::trace!("that resolution did not hold; staying down for a while");
             }
-            log::info!(
+            log::trace!(
                 "{fps:.0} fps, render {avg:.1} ms: dropping to {:.0}% resolution",
                 SCALES[self.scale_tier] * 100.0
             );
@@ -294,7 +324,7 @@ impl Player {
                 self.scale_tier -= 1;
                 self.calm = 0;
                 self.climbed_ago = 0;
-                log::info!(
+                log::trace!(
                     "{fps:.0} fps, render {avg:.1} ms: back up to {:.0}% resolution",
                     SCALES[self.scale_tier] * 100.0
                 );
@@ -368,7 +398,7 @@ impl Player {
             // Losing the ball to a tilt has to release the flippers, and the
             // `keyup` that would do it may never come.
             if table.controls.check_tilt(&mut table.engine.borrow_mut()) {
-                log::info!("tilt");
+                log::trace!("tilt");
             }
             // The new frame event, before anything is drawn and after the
             // parts have been brought up to date — the original's order
@@ -424,15 +454,14 @@ impl Player {
             .map_or(0, |t| t.machine().sound_stats().1);
         if let Some((fps, tps)) = self.stats.tick(now_ms, ticks, made, render_ms) {
             self.govern();
-            // Once in ten at info, the rest at debug: the HUD reads these
-            // numbers through `loopStats`, and a console that scrolls once a
-            // second buries anything worth reading — but a pulse every ten
-            // keeps the render cost measurable without opening Verbose.
+            // The HUD reads these numbers through `loopStats`; the console
+            // copy lives behind Chrome's Verbose switch, a pulse every ten
+            // seconds and the rest every second.
             self.stats.windows += 1;
             let level = if self.stats.windows.is_multiple_of(10) {
-                log::Level::Info
-            } else {
                 log::Level::Debug
+            } else {
+                log::Level::Trace
             };
             log::log!(
                 level,
@@ -1406,7 +1435,7 @@ pub async fn start(canvas_id: String) -> Result<(), JsValue> {
             }
         };
         if same {
-            log::info!("the player is already on this canvas");
+            log::trace!("the player is already on this canvas");
             return Ok(());
         }
         reattach(
@@ -1422,7 +1451,7 @@ pub async fn start(canvas_id: String) -> Result<(), JsValue> {
     let renderer = TableRenderer::new(wgpu::SurfaceTarget::Canvas(canvas.clone()), width, height)
         .await
         .map_err(|e| JsValue::from_str(&e.to_string()))?;
-    log::info!("WebGPU ready ({width}x{height})");
+    log::trace!("WebGPU ready ({width}x{height})");
     install_and_run(renderer, Surface::Dom { canvas, dpr });
     Ok(())
 }
@@ -1470,7 +1499,7 @@ pub async fn start_offscreen(
     )
     .await
     .map_err(|e| JsValue::from_str(&e.to_string()))?;
-    log::info!("WebGPU ready in a worker ({width}x{height})");
+    log::trace!("WebGPU ready in a worker ({width}x{height})");
     install_and_run(
         renderer,
         Surface::Offscreen {
@@ -1510,7 +1539,7 @@ fn reattach(
     // tries to pay it all at once.
     running.last_ms = clock_ms();
     running.finished_ms = running.last_ms;
-    log::info!("the player moved to a new canvas ({width}x{height})");
+    log::trace!("the player moved to a new canvas ({width}x{height})");
     Ok(())
 }
 
@@ -1675,10 +1704,10 @@ pub fn bake_gi(bytes: &[u8], observe_seconds: f32) -> Result<JsValue, JsValue> {
     let candidates = vpw_render::bake::field_scale_candidates(&scene);
     let observed = observe_groups(&vpx, &candidates, observe_seconds);
     let groups = if observed.is_empty() {
-        log::info!("bake: grouping by names and colours (no machine to watch)");
+        log::trace!("bake: grouping by names and colours (no machine to watch)");
         vpw_render::bake::gi_groups(&scene)
     } else {
-        log::info!(
+        log::trace!(
             "bake: the machine grouped {} lamps into {} groups",
             observed.iter().map(Vec::len).sum::<usize>(),
             observed.len()
@@ -1869,7 +1898,7 @@ pub fn load_table(bytes: &[u8]) -> Result<SceneStats, JsValue> {
 
         {
             let engine = table.engine.borrow();
-            log::info!(
+            log::trace!(
                 "physics: {} shapes, {} triggers, {} moving parts, {} script items",
                 engine.shapes().len(),
                 engine.triggers().len(),
@@ -1884,7 +1913,7 @@ pub fn load_table(bytes: &[u8]) -> Result<SceneStats, JsValue> {
             .stats()
             .ok_or_else(|| JsValue::from_str("the scene did not end up loaded"))?;
 
-        log::info!(
+        log::trace!(
             "table loaded: {} meshes, {} triangles, {} draw calls (one per mesh would be {})",
             s.meshes,
             s.triangles,

@@ -558,7 +558,7 @@ impl Item {
         // on a lamp every frame, and a console with sixty lines a second of
         // the same fact in it has no room left for a different one.
         if !extra.contains_key(name) {
-            log::debug!("{}: '{name}' is not modelled; keeping it as set", self.name);
+            log::trace!("{}: '{name}' is not modelled; keeping it as set", self.name);
         }
         extra.insert(name.into(), value);
     }

@@ -149,7 +149,7 @@ impl Mixer {
             return false;
         }
         if self.voices.len() >= self.max_voices {
-            log::debug!("dropped a sound: {} already playing", self.voices.len());
+            log::trace!("dropped a sound: {} already playing", self.voices.len());
             return false;
         }
         let (left, right) = pan_gains(play.pan, play.gain);

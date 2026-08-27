@@ -105,7 +105,7 @@ export function Player({ table, title, source, rom, onExit }: Props) {
         );
         if (!alive) return;
 
-        console.info('[player] loaded', s);
+        console.debug('[player] loaded', s);
         // The recorder is only useful if it was already running when the thing
         // being chased happened, so it goes on with the table and not on
         // demand. See `vpw_game::telemetry` for what it costs.

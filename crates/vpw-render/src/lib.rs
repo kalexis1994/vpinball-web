@@ -146,7 +146,7 @@ impl GpuContext {
         // identically, so this line is the only place the difference shows.
         {
             let info = adapter.get_info();
-            log::info!("adapter: {} ({:?})", info.name, info.backend);
+            log::trace!("adapter: {} ({:?})", info.name, info.backend);
         }
 
         let (device, queue) = adapter

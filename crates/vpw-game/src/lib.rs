@@ -1576,7 +1576,7 @@ impl Host for TableHost {
     }
 
     fn message(&self, text: &str) {
-        log::info!("table says: {text}");
+        log::trace!("table says: {text}");
         self.state.messages.borrow_mut().push(text.to_string());
         let clock = self.state.clock_ms.get();
         self.state

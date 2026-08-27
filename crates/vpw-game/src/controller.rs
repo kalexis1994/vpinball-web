@@ -462,7 +462,7 @@ impl Machine {
                          is not shaped like a Whitestar set"
                     )
                 })?;
-                log::info!("'{set}': read from the zip's own shape");
+                log::trace!("'{set}': read from the zip's own shape");
                 self.load_whitestar(det, cmos)?;
             }
         }
@@ -979,7 +979,7 @@ impl Controller {
             .load(&set, &zip, self.roms.cmos(&set).as_deref())
         {
             Ok(()) => {
-                log::info!("ROM '{set}' running");
+                log::trace!("ROM '{set}' running");
                 *self.failure.borrow_mut() = None;
                 Ok(Value::Empty)
             }

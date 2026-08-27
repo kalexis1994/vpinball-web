@@ -237,7 +237,7 @@ impl Sounds {
         if name.is_empty() || self.missing.iter().any(|n| &**n == name) {
             return;
         }
-        log::warn!("the script asked for '{name}', which the table does not have");
+        log::trace!("the script asked for '{name}', which the table does not have");
         self.missing.push(name.into());
     }
 
