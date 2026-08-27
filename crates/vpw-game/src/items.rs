@@ -552,8 +552,14 @@ impl Item {
     }
 
     fn remember(&self, name: &str, value: Value) {
-        log::debug!("{}: '{name}' is not modelled; keeping it as set", self.name);
-        self.visual.extra.borrow_mut().insert(name.into(), value);
+        let mut extra = self.visual.extra.borrow_mut();
+        // Only the first write is news. South Park's script sets `colorfull`
+        // on a lamp every frame, and a console with sixty lines a second of
+        // the same fact in it has no room left for a different one.
+        if !extra.contains_key(name) {
+            log::debug!("{}: '{name}' is not modelled; keeping it as set", self.name);
+        }
+        extra.insert(name.into(), value);
     }
 
     /// Anything the script set that this port does not model, for a host that

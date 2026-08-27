@@ -58,12 +58,18 @@ export function App() {
   }, [debug, recount]);
 
   if (debug) {
+    // `?table=` and `?rom=` pick any pair out of `debug-assets/`; without
+    // them it is the F-14 it always was. `/debug?table=southpark&rom=sprk_103`
+    // is how a second machine gets exercised without touching IndexedDB.
+    const params = new URLSearchParams(window.location.search);
+    const table = params.get('table') ?? 'f14';
+    const rom = params.get('rom') ?? (table === 'f14' ? 'f14_l1' : '');
     return (
       <Player
         table={null}
-        title="F-14 Tomcat (debug)"
-        source={{ kind: 'url', url: '/debug-assets/f14.vpx' }}
-        rom={{ status: 'required', name: 'f14_l1', zip: 'f14_l1.zip', alternates: [] }}
+        title={`${table} (debug)`}
+        source={{ kind: 'url', url: `/debug-assets/${table}.vpx` }}
+        rom={{ status: 'required', name: rom, zip: `${rom}.zip`, alternates: [] }}
         onExit={exit}
       />
     );

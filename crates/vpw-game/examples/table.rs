@@ -68,7 +68,25 @@ fn vpw_render_candidates(scene: &vpw_table::geometry::Scene) -> Vec<String> {
         .collect()
 }
 
+/// Logging without a logger crate: for a diagnostic tool, stderr is the place.
+fn stderr_logger() {
+    struct Stderr;
+    impl log::Log for Stderr {
+        fn enabled(&self, _: &log::Metadata<'_>) -> bool {
+            true
+        }
+        fn log(&self, record: &log::Record<'_>) {
+            eprintln!("[{}] {}", record.level(), record.args());
+        }
+        fn flush(&self) {}
+    }
+    static LOGGER: Stderr = Stderr;
+    let _ = log::set_logger(&LOGGER);
+    log::set_max_level(log::LevelFilter::Info);
+}
+
 fn main() {
+    stderr_logger();
     let mut args = std::env::args().skip(1);
     let table = args
         .next()

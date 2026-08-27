@@ -40,27 +40,55 @@ pub struct Sound {
 /// A short list on purpose. The board is the same for all of them and adding
 /// one is a row, but a row that has not been booted against a real image is a
 /// row that claims something nobody checked.
-const GAMES: &[Game] = &[Game {
-    set: "lotr",
-    cpu: "lotrcpua",
-    display: "lotrdspa",
-    sound: Sound {
-        bios: "bios.u8",
-        u7: "lotr-u7",
-        samples: ["lotr-u17", "lotr-u21", "lotr-u36", "lotr-u37"],
+const GAMES: &[Game] = &[
+    Game {
+        // South Park (Sega 1999): the other end of the Whitestar era. Same
+        // main board and display board as LOTR; the sound board is not the
+        // AT91 but its ancestor, the Data East BSMT2000 board (`se.c:357`
+        // initialises `SNDBRD_DE2S` for this generation) — so the zip has no
+        // `bios.u8`, the sound entries below never all match, and the loader
+        // takes the silent path until that board exists here.
+        set: "sprk_103",
+        cpu: "spkcpu",
+        display: "spdsp",
+        sound: Sound {
+            bios: "bios.u8",
+            u7: "spku7",
+            samples: ["spku17", "spku21", "spku36", "spku37"],
+        },
+        // `INITGAME(sprk,GEN_WS,se_dmd128x32,0)` — no auxiliary boards
+        // (`segames.c:475`).
+        boards: crate::board::Boards {
+            aux_solenoids: false,
+            leds: false,
+        },
+        // `se.c:361-362`: "sprk_103" keeps the flippers-live flag at zero —
+        // PinMAME stores the address plus one so zero can mean "none", and
+        // the option does that job here.
+        fast_flips: Some(0x0000),
     },
-    // A 520-5068-01 and the nineteen-LED board that is this game's own
-    // (`segames.c:1499`).
-    boards: crate::board::Boards {
-        aux_solenoids: true,
-        leds: true,
+    Game {
+        set: "lotr",
+        cpu: "lotrcpua",
+        display: "lotrdspa",
+        sound: Sound {
+            bios: "bios.u8",
+            u7: "lotr-u7",
+            samples: ["lotr-u17", "lotr-u21", "lotr-u36", "lotr-u37"],
+        },
+        // A 520-5068-01 and the nineteen-LED board that is this game's own
+        // (`segames.c:1499`).
+        boards: crate::board::Boards {
+            aux_solenoids: true,
+            leds: true,
+        },
+        // `MACHINE_INIT(se3)` gives every one of this generation the same address
+        // — "It appears all systems of se3 generation are the same... :)"
+        // (`se.c:292`) — but it is still a per-game fact, found by hand, so it is
+        // listed per game here rather than assumed.
+        fast_flips: Some(0x0004),
     },
-    // `MACHINE_INIT(se3)` gives every one of this generation the same address
-    // — "It appears all systems of se3 generation are the same... :)"
-    // (`se.c:292`) — but it is still a per-game fact, found by hand, so it is
-    // listed per game here rather than assumed.
-    fast_flips: Some(0x0004),
-}];
+];
 
 /// Looks a game up by set name, without regard to case.
 pub fn find(set: &str) -> Option<Game> {
