@@ -132,7 +132,22 @@ struct Player {
     /// say how long we were not running.
     finished_ms: f64,
     elapsed_ticks: u64,
+    /// The size the page asked for, before the governor's scale.
+    full_size: (u32, u32),
+    /// Which rung of [`SCALES`] the renderer is on. See [`Player::govern`].
+    scale_tier: usize,
+    /// Seconds spent comfortably under budget, before daring to climb.
+    calm: u32,
 }
+
+/// The rungs of the resolution ladder, as fractions of the canvas size.
+///
+/// Quadratic payoff: the bottom rung draws sixteen percent of the pixels the
+/// top one does, which is the difference between fourteen frames a second on
+/// an integrated GPU and sixty. The browser scales the smaller bitmap up to
+/// the element's CSS size, and a moving pinball hides the softness far better
+/// than it hides a slideshow.
+const SCALES: [f32; 5] = [1.0, 0.85, 0.7, 0.55, 0.4];
 
 impl Player {
     /// Whether there is anything to draw for, and the backbuffer size to draw
@@ -154,9 +169,16 @@ impl Player {
                     return None;
                 }
                 // Fit the backbuffer to the current CSS size times the device
-                // pixel ratio.
-                let w = (f64::from(canvas.client_width()) * dpr).round().max(1.0) as u32;
-                let h = (f64::from(canvas.client_height()) * dpr).round().max(1.0) as u32;
+                // pixel ratio — times the governor's scale: the element keeps
+                // its layout size and the browser stretches the smaller
+                // bitmap over it.
+                let scale = f64::from(SCALES[self.scale_tier]);
+                let w = (f64::from(canvas.client_width()) * dpr * scale)
+                    .round()
+                    .max(1.0) as u32;
+                let h = (f64::from(canvas.client_height()) * dpr * scale)
+                    .round()
+                    .max(1.0) as u32;
                 if (canvas.width(), canvas.height()) != (w, h) {
                     canvas.set_width(w);
                     canvas.set_height(h);
@@ -168,6 +190,78 @@ impl Player {
             // An offscreen canvas is resized by [`resize_surface`] when the
             // page tells it to; the frame has nothing to measure.
             Surface::Offscreen { visible, .. } => visible.then_some(None),
+        }
+    }
+
+    /// Trades pixels for frames, once a second, on the evidence.
+    ///
+    /// The render average is the number that matters: fps saturates at the
+    /// display's refresh and physics runs on its own clock, so only the
+    /// render half says whether the GPU is drowning. Over budget it steps
+    /// down a rung of [`SCALES`] immediately — a slideshow is the worst
+    /// picture quality there is — and it climbs back one rung only after
+    /// three comfortable seconds, so a table that sits at the edge does not
+    /// shimmer between sizes.
+    fn govern(&mut self) {
+        // `VPW_TIER` on the global scope pins the ladder to one rung, so the
+        // governor can be exercised from any machine's console:
+        // `globalThis.VPW_TIER = 4` in the worker is the slowest GPU there is.
+        if let Ok(v) = js_sys::Reflect::get(&js_sys::global(), &"VPW_TIER".into())
+            && let Some(t) = v.as_f64()
+        {
+            let t = (t as usize).min(SCALES.len() - 1);
+            if t != self.scale_tier {
+                self.scale_tier = t;
+                log::info!("pinned to {:.0}% resolution", SCALES[t] * 100.0);
+                self.apply_scale();
+            }
+            return;
+        }
+        // Two-thirds of a sixty-hertz frame: the render is not the frame's
+        // only tenant, and a budget that spends all sixteen milliseconds on
+        // drawing leaves nothing for the physics and the browser.
+        const OVER_MS: f64 = 11.0;
+        const UNDER_MS: f64 = 5.0;
+        let avg = self.stats.render_ms_avg;
+        if avg > OVER_MS && self.scale_tier + 1 < SCALES.len() {
+            self.scale_tier += 1;
+            self.calm = 0;
+            log::info!(
+                "render {avg:.1} ms: dropping to {:.0}% resolution",
+                SCALES[self.scale_tier] * 100.0
+            );
+            self.apply_scale();
+        } else if avg < UNDER_MS && self.scale_tier > 0 {
+            self.calm += 1;
+            if self.calm >= 3 {
+                self.scale_tier -= 1;
+                self.calm = 0;
+                log::info!(
+                    "render {avg:.1} ms: back up to {:.0}% resolution",
+                    SCALES[self.scale_tier] * 100.0
+                );
+                self.apply_scale();
+            }
+        } else {
+            self.calm = 0;
+        }
+    }
+
+    /// Puts the new rung into effect. The DOM path re-measures on the next
+    /// frame and needs nothing; an offscreen canvas is resized here from the
+    /// size the page last reported.
+    fn apply_scale(&mut self) {
+        if let Surface::Offscreen { canvas, .. } = &self.surface {
+            let (fw, fh) = self.full_size;
+            if fw == 0 || fh == 0 {
+                return;
+            }
+            let scale = SCALES[self.scale_tier];
+            let w = ((fw as f32 * scale) as u32).max(1);
+            let h = ((fh as f32 * scale) as u32).max(1);
+            canvas.set_width(w);
+            canvas.set_height(h);
+            self.renderer.resize(w, h);
         }
     }
 
@@ -277,6 +371,7 @@ impl Player {
             .as_ref()
             .map_or(0, |t| t.machine().sound_stats().1);
         if let Some((fps, tps)) = self.stats.tick(now_ms, ticks, made, render_ms) {
+            self.govern();
             // Once in ten at info, the rest at debug: the HUD reads these
             // numbers through `loopStats`, and a console that scrolls once a
             // second buries anything worth reading — but a pulse every ten
@@ -1380,6 +1475,9 @@ fn install_and_run(renderer: TableRenderer, surface: Surface) {
         last_ms: clock_ms(),
         finished_ms: clock_ms(),
         elapsed_ticks: 0,
+        full_size: (0, 0),
+        scale_tier: 0,
+        calm: 0,
     }));
     PLAYER.with(|p| *p.borrow_mut() = Some(player.clone()));
 
@@ -1422,14 +1520,13 @@ fn install_and_run(renderer: TableRenderer, surface: Surface) {
 pub fn resize_surface(width: u32, height: u32) {
     with_player(|player| {
         let (width, height) = (width.max(1), height.max(1));
-        match &player.surface {
-            Surface::Offscreen { canvas, .. } => {
-                canvas.set_width(width);
-                canvas.set_height(height);
-            }
-            Surface::Dom { .. } => return,
+        if !matches!(player.surface, Surface::Offscreen { .. }) {
+            return;
         }
-        player.renderer.resize(width, height);
+        // The page reports the honest size; the governor's scale rides on
+        // top of it here, exactly as the DOM path applies it when measuring.
+        player.full_size = (width, height);
+        player.apply_scale();
     });
 }
 
