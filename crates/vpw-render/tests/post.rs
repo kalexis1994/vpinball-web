@@ -482,3 +482,45 @@ fn the_passes_draw_into_a_format_this_device_can_draw_into() {
         "and the composite has to be able to sample it back"
     );
 }
+
+/// The browser's quality ladder, exercised on the same seams the player
+/// crosses: the scene draws at a fraction of the output, the composite
+/// stretches it back, and the output never changes size — which is what
+/// makes a tier change invisible. The picture has to stay the same
+/// picture, only softer: same amount of light on the floor, and a lamp
+/// still lit after climbing back to full size.
+#[test]
+fn a_scaled_render_is_the_same_picture_stretched() {
+    let Some(mut gpu) = gpu() else { return };
+    let scene = one_bright_light(30.0, 1.0);
+    let full = shoot(&mut gpu, &scene, 0.0);
+
+    gpu.set_render_scale(0.55);
+    let scaled = shoot(&mut gpu, &scene, 0.0);
+    gpu.set_render_scale(1.0);
+    let back = shoot(&mut gpu, &scene, 0.0);
+
+    assert_eq!(
+        full.len(),
+        scaled.len(),
+        "the output must stay output-sized"
+    );
+    let mean = |img: &[u8]| {
+        img.chunks(4)
+            .map(|p| u32::from(p[0]) + u32::from(p[1]) + u32::from(p[2]))
+            .sum::<u32>() as f64
+            / (img.len() / 4) as f64
+    };
+    let a = mean(&full);
+    let b = mean(&scaled);
+    let c = mean(&back);
+    assert!(a > 1.0, "the full-size photograph must not be black");
+    assert!(
+        (a - b).abs() / a < 0.2,
+        "at 55% the floor holds its light: full {a:.2}, scaled {b:.2}"
+    );
+    assert!(
+        (a - c).abs() / a < 0.02,
+        "back at 100% the photograph is the first one again: {a:.2} vs {c:.2}"
+    );
+}

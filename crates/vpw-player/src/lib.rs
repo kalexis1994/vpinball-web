@@ -182,16 +182,10 @@ impl Player {
                     return None;
                 }
                 // Fit the backbuffer to the current CSS size times the device
-                // pixel ratio — times the governor's scale: the element keeps
-                // its layout size and the browser stretches the smaller
-                // bitmap over it.
-                let scale = f64::from(SCALES[self.scale_tier]);
-                let w = (f64::from(canvas.client_width()) * dpr * scale)
-                    .round()
-                    .max(1.0) as u32;
-                let h = (f64::from(canvas.client_height()) * dpr * scale)
-                    .round()
-                    .max(1.0) as u32;
+                // pixel ratio. The quality ladder no longer touches this:
+                // scaling lives inside the renderer, where it cannot blink.
+                let w = (f64::from(canvas.client_width()) * dpr).round().max(1.0) as u32;
+                let h = (f64::from(canvas.client_height()) * dpr).round().max(1.0) as u32;
                 if (canvas.width(), canvas.height()) != (w, h) {
                     canvas.set_width(w);
                     canvas.set_height(h);
@@ -311,25 +305,16 @@ impl Player {
         }
     }
 
-    /// Puts the new rung into effect. The DOM path re-measures on the next
-    /// frame and needs nothing; an offscreen canvas is resized here from the
-    /// size the page last reported. From the third rung down the playfield's
-    /// reflection probe goes too: it is a second pass over the whole scene,
-    /// and its vertex work is the cost that fewer pixels cannot shrink.
+    /// Puts the new rung into effect, inside the renderer: the scene buffers
+    /// shrink and the composite stretches them back over a surface that
+    /// never changes — a scale change used to resize the canvas, and every
+    /// resize reconfigured the surface, which the player saw as a blink.
+    /// From the third rung down the playfield's reflection probe goes too:
+    /// it is a second pass over the whole scene, and its vertex work is the
+    /// cost that fewer pixels cannot shrink.
     fn apply_scale(&mut self) {
         self.renderer.set_reflection_enabled(self.scale_tier < 2);
-        if let Surface::Offscreen { canvas, .. } = &self.surface {
-            let (fw, fh) = self.full_size;
-            if fw == 0 || fh == 0 {
-                return;
-            }
-            let scale = SCALES[self.scale_tier];
-            let w = ((fw as f32 * scale) as u32).max(1);
-            let h = ((fh as f32 * scale) as u32).max(1);
-            canvas.set_width(w);
-            canvas.set_height(h);
-            self.renderer.resize(w, h);
-        }
+        self.renderer.set_render_scale(SCALES[self.scale_tier]);
     }
 
     fn frame(&mut self, now_ms: f64) {
@@ -1591,13 +1576,15 @@ fn install_and_run(renderer: TableRenderer, surface: Surface) {
 pub fn resize_surface(width: u32, height: u32) {
     with_player(|player| {
         let (width, height) = (width.max(1), height.max(1));
-        if !matches!(player.surface, Surface::Offscreen { .. }) {
-            return;
+        match &player.surface {
+            Surface::Offscreen { canvas, .. } => {
+                canvas.set_width(width);
+                canvas.set_height(height);
+            }
+            Surface::Dom { .. } => return,
         }
-        // The page reports the honest size; the governor's scale rides on
-        // top of it here, exactly as the DOM path applies it when measuring.
         player.full_size = (width, height);
-        player.apply_scale();
+        player.renderer.resize(width, height);
     });
 }
 

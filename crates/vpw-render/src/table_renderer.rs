@@ -68,7 +68,7 @@ impl TableRenderer {
         // Four samples where the device offers them for the HDR format, one
         // where it does not; the whole scene pass follows the answer.
         let samples = gpu.msaa_samples(hdr);
-        log::info!("MSAA {samples}x");
+        log::trace!("MSAA {samples}x");
         let post = Post::new(
             &gpu.device,
             &gpu.queue,
@@ -528,6 +528,22 @@ impl TableRenderer {
         self.reflection_enabled = on;
     }
 
+    /// Renders the scene at a fraction of the surface, the composite
+    /// stretching it back. See `Post::set_scale` for why this never blinks.
+    pub fn set_render_scale(&mut self, scale: f32) {
+        self.post
+            .set_scale(&self.gpu.device, &self.gpu.queue, scale);
+        // The probes' views were rebuilt with the targets; the material
+        // pipeline holds bind groups onto them and has to be told, exactly
+        // as a resize tells it.
+        self.pipeline.set_probes(
+            &self.gpu.device,
+            self.post.transmission_view(),
+            self.post.sampler(),
+            self.post.reflection_view(),
+        );
+    }
+
     pub fn set_day_night(&mut self, scale: Option<f32>) {
         self.day_night = scale.map(|s| s.clamp(0.0, 1.0));
     }
@@ -551,8 +567,12 @@ impl TableRenderer {
     /// Draws a frame. With no table loaded it only clears, which is still
     /// enough to tell that the chain down to WebGPU is alive.
     pub fn render(&mut self) -> Result<(), FrameError> {
-        let (w, h) = self.gpu.size();
-        let aspect = w as f32 / h as f32;
+        // The aspect comes from the surface; the pixel sizes in the frame
+        // uniform come from the scene buffers, which the quality ladder may
+        // have shrunk — screen-space lookups live in those pixels.
+        let (sw, sh) = self.gpu.size();
+        let aspect = sw as f32 / sh as f32;
+        let (w, h) = self.post.scene_size();
 
         let Some(scene) = &self.scene else {
             return self.gpu.render();

@@ -183,6 +183,20 @@ impl Offscreen {
         self.post.set_strength(&self.queue, strength);
     }
 
+    /// The browser's quality ladder, on the photograph harness: the scene
+    /// draws at a fraction of the output and the composite stretches it
+    /// back. Mirrors `TableRenderer::set_render_scale`, probes rebind and
+    /// all, so a test here exercises the same seams the player crosses.
+    pub fn set_render_scale(&mut self, scale: f32) {
+        self.post.set_scale(&self.device, &self.queue, scale);
+        self.pipeline.set_probes(
+            &self.device,
+            self.post.transmission_view(),
+            self.post.sampler(),
+            self.post.reflection_view(),
+        );
+    }
+
     /// Traces the GI groups' lightmaps and hands them to the frame.
     ///
     /// Returns how many groups were baked; zero means the table names no GI
@@ -341,6 +355,9 @@ impl Offscreen {
         camera: &Camera,
         filter: impl Fn(&crate::scene::Batch) -> bool,
     ) {
+        // The aspect is the output's; the pixel sizes are the scene
+        // buffers', which the render scale may have shrunk — exactly as
+        // `TableRenderer::render` divides them.
         let aspect = self.width as f32 / self.height as f32;
         let gi = self.lights.gi_sources(crate::scene::MAX_GI_BULBS);
         self.pipeline.set_frame(
@@ -348,7 +365,7 @@ impl Offscreen {
             camera.view_projection(aspect),
             camera.eye(),
             &scene.lighting,
-            (self.width, self.height),
+            self.post.scene_size(),
             &gi,
             scene.field,
         );

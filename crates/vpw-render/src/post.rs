@@ -174,6 +174,13 @@ pub struct Post {
     reflection: Target,
     /// Its own depth, since it is drawn before the table and at its own size.
     reflection_depth: wgpu::TextureView,
+    /// The surface size the last resize reported, before the render scale.
+    full: (u32, u32),
+    /// The fraction of the surface the scene is drawn at. The composite pass
+    /// stretches the result over the full surface, which is what makes a
+    /// scale change invisible: the surface is never reconfigured, so the
+    /// screen never blinks — the picture just softens.
+    scale: f32,
     /// How many samples the scene passes draw with. One when the device
     /// cannot multisample the HDR format; four when it can, which is every
     /// device that matters.
@@ -340,6 +347,8 @@ impl Post {
             transmission: Target::new(device, format, "vpw-transmission", 1, 1),
             reflection: Target::new(device, format, "vpw-reflection", 1, 1),
             reflection_depth: crate::pipeline::depth_texture(device, 1, 1, 1),
+            full: (width.max(1), height.max(1)),
+            scale: 1.0,
             samples,
             scene_msaa: None,
             reflection_msaa: None,
@@ -405,6 +414,29 @@ impl Post {
             msaa_target(device, format, "vpw-hdr-msaa", samples, width, height),
             msaa_target(device, format, "vpw-reflection-msaa", samples, rw, rh),
         )
+    }
+
+    /// Changes the fraction of the surface the scene renders at.
+    ///
+    /// Everything between the scene and the surface follows — the HDR
+    /// buffer, its depth, the bloom chain, the probes — while the surface
+    /// itself never hears about it, which is the whole point: reconfiguring
+    /// a surface is a visible blink, and this is how the quality ladder
+    /// climbs and descends without one.
+    pub fn set_scale(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, scale: f32) {
+        if (self.scale - scale).abs() < 1e-3 {
+            return;
+        }
+        self.scale = scale.clamp(0.1, 1.0);
+        let (w, h) = self.full;
+        self.resize(device, queue, w, h);
+    }
+
+    /// The size the scene passes actually draw at, for whoever fills the
+    /// frame uniform: screen-space lookups live in these pixels, not the
+    /// surface's.
+    pub fn scene_size(&self) -> (u32, u32) {
+        (self.hdr.width, self.hdr.height)
     }
 
     /// The scene's colour attachment and where it resolves: the multisampled
@@ -508,6 +540,9 @@ impl Post {
     }
 
     pub fn resize(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, width: u32, height: u32) {
+        self.full = (width.max(1), height.max(1));
+        let width = ((width as f32 * self.scale) as u32).max(1);
+        let height = ((height as f32 * self.scale) as u32).max(1);
         let (hdr, bloom, scratch, transmission, depth, reflection, reflection_depth, msaa, rmsaa) =
             Self::targets(device, self.format, self.samples, width, height);
         (
