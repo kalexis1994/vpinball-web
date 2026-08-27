@@ -240,7 +240,7 @@ fn gi_baked(pos : vec3<f32>) -> vec3<f32> {
 
 // `DoEnvmapGlossy`, `Material.fxh:158`. Picking the mip by roughness is, in the
 // original's own words, a "very very crude approximation by abusing miplevels".
-fn env_glossy(r : vec3<f32>, glossy : vec3<f32>, glossy_power : f32) -> vec3<f32> {
+fn env_glossy(r : vec3<f32>, glossy : vec3<f32>, glossy_power : f32, mip_floor : f32) -> vec3<f32> {
     // The original uses the **height** of the map, not the width, even though
     // the uniform is called `TexWidth`.
     let log_h = log2(frame.env.y);
@@ -248,7 +248,18 @@ fn env_glossy(r : vec3<f32>, glossy : vec3<f32>, glossy_power : f32) -> vec3<f32
         log_h + log2(sqrt(3.0)) - 0.5 * log2(glossy_power + 1.0),
         log_h - 1.0
     );
-    let e = textureSampleLevel(env_radiance, env_samp, env_uv(r), clamp(mip, 0.0, frame.env.x - 1.0)).rgb;
+    // The floor is the geometry's, not the material's: where the reflection
+    // vector whips around within a pixel — a wire, a screw head, the lip of
+    // a ramp — the map has to be read as blurred as that sweep, or a small
+    // bright lamp lands once per mesh segment and a rail comes out as a
+    // string of beads. A ball's reflection barely turns per pixel, so its
+    // floor is zero and its lamps stay sharp.
+    let e = textureSampleLevel(
+        env_radiance,
+        env_samp,
+        env_uv(r),
+        clamp(max(mip, mip_floor), 0.0, frame.env.x - 1.0)
+    ).rgb;
     return glossy * e * frame.emission.a;
 }
 
@@ -371,6 +382,16 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
     if (dot(n, v) < 0.0) {
         n = -n;
     }
+
+    // How far the reflection vector sweeps within this pixel, in radians —
+    // the curvature of the surface as the screen sees it. Derivatives must
+    // sit in uniform control flow (a lesson this file already paid for once
+    // with `textureSample`), so it is taken here at the top and handed down.
+    // From it, the env mip that matches the sweep: a sweep of θ radians
+    // crosses θ/π of the map's height, and reading anything sharper than
+    // that turns each bright lamp into one bead per mesh segment.
+    let refl_sweep = length(fwidth((2.0 * dot(n, v)) * n - v));
+    let sweep_mip = log2(max(refl_sweep, 1e-6) * frame.env.y / 3.14159265);
 
     let wrap = material.flags.z;
     let edge = material.flags.w;
@@ -544,21 +565,30 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
             let d = length(to);
             if (d * at.w < 1.5) {
                 let glint = pow(max(dot(r, to / d), 0.0), 150.0);
-                color = color + abs(lamp_color.rgb) * texel.rgb * glint * 8.0 * rim;
+                // A pow-150 lobe is about 0.12 radians wide. Where the
+                // reflection sweeps further than that inside one pixel, the
+                // pinpoint cannot be resolved — only sampled, one bead per
+                // segment — so it fades by the ratio instead.
+                let steady = 0.12 / (0.12 + refl_sweep);
+                color = color + abs(lamp_color.rgb) * texel.rgb * glint * 8.0 * rim * steady;
             }
         }
     }
     if (max_component(glossy) > 0.0 || max_component(specular) > 0.0) {
         let refl = (2.0 * ndv) * n - v;
         if (max_component(glossy) > 0.0) {
-            color = color + env_glossy(refl, glossy, glossy_power);
+            color = color + env_glossy(refl, glossy, glossy_power, sweep_mip);
         }
         // `DoEnvmap2ndLayer`, `Material.fxh:168`: the clearcoat layer mixes the
         // result with the environment according to the Fresnel.
         if (max_component(specular) > 0.0) {
             let w = fresnel_schlick(specular, ndv, edge);
-            let e = textureSampleLevel(env_radiance, env_samp, env_uv(refl), 0.0).rgb
-                * frame.emission.a;
+            let e = textureSampleLevel(
+                env_radiance,
+                env_samp,
+                env_uv(refl),
+                clamp(sweep_mip, 0.0, frame.env.x - 1.0)
+            ).rgb * frame.emission.a;
             color = mix(color, e, w);
         }
     }

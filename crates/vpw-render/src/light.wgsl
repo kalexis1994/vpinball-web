@@ -224,7 +224,9 @@ fn light_loop(
     if (glossy_max > 0.0 || specular_max > 0.0) {
         let r = (2.0 * ndv) * n - v;
         if (glossy_max > 0.0) {
-            color = color + env_glossy(r, glossy, glossy_power);
+            // Floor zero: an insert is a flat disc on the playfield, and a
+            // flat surface's reflection barely turns inside a pixel.
+            color = color + env_glossy(r, glossy, glossy_power, 0.0);
         }
         // `DoEnvmap2ndLayer`, `Material.fxh:167-172`. Its Fresnel takes the
         // *material's* edge, not the `edge` handed in — which for a metal is
