@@ -502,6 +502,11 @@ impl Machine {
         // to say for itself.
         if let Some(display) = det.display {
             machine.load_display_rom(display)?;
+        } else {
+            // Not an error — the game plays without its matrix — but a dark
+            // display with a running game looks exactly like a renderer bug,
+            // and this line is the difference.
+            log::warn!("no display image in the zip; the machine will play with a dark matrix");
         }
         // The sound board is a third processor with images of its own. A set
         // without them plays silently rather than not at all, which is what a
