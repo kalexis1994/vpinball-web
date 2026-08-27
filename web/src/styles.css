@@ -1,12 +1,14 @@
 :root {
   color-scheme: dark;
 
-  --bg: #07070c;
-  --surface: #12121b;
-  --surface-hi: #1b1b28;
-  --line: #2a2a3c;
-  --text: #e4e4ec;
-  --text-dim: #9494a8;
+  /* The room's darks: the same warm near-black the renderer clears to
+     behind the table, so the menus and the machine share one place. */
+  --bg: #0c0907;
+  --surface: #17110c;
+  --surface-hi: #221a12;
+  --line: #35291d;
+  --text: #ece6de;
+  --text-dim: #a3968a;
   --accent: #ff8a3d;
   --accent-ink: #1a0d02;
   --ok: #4ade80;
@@ -54,7 +56,7 @@ body {
   cursor: pointer;
   transition: background 120ms, border-color 120ms;
 }
-.btn:hover:not(:disabled) { background: #242434; }
+.btn:hover:not(:disabled) { background: #2c2218; }
 .btn:disabled { opacity: 0.5; cursor: default; }
 
 .btn-primary {
@@ -101,7 +103,7 @@ body {
 
 .card-thumb {
   aspect-ratio: 4 / 3;
-  background: #0c0c14;
+  background: #100c08;
   display: grid;
   place-items: center;
   border-bottom: 1px solid var(--line);
