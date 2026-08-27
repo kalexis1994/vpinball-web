@@ -1004,6 +1004,24 @@ impl Engine {
                     });
                 }
 
+                // VPW_HITDBG narrates every resolved hit: which ball, where,
+                // how fast, against which shape. It is how the SuperVUK's
+                // death by seam was found, and the next mystery wall will be
+                // found the same way.
+                if std::env::var("VPW_HITDBG").is_ok() {
+                    let b = &self.balls[i];
+                    eprintln!(
+                        "HITDBG ball {i} at ({:.0},{:.0},{:.0}) vel ({:.1},{:.1},{:.1}) hit shape {s} {:?} normal {:?}",
+                        b.pos.x,
+                        b.pos.y,
+                        b.pos.z,
+                        b.vel.x,
+                        b.vel.y,
+                        b.vel.z,
+                        std::mem::discriminant(&self.shapes[s]),
+                        coll.hit_normal
+                    );
+                }
                 let scatter = self.next_random();
                 // The slingshot resolves its own hit: first it kicks and then
                 // it bounces.

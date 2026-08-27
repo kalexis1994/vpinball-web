@@ -1028,9 +1028,11 @@ fn ramp(r: &vpin::vpx::gameitem::ramp::Ramp, vpx: &VPX, out: &mut Vec<Shape>) {
             }));
         }
     };
-    let joint = |a: Vec3, b: Vec3, out: &mut Vec<Shape>| {
+    // A floor seam inherits the floor's one-sidedness; see
+    // `HitLine3D::sealing` for the vertical up-kicker this exists for.
+    let floor_joint = |a: Vec3, b: Vec3, up: Vec3, out: &mut Vec<Shape>| {
         if let Some(l) = HitLine3D::new(a, b, material) {
-            out.push(Shape::Line3D(l));
+            out.push(Shape::Line3D(l.sealing(up)));
         }
     };
 
@@ -1095,7 +1097,10 @@ fn ramp(r: &vpin::vpx::gameitem::ramp::Ramp, vpx: &VPX, out: &mut Vec<Shape>) {
         // `ramp.cpp:756`. By the order the vertices are given in, the first two
         // are always the edge this triangle shares with the one before it.
         if previous.is_none_or(|before| before.cross(normal).length_squared() >= 1e-8) {
-            joint(v[0], v[1], out);
+            // The facing `HitTriangle::new` will compute — note the order:
+            // it crosses (v2-v0) with (v1-v0), the opposite of `normal`
+            // above, so the seam must flip or it inherits the back.
+            floor_joint(v[0], v[1], -normal.normalize(), out);
         }
         previous = Some(normal);
 
@@ -1110,6 +1115,7 @@ fn ramp(r: &vpin::vpx::gameitem::ramp::Ramp, vpx: &VPX, out: &mut Vec<Shape>) {
         push_triangle(v, &material, out);
     };
 
+    let mut last_up = Vec3::Z;
     for i in 0..n - 1 {
         let (z0, z1) = (c.height[i], c.height[i + 1]);
         let p1 = c.right[i].extend(z0);
@@ -1117,20 +1123,27 @@ fn ramp(r: &vpin::vpx::gameitem::ramp::Ramp, vpx: &VPX, out: &mut Vec<Shape>) {
         let p3 = c.left[i + 1].extend(z1);
         let p4 = c.right[i + 1].extend(z1);
 
+        // This step's own facing, for the seams along its borders — in the
+        // order `HitTriangle::new` uses, so seam and floor agree on which
+        // side is the front.
+        let up = (p3 - p2).cross(p1 - p2).normalize_or_zero();
+        last_up = up;
+
         // The near edge, once, and then the two long edges of every step.
         if i == 0 {
-            joint(p2, p1, out);
+            floor_joint(p2, p1, up, out);
         }
-        joint(p2, p3, out);
-        joint(p1, p4, out);
+        floor_joint(p2, p3, up, out);
+        floor_joint(p1, p4, up, out);
 
         floor([p2, p1, p3], out);
         floor([p3, p1, p4], out);
     }
     let last = n - 1;
-    joint(
+    floor_joint(
         c.right[last].extend(c.height[last]),
         c.left[last].extend(c.height[last]),
+        last_up,
         out,
     );
 }

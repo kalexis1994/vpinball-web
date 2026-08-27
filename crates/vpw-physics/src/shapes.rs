@@ -1008,9 +1008,32 @@ pub struct HitLine3D {
     to_upright: Mat3,
     upright: HitLineZ,
     bbox: Aabb,
+    /// The pass direction this seam inherits, when it seals one-sided floors.
+    ///
+    /// A ramp's floor answers only from its front: a ball rising from
+    /// underneath passes through and lands on top, and vertical up-kickers
+    /// are built on exactly that (`collideex.cpp:838`; the ramp builder says
+    /// where). The joints that seal the seams between those triangles exist
+    /// for the ball rolling **on** them — a fold must not be a gap — but as
+    /// plain cylinders they answer from every side, so the one route the
+    /// floors leave open is fenced by their own stitching: South Park's
+    /// SuperVUK fires the ball up under the wireform's mouth and it clatters
+    /// off the entry seam instead of rising through. A seam carrying its
+    /// floors' normal refuses only what the floors refuse.
+    pass_up: Option<Vec3>,
 }
 
 impl HitLine3D {
+    /// The segment's two ends, back in world space. For whoever has to name a
+    /// mystery wall.
+    pub fn endpoints(&self) -> (Vec3, Vec3) {
+        let back = self.to_upright.transpose();
+        (
+            back * Vec3::new(self.upright.xy.x, self.upright.xy.y, self.upright.z_low),
+            back * Vec3::new(self.upright.xy.x, self.upright.xy.y, self.upright.z_high),
+        )
+    }
+
     /// Returns `None` for a segment with no length, which has no direction to
     /// stand up.
     pub fn new(v1: Vec3, v2: Vec3, material: Material) -> Option<Self> {
@@ -1037,7 +1060,14 @@ impl HitLine3D {
                 min: v1.min(v2),
                 max: v1.max(v2),
             },
+            pass_up: None,
         })
+    }
+
+    /// Marks this line as the seam of one-sided floors facing `up`.
+    pub fn sealing(mut self, up: Vec3) -> Self {
+        self.pass_up = Some(up);
+        self
     }
 
     pub fn material(&self) -> &Material {
@@ -1049,6 +1079,14 @@ impl HitLine3D {
     }
 
     pub fn hit_test(&self, ball: &Ball, dtime: f32) -> Option<CollisionEvent> {
+        // A seam is passable exactly where its floors are: a triangle takes
+        // no ball moving along its normal (`collideex.cpp:838`, the receding
+        // test), so neither does the stitching between two of them.
+        if let Some(up) = self.pass_up
+            && up.dot(ball.vel) > C_CONTACTVEL
+        {
+            return None;
+        }
         let mut upright_ball = ball.clone();
         upright_ball.pos = self.to_upright * ball.pos;
         upright_ball.vel = self.to_upright * ball.vel;

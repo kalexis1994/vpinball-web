@@ -171,6 +171,44 @@ fn main() {
         }
         println!();
     }
+    // VPW_NEARBY=x,y,z prints every collision line within 80 units, which is
+    // how a mystery wall gets a name.
+    if let Ok(spec) = std::env::var("VPW_NEARBY") {
+        let p: Vec<f32> = spec
+            .split(',')
+            .filter_map(|v| v.trim().parse().ok())
+            .collect();
+        if let [x, y, z] = p[..] {
+            let at = vpw_math::Vec3::new(x, y, z);
+            let engine = game.engine.borrow();
+            for (i, s) in engine.shapes().iter().enumerate() {
+                if let vpw_physics::engine::Shape::Line(l) = s {
+                    let (a, b) = (l.v1, l.v2);
+                    let mid = (a + b) * 0.5;
+                    let at2 = vpw_math::Vec2::new(at.x, at.y);
+                    if (mid - at2).length() < 60.0 && l.z_low <= z && z <= l.z_high {
+                        println!(
+                            "  line2d #{i}  ({:.0},{:.0}) -> ({:.0},{:.0})  z {:.0}..{:.0}  normal ({:.2},{:.2})",
+                            a.x, a.y, b.x, b.y, l.z_low, l.z_high, l.normal.x, l.normal.y
+                        );
+                    }
+                }
+                if let vpw_physics::engine::Shape::Line3D(l) = s {
+                    let (a, b) = l.endpoints();
+                    let mid = (a + b) * 0.5;
+                    if (mid - at).length() < 80.0
+                        || (a - at).length() < 80.0
+                        || (b - at).length() < 80.0
+                    {
+                        println!(
+                            "  line3d #{i}  ({:.0},{:.0},{:.0}) -> ({:.0},{:.0},{:.0})",
+                            a.x, a.y, a.z, b.x, b.y, b.z
+                        );
+                    }
+                }
+            }
+        }
+    }
     println!("board running   {}", game.machine().is_running());
     println!("game name       {:?}", game.machine().game_name());
     println!();
@@ -242,6 +280,22 @@ fn main() {
         // Two seconds to settle, a coin, then start.
         press(&mut game, "Digit5", 2_000, t);
         press(&mut game, "Digit1", 4_000, t);
+        // VPW_CALL="Name@ms,Name@ms" calls a script Sub at a moment, which is
+        // how one half of a mechanism gets exercised without the other: a
+        // VUK's release can be fired without a ball ever finding the hole.
+        if let Ok(list) = std::env::var("VPW_CALL") {
+            for spec in list.split(',') {
+                if let Some((name, at)) = spec.trim().split_once('@')
+                    && let Ok(at) = at.trim().parse::<u32>()
+                    && t == at
+                {
+                    println!("  calling {name} at {t} ms");
+                    if let Err(e) = game.script_mut().call(name.trim(), &[]) {
+                        println!("  {name}: {e}");
+                    }
+                }
+            }
+        }
         // VPW_KEYS="Code@ms,Code@ms,..." presses arbitrary keys at arbitrary
         // times, held for a tenth of a second each — the way to walk a
         // machine's own service menu from here, which is the only honest way
@@ -304,6 +358,36 @@ fn main() {
                 && let Some(b) = game.engine.borrow().balls.first()
             {
                 trail.push((t - 6_000, b.pos, b.vel.length()));
+            }
+        }
+        // With VPW_CALL in play, every ball is worth watching: the sub that
+        // was called is usually one that makes or throws one.
+        if std::env::var("VPW_CALL").is_ok() && t >= 8_500 && t <= 9_200 && t % 50 == 0 {
+            let engine = game.engine.borrow();
+            if let Some(b) = engine.balls.last() {
+                println!(
+                    "  {t:>6} ms  last ball ({:.0},{:.0},{:.0}) vel {:?} locked {}",
+                    b.pos.x, b.pos.y, b.pos.z, b.vel, b.locked
+                );
+            }
+        }
+        if std::env::var("VPW_CALL").is_ok() && t >= 6_000 && t % 250 == 0 {
+            let engine = game.engine.borrow();
+            if !engine.balls.is_empty() {
+                let spots: Vec<String> = engine
+                    .balls
+                    .iter()
+                    .map(|b| {
+                        format!(
+                            "({:.0},{:.0},{:.0} v{:.1})",
+                            b.pos.x,
+                            b.pos.y,
+                            b.pos.z,
+                            b.vel.length()
+                        )
+                    })
+                    .collect();
+                println!("  {t:>6} ms  balls: {}", spots.join(" "));
             }
         }
         game.step();

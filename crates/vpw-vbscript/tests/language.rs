@@ -1044,3 +1044,52 @@ Relaxed",
     // of that procedure, which is VBScript's rule and not what is on trial.
     assert_eq!(i.get_global("GotPast").unwrap().to_number().unwrap(), 1.0);
 }
+
+/// The statement `cvpmTimer` builds and `Execute`s for every ball a stack
+/// kicks out (`core.vbs:707`): a sub call whose target is the **result of a
+/// function call**, arguments space-separated, a comment hanging off the end.
+/// South Park's SuperVUK release is exactly this string, and a parser that
+/// cannot say it leaves the ball standing in the kicker for ever.
+#[test]
+fn a_sub_call_on_a_function_result_with_bare_arguments() {
+    let v = run(
+        r#"
+Class K
+    Public Sub Kick(a, b, c)
+        result = a * 100 + b * 10 + c
+    End Sub
+End Class
+Function GetK(x) : Set GetK = x : End Function
+Dim k : Set k = New K
+Dim result : result = 0
+Execute "GetK(k).Kick 1,2,3 ' 0 "
+"#,
+        "result",
+    );
+    assert_eq!(v.to_number().unwrap(), 123.0);
+}
+
+/// The same statement, but through the `GetRef` variable `core.vbs` actually
+/// routes it through (`Dim vpmCreateBall : Set vpmCreateBall =
+/// GetRef("vpmDefCreateBall3")`, `core.vbs:2341`). The function's return
+/// value must survive the pointer, or `.Kick` lands on Empty and the ball
+/// stands in the kicker for ever.
+#[test]
+fn a_sub_call_through_a_getref_variable_keeps_the_return_value() {
+    let v = run(
+        r#"
+Class K
+    Public Sub Kick(a, b, c)
+        result = a * 100 + b * 10 + c
+    End Sub
+End Class
+Function GetK(x) : Set GetK = x : End Function
+Dim ptr : Set ptr = GetRef("GetK")
+Dim k : Set k = New K
+Dim result : result = 0
+Execute "ptr(k).Kick 4,5,6 ' 0 "
+"#,
+        "result",
+    );
+    assert_eq!(v.to_number().unwrap(), 456.0);
+}
