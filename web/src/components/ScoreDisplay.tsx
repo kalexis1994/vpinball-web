@@ -33,7 +33,7 @@ export function ScoreDisplay({ view }: Props) {
   const [narrow, setNarrow] = useState(() => window.innerWidth < NARROW_PX);
   const [inShot, setInShot] = useState(false);
   const [lit, setLit] = useState(false);
-  /** Where the table's right edge lands, 0..1, when the gutter beside it is
+  /** Where the table's left edge lands, 0..1, when the gutter beside it is
    * worth using; `null` keeps the panel in its corner. */
   const [gutter, setGutter] = useState<number | null>(null);
 
@@ -63,9 +63,8 @@ export function ScoreDisplay({ view }: Props) {
             setGutter(null);
             return;
           }
-          const right = r[0] + r[2];
-          const room = (1 - right) * window.innerWidth;
-          setGutter(room >= 220 ? right : null);
+          const room = r[0] * window.innerWidth;
+          setGutter(room >= 220 ? r[0] : null);
         });
       } else {
         setGutter(null);
@@ -107,16 +106,16 @@ export function ScoreDisplay({ view }: Props) {
   // score, and an empty panel floating over it is furniture.
   if (!lit || inShot || (narrow && view === 'overhead')) return null;
 
-  // In the gutter: centred on the free strip beside the table, vertically
-  // centred, never wider than the strip leaves after its padding.
+  // In the left gutter: centred on the free strip beside the table,
+  // vertically centred, never wider than the strip leaves after its padding.
   const side =
     gutter !== null
       ? {
-          left: `calc(${((gutter + 1) / 2) * 100}% )`,
+          left: `${(gutter / 2) * 100}%`,
           right: 'auto' as const,
           top: '50%',
           transform: 'translate(-50%, -50%)',
-          width: `min(22rem, calc(${(1 - gutter) * 100}vw - 3rem))`,
+          width: `min(22rem, calc(${gutter * 100}vw - 3rem))`,
         }
       : undefined;
 

@@ -855,6 +855,23 @@ pub fn display_image(width: u32, height: u32) -> Vec<u8> {
         let Some(table) = player.table.as_ref() else {
             return Vec::new();
         };
+        // A machine says its score one of two ways, and the floating panel
+        // deserves both: a row of segments, or a panel of dots. The dots are
+        // digested rather than kept — four thousand bytes against a frame
+        // time — and either way an unchanged display costs nothing to ask.
+        let (dots, dw, dh) = table.machine().dmd();
+        if !dots.is_empty() {
+            let digest: Vec<u16> = dots
+                .chunks(64)
+                .map(|c| c.iter().map(|&d| u16::from(d)).sum())
+                .collect();
+            let asked = (digest, width, height);
+            if player.display_sent.as_ref() == Some(&asked) {
+                return Vec::new();
+            }
+            player.display_sent = Some(asked);
+            return dot_raster(&dots, dw, dh, (width, height)).rgba;
+        }
         let segments = table.machine().segments();
         if segments.is_empty() {
             return Vec::new();
