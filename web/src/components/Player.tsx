@@ -14,7 +14,6 @@ import {
   playerCanvas,
   saveMachineState,
   setCameraView,
-  setDayNight,
   setEnvironment,
   setTelemetry,
   startPlayer,
@@ -115,9 +114,7 @@ export function Player({ table, title, source, rom, onExit }: Props) {
         // camera is the renderer's and does not survive a reload, so this is
         // what makes the setting mean anything.
         await setCameraView(settings().camera);
-        // And the stored day/night, on the same terms.
-        await setDayNight(settings().brightness);
-        // The stored room too: the bar's map is a fetch away, so it goes on
+        // The stored room: the bar's map is a fetch away, so it goes on
         // after the table is playable rather than making it wait.
         void setEnvironment(settings().environment);
         setPhase('ready');
@@ -218,9 +215,8 @@ export function Player({ table, title, source, rom, onExit }: Props) {
       onSettingsChange((s) => {
         setView(s.camera);
         void setCameraView(s.camera);
-        // The lighting slider works while a table is playing behind the
-        // settings screen, the same way the volume does. So does the room.
-        void setDayNight(s.brightness);
+        // The room switch works while a table is playing behind the
+        // settings screen, the same way the volume does.
         void setEnvironment(s.environment);
       }),
     [],

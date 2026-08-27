@@ -29,12 +29,6 @@ export interface Settings {
   /** Which of the named views the camera starts in. */
   camera: CameraView;
   /**
-   * Day/night, 0 to 1, or `null` for the table's own. Plenty of tables are
-   * authored dark on purpose — F-14 asks for 8% — and Visual Pinball's own
-   * settings carry exactly this override for exactly that reason.
-   */
-  brightness: number | null;
-  /**
    * The room the machine stands in. `table` is the environment map the table
    * itself asked for; `bar` is a real room's HDR — dim walls, a few bright
    * lamps — which is mostly seen reflected in the steel and the plastics.
@@ -51,10 +45,10 @@ const DEFAULTS: Settings = {
   // the first thing anybody wants is to see what they have loaded. The overhead
   // view is the one you switch to once you want to *play* it.
   camera: 'front',
-  // The table's own, until the player says otherwise: the author lit the room.
-  brightness: null,
-  // The table's own: the author lit the room here too.
-  environment: 'table',
+  // The bar: a machine stands somewhere, and somewhere with lamps in it is a
+  // better first impression than a void. The table's own light is one tap
+  // away for whoever wants the authored look.
+  environment: 'bar',
 };
 
 let current: Settings = load();
@@ -87,11 +81,6 @@ function clean(s: Partial<Settings>): Partial<Settings> {
   }
   if (ENVIRONMENTS.includes(s.environment as Environment)) {
     out.environment = s.environment as Environment;
-  }
-  if (s.brightness === null) {
-    out.brightness = null;
-  } else if (typeof s.brightness === 'number' && Number.isFinite(s.brightness)) {
-    out.brightness = Math.min(1, Math.max(0, s.brightness));
   }
   return out;
 }
