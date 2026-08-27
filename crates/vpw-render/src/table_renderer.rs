@@ -53,6 +53,11 @@ pub struct TableRenderer {
     /// Whether the playfield reflection probe runs. See
     /// [`Self::set_reflection_enabled`].
     reflection_enabled: bool,
+    /// The flat engine, when the player asked for it. Its bake follows the
+    /// camera and the lighting; anything that moves either invalidates it.
+    /// See [`crate::flat`].
+    flat: Option<crate::flat::Flat>,
+    flat_on: bool,
 }
 
 impl TableRenderer {
@@ -112,7 +117,50 @@ impl TableRenderer {
             view: crate::camera::View::Front,
             pending_display: None,
             framing: None,
+            flat: None,
+            flat_on: false,
         })
+    }
+
+    /// Switches the flat engine on or off. On, the table is photographed a
+    /// few lamps per frame while the real renderer keeps playing, and the
+    /// frame switches to the photographs the moment the last lamp is done.
+    /// See [`crate::flat`] for what that trades away.
+    pub fn set_flat(&mut self, on: bool) {
+        if self.flat_on == on {
+            return;
+        }
+        self.flat_on = on;
+        if on && self.flat.is_none() {
+            self.flat = Some(crate::flat::Flat::new(
+                &self.gpu.device,
+                &self.pipeline,
+                self.gpu.hdr_format,
+                self.gpu.msaa_samples(self.gpu.hdr_format),
+            ));
+        }
+        if let Some(flat) = &mut self.flat {
+            flat.invalidate();
+        }
+    }
+
+    /// Whether the flat engine is asked for at all — baking or drawing.
+    /// The camera answers to this: a photograph has no camera to move.
+    pub fn flat_enabled(&self) -> bool {
+        self.flat_on
+    }
+
+    /// Whether the flat engine is drawing the frames right now — on, and
+    /// with its bake complete.
+    pub fn flat_active(&self) -> bool {
+        self.flat_on && self.flat.as_ref().is_some_and(crate::flat::Flat::ready)
+    }
+
+    /// The world changed under the photographs; they have to be retaken.
+    fn invalidate_flat(&mut self) {
+        if let Some(flat) = &mut self.flat {
+            flat.invalidate();
+        }
     }
 
     /// Redraws the machine's score display onto its head.
@@ -212,6 +260,12 @@ impl TableRenderer {
         if self.view == view {
             return;
         }
+        // The flat world is a photograph taken from one place; there is no
+        // other camera to move to, so the switch waits until the mode is off.
+        if self.flat_on {
+            log::trace!("the flat engine holds the camera; view change ignored");
+            return;
+        }
         self.view = view;
         self.reframe();
     }
@@ -222,6 +276,8 @@ impl TableRenderer {
     /// the framing depends on the aspect ratio, so a window that changes shape
     /// changes what fits.
     fn reframe(&mut self) {
+        // A camera that moved makes every photograph a lie.
+        self.invalidate_flat();
         let Some((table, head)) = self.framing else {
             return;
         };
@@ -309,6 +365,7 @@ impl TableRenderer {
             &vpw_table::ball::material(),
         ));
         self.scene = Some(gpu_scene);
+        self.invalidate_flat();
     }
 
     pub fn unload(&mut self) {
@@ -478,6 +535,8 @@ impl TableRenderer {
             bake.layers.len() as u32,
         );
         self.lights.set_baked_groups(&self.gpu.queue, groups);
+        // The lightmap changes what every photograph of the field shows.
+        self.invalidate_flat();
     }
 
     /// Sets the player's day/night, 0 to 1, or clears it with `None`.
@@ -496,6 +555,7 @@ impl TableRenderer {
     /// the map was accepted; a table that has not loaded yet has nothing to
     /// restore and nothing to light, and says no.
     pub fn set_environment(&mut self, hdr: Option<&[u8]>) -> bool {
+        self.invalidate_flat();
         match hdr {
             Some(bytes) => {
                 let Some(map) =
@@ -531,6 +591,7 @@ impl TableRenderer {
     /// Renders the scene at a fraction of the surface, the composite
     /// stretching it back. See `Post::set_scale` for why this never blinks.
     pub fn set_render_scale(&mut self, scale: f32) {
+        self.invalidate_flat();
         self.post
             .set_scale(&self.gpu.device, &self.gpu.queue, scale);
         // The probes' views were rebuilt with the targets; the material
@@ -546,6 +607,7 @@ impl TableRenderer {
 
     pub fn set_day_night(&mut self, scale: Option<f32>) {
         self.day_night = scale.map(|s| s.clamp(0.0, 1.0));
+        self.invalidate_flat();
     }
 
     /// The table's lighting with the player's day/night applied, if any.
@@ -579,6 +641,30 @@ impl TableRenderer {
         };
 
         let lighting = self.effective_lighting(&scene.lighting);
+
+        // The flat bake, a few photographs a frame, goes first: it writes
+        // frame uniforms and lamp levels of its own, and the live
+        // `set_frame` below takes the frame back afterwards.
+        if self.flat_on
+            && let Some(flat) = &mut self.flat
+            && !flat.ready()
+        {
+            flat.bake_step(
+                &self.gpu.device,
+                &self.gpu.queue,
+                &self.pipeline,
+                &self.post,
+                scene,
+                &self.lights,
+                self.camera.view_projection(aspect),
+                self.camera.eye(),
+                &lighting,
+                self.view.shows_backbox(),
+                self.reflection_enabled,
+                3,
+            );
+        }
+
         let gi = self.lights.gi_sources(crate::scene::MAX_GI_BULBS);
         self.pipeline.set_frame(
             &self.gpu.queue,
@@ -610,6 +696,35 @@ impl TableRenderer {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("vpw-frame"),
             });
+        let head = self.view.shows_backbox();
+        if let Some(flat) = self.flat.as_ref().filter(|f| self.flat_on && f.ready()) {
+            // The flat frame: the photographs plus everything that moves.
+            // The transmitted-light buffer still runs — the live pieces'
+            // materials read it — but the scene and reflection passes, the
+            // heavy ones, are what the photographs replaced.
+            crate::pass::draw_lights_only(
+                &mut encoder,
+                self.post.transmission_view(),
+                &self.pipeline,
+                &self.lights,
+            );
+            self.post.blur_transmission(&mut encoder);
+            flat.draw(
+                &self.gpu.queue,
+                &mut encoder,
+                &self.post,
+                &self.pipeline,
+                scene,
+                self.dynamic.as_ref(),
+                &self.lights,
+                Some(&self.flashers),
+                head,
+            );
+            self.post.finish(&mut encoder, &view);
+            self.gpu.queue.submit(Some(encoder.finish()));
+            self.gpu.present(frame);
+            return Ok(());
+        }
         // The order matters and is the original's: the lights on their own
         // first, because the table reads that buffer; then the table; then the
         // bloom, which reads the table; then all of it to the screen.
@@ -639,7 +754,6 @@ impl TableRenderer {
         // straight down it is a vertical panel seen edge-on — a grey stripe
         // across the top of the picture, standing where the glass would be —
         // and the whole point of that view is that the screen is the glass.
-        let head = self.view.shows_backbox();
         let (color, resolve) = self.post.scene_color();
         crate::pass::draw_full(
             &mut encoder,

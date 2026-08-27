@@ -181,6 +181,11 @@ struct Player {
     /// Seconds left of the no-climbing sentence handed down when a climb
     /// bounced. The ladder has found its level; let it stand.
     climb_lockout: u32,
+    /// Whether the governor runs at all. Off, the resolution is the
+    /// player's to choose and the ladder stands at full; some players would
+    /// rather have a slow sharp picture than a fast soft one, and that is
+    /// their call to make.
+    adaptive: bool,
 }
 
 /// The rungs of the resolution ladder, as fractions of the canvas size.
@@ -252,6 +257,9 @@ impl Player {
                 log::trace!("pinned to {:.0}% resolution", SCALES[t] * 100.0);
                 self.apply_scale();
             }
+            return;
+        }
+        if !self.adaptive {
             return;
         }
         // Two-thirds of a sixty-hertz frame: the render is not the frame's
@@ -1563,6 +1571,7 @@ fn install_and_run(renderer: TableRenderer, surface: Surface) {
         frozen: 0,
         climbed_ago: u32::MAX,
         climb_lockout: 0,
+        adaptive: true,
     }));
     PLAYER.with(|p| *p.borrow_mut() = Some(player.clone()));
 
@@ -1644,6 +1653,10 @@ pub fn set_visible(visible: bool) {
 #[wasm_bindgen(js_name = cameraOrbit)]
 pub fn camera_orbit(dx: f32, dy: f32) {
     with_player(|player| {
+        // A photograph has no camera: in flat mode the view is the bake's.
+        if player.renderer.flat_enabled() {
+            return;
+        }
         let camera = &mut player.renderer.camera;
         camera.azimuth -= dx * 0.3;
         camera.inclination = (camera.inclination + dy * 0.3).clamp(5.0, 89.0);
@@ -1825,6 +1838,33 @@ pub fn set_environment(bytes: &[u8]) -> bool {
     .unwrap_or(false)
 }
 
+/// Switches the resolution governor. Off, the ladder snaps back to full
+/// resolution and stays there: the player has said they would rather have
+/// every pixel than every frame.
+#[wasm_bindgen(js_name = setAdaptive)]
+pub fn set_adaptive(on: bool) {
+    with_player(|player| {
+        player.adaptive = on;
+        if !on && player.scale_tier != 0 {
+            player.scale_tier = 0;
+            player.calm = 0;
+            player.judging = None;
+            player.apply_scale();
+        }
+    });
+}
+
+/// Switches the flat engine — the table photographed and played as pictures,
+/// for a machine whose GPU cannot afford the real render. The bake runs a few
+/// lamps per frame while the 3D renderer keeps playing, and the frame flips
+/// to the photographs when the last lamp is done. See `vpw_render::flat`.
+#[wasm_bindgen(js_name = setFlat)]
+pub fn set_flat(on: bool) {
+    with_player(|player| {
+        player.renderer.set_flat(on);
+    });
+}
+
 #[wasm_bindgen(js_name = setDayNight)]
 pub fn set_day_night(scale: f32) {
     with_player(|player| {
@@ -1838,6 +1878,9 @@ pub fn set_day_night(scale: f32) {
 #[wasm_bindgen(js_name = cameraZoom)]
 pub fn camera_zoom(out: bool) {
     with_player(|player| {
+        if player.renderer.flat_enabled() {
+            return;
+        }
         let factor = if out { 1.1 } else { 1.0 / 1.1 };
         let camera = &mut player.renderer.camera;
         camera.distance = (camera.distance * factor).clamp(100.0, 50_000.0);

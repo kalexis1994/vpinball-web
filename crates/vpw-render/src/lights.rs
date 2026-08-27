@@ -200,6 +200,23 @@ impl Light {
     }
 }
 
+/// Where a lamp stands and how far its light can reach, kept on the CPU from
+/// upload. The flat bake ([`crate::flat`]) projects this to the screen to
+/// decide how large a sprite each lamp's light needs.
+#[derive(Debug, Clone, Copy)]
+pub struct Footprint {
+    pub center: vpw_math::Vec3,
+    /// The falloff radius: past it the lamp lights nothing, halo or GI.
+    pub radius: f32,
+    /// The lamp mesh's own extent — an insert's artwork can be wider than
+    /// its falloff.
+    pub bounds: (vpw_math::Vec3, vpw_math::Vec3),
+    /// Whether this lamp's illumination lives in a baked lightmap layer,
+    /// which spreads over the whole field rather than staying inside the
+    /// falloff.
+    pub baked: bool,
+}
+
 pub struct Lights {
     pub pipeline: wgpu::RenderPipeline,
     /// The same shape with no depth test and the transmission scale folded in,
@@ -224,6 +241,9 @@ pub struct Lights {
     /// The lamps' names, in the same order, so a caller can find the one the
     /// script is talking about.
     pub names: Vec<String>,
+    /// Each lamp mesh's extent, in the same order, kept from upload for
+    /// [`Lights::footprint`].
+    mesh_bounds: Vec<(vpw_math::Vec3, vpw_math::Vec3)>,
     /// The playfield's area in VPU², learned at upload. What the bounce
     /// divides the lit flux by: the same bulbs in a bigger room make a dimmer
     /// wall.
@@ -592,6 +612,7 @@ impl Lights {
             empty,
             lights: Vec::new(),
             names: Vec::new(),
+            mesh_bounds: Vec::new(),
             field_area: 0.0,
             departure: true,
         }
@@ -613,6 +634,23 @@ impl Lights {
     ) {
         let lights = &scene.lights;
         self.names = lights.iter().map(|l| l.name.clone()).collect();
+        self.mesh_bounds = lights
+            .iter()
+            .map(|l| {
+                let mut min = vpw_math::Vec3::splat(f32::MAX);
+                let mut max = vpw_math::Vec3::splat(f32::MIN);
+                for v in &l.vertices {
+                    let p = vpw_math::Vec3::new(v[0], v[1], v[2]);
+                    min = min.min(p);
+                    max = max.max(p);
+                }
+                if l.vertices.is_empty() {
+                    (l.center, l.center)
+                } else {
+                    (min, max)
+                }
+            })
+            .collect();
         let b = &scene.playfield;
         self.field_area = ((b.max.x - b.min.x) * (b.max.y - b.min.y)).abs();
         self.departure = !crate::bake::prebaked(scene);
@@ -791,6 +829,128 @@ impl Lights {
         }
     }
 
+    /// The level lamp `index` is showing right now — the intensity the shader
+    /// multiplies by, absolute rather than a fraction.
+    pub fn level(&self, index: usize) -> f32 {
+        self.lights.get(index).map_or(0.0, |l| l.data.color[3])
+    }
+
+    /// The level lamp `index` shows at full power, from the file.
+    pub fn full_level(&self, index: usize) -> f32 {
+        self.lights.get(index).map_or(0.0, |l| l.full)
+    }
+
+    /// Where lamp `index` stands and how far it reaches. See [`Footprint`].
+    pub fn footprint(&self, index: usize) -> Option<Footprint> {
+        let l = self.lights.get(index)?;
+        Some(Footprint {
+            center: vpw_math::Vec3::new(l.data.center[0], l.data.center[1], l.data.center[2]),
+            // From the uploaded range, not the live one: a baked lamp's halo
+            // was shrunk, and the question here is how far the *light* goes.
+            radius: 1.0 / l.range_w.max(1e-6),
+            bounds: self.mesh_bounds.get(index).copied().unwrap_or_default(),
+            baked: l.baked.is_some(),
+        })
+    }
+
+    /// Every lamp's current level, for a bake to put back afterwards.
+    pub fn save_levels(&self) -> Vec<f32> {
+        self.lights.iter().map(|l| l.data.color[3]).collect()
+    }
+
+    /// Writes one level straight into a lamp's uniform, without touching the
+    /// lamp's own state. The flat bake photographs the table with every lamp
+    /// held at a chosen level and puts the real ones back before the next
+    /// live frame; the fade state never learns it happened.
+    pub fn force_level(&self, queue: &wgpu::Queue, index: usize, level: f32) {
+        let Some(l) = self.lights.get(index) else {
+            return;
+        };
+        queue.write_buffer(
+            &l.uniform,
+            std::mem::offset_of!(GpuLight, color) as u64 + 3 * 4,
+            bytemuck::bytes_of(&level),
+        );
+    }
+
+    /// The forced level's effect on the draw skip: [`Lights::draw`] skips a
+    /// lamp whose *lamp state* reads zero, which during a bake would skip the
+    /// very lamp being photographed. This draws with the given levels instead
+    /// of asking the lamps.
+    pub fn draw_forced(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        frame: &wgpu::BindGroup,
+        levels: &[f32],
+    ) {
+        self.draw_with_levels(pass, &self.pipeline, Which::Classic, frame, Some(levels));
+        self.draw_with_levels(pass, &self.texel, Which::Texel, frame, Some(levels));
+        self.draw_with_levels(pass, &self.bulb, Which::Bulb, frame, Some(levels));
+    }
+
+    /// [`Lights::draw_flat`] with forced levels, for the bake's transmitted-
+    /// light pass.
+    pub fn draw_flat_forced(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        frame: &wgpu::BindGroup,
+        levels: &[f32],
+    ) {
+        self.draw_with_levels(pass, &self.flat, Which::Transmitted, frame, Some(levels));
+    }
+
+    /// The general illumination with exactly one lamp lit, at full power:
+    /// what the world looks like when only lamp `index` is on, which is the
+    /// photograph the flat bake takes. The bounce is left out — it is a
+    /// whole-room term and would paint the lamp's sprite over every corner of
+    /// the screen; the live frame still carries it for the pieces drawn live.
+    pub fn gi_solo(&self, index: usize) -> Gi {
+        let mut gi = Gi {
+            rows: Vec::new(),
+            bounce: [0.0; 3],
+            levels: [0.0; 4],
+        };
+        let Some(l) = self.lights.get(index) else {
+            return gi;
+        };
+        if !self.departure {
+            return gi;
+        }
+        // The lamp's share of its baked group's lightmap layer, at full.
+        if let Some(g) = l.baked {
+            let g = g as usize;
+            if g < 4 {
+                let full_sum: f32 = self
+                    .lights
+                    .iter()
+                    .filter(|o| o.baked == Some(g as u8))
+                    .map(|o| o.full)
+                    .sum();
+                if full_sum > 0.0 {
+                    gi.levels[g] = l.full / full_sum;
+                }
+            }
+        }
+        if l.bulb {
+            let level = l.full * GI_ILLUMINATION;
+            let power = if l.baked.is_some() {
+                -l.data.color2[3]
+            } else {
+                l.data.color2[3]
+            };
+            gi.rows.push([
+                l.data.center,
+                [
+                    l.data.color[0] * level,
+                    l.data.color[1] * level,
+                    l.data.color[2] * level,
+                    power,
+                ],
+            ]);
+        }
+        gi
+    }
+
     /// Whether the file declared lamp `index` a blinker.
     ///
     /// For a caller whose source of lamp states cannot say so itself. The
@@ -846,6 +1006,20 @@ impl Lights {
         which: Which,
         frame: &wgpu::BindGroup,
     ) {
+        self.draw_with_levels(pass, pipeline, which, frame, None);
+    }
+
+    /// The one draw loop. `levels` overrides what each lamp says it is
+    /// showing — the flat bake writes levels straight into the uniforms and
+    /// the lamps' own state no longer describes what the GPU will draw.
+    fn draw_with_levels(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        pipeline: &wgpu::RenderPipeline,
+        which: Which,
+        frame: &wgpu::BindGroup,
+        levels: Option<&[f32]>,
+    ) {
         if self.lights.is_empty() {
             return;
         }
@@ -854,7 +1028,7 @@ impl Lights {
         if which != Which::Texel {
             pass.set_bind_group(1, &self.empty, &[]);
         }
-        for l in &self.lights {
+        for (i, l) in self.lights.iter().enumerate() {
             let takes = match which {
                 Which::Classic => !l.bulb && l.texel.is_none(),
                 Which::Texel => l.texel.is_some(),
@@ -876,7 +1050,10 @@ impl Lights {
             // the insert with a picture of its own, which is drawn dark
             // (`light.cpp:713-718`), and only in the scene: in the
             // transmitted-light buffer dark is nothing.
-            if l.lamp.level() <= 0.0 && !(which == Which::Texel && l.drawn_when_off) {
+            let level = levels
+                .and_then(|v| v.get(i).copied())
+                .unwrap_or_else(|| l.lamp.level());
+            if level <= 0.0 && !(which == Which::Texel && l.drawn_when_off) {
                 continue;
             }
             if let Some(texel) = &l.texel

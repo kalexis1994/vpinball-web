@@ -39,6 +39,10 @@ pub struct Offscreen {
     /// [`crate::post::hdr_format`].
     hdr: wgpu::TextureFormat,
     hdr_usages: wgpu::TextureUsages,
+    samples: u32,
+    /// The flat engine, for photograph-harness parity with the browser.
+    /// `None` until [`Offscreen::flat_on`]. See [`crate::flat`].
+    flat: Option<crate::flat::Flat>,
 }
 
 impl Offscreen {
@@ -130,7 +134,46 @@ impl Offscreen {
             adapter: format!("{} ({:?})", info.name, info.backend),
             hdr,
             hdr_usages,
+            samples,
+            flat: None,
         })
+    }
+
+    /// Turns the flat engine on and bakes it whole, blocking: the photograph
+    /// harness has no frames to spread the work across. Draws after this use
+    /// the photographs; [`Offscreen::flat_off`] goes back to real geometry.
+    pub fn flat_on(&mut self, scene: &GpuScene, camera: &Camera) {
+        if self.flat.is_none() {
+            self.flat = Some(crate::flat::Flat::new(
+                &self.device,
+                &self.pipeline,
+                self.hdr,
+                self.samples,
+            ));
+        }
+        let flat = self.flat.as_mut().expect("just built");
+        flat.invalidate();
+        let aspect = self.width as f32 / self.height as f32;
+        while !flat.bake_step(
+            &self.device,
+            &self.queue,
+            &self.pipeline,
+            &self.post,
+            scene,
+            &self.lights,
+            camera.view_projection(aspect),
+            camera.eye(),
+            &scene.lighting,
+            true,
+            scene.lighting.reflection_strength > 0.0,
+            8,
+        ) {}
+    }
+
+    pub fn flat_off(&mut self) {
+        if let Some(flat) = &mut self.flat {
+            flat.invalidate();
+        }
     }
 
     /// Redraws the machine's score display, the same way the browser does.
@@ -400,19 +443,33 @@ impl Offscreen {
                 self.dynamic.as_ref(),
             );
         }
-        let (color, resolve) = self.post.scene_color();
-        crate::pass::draw_full(
-            &mut encoder,
-            color,
-            resolve,
-            &self.post.depth,
-            &self.pipeline,
-            scene,
-            self.dynamic.as_ref(),
-            Some(&self.lights),
-            Some(&self.flashers),
-            &filter,
-        );
+        if let Some(flat) = self.flat.as_ref().filter(|f| f.ready()) {
+            flat.draw(
+                &self.queue,
+                &mut encoder,
+                &self.post,
+                &self.pipeline,
+                scene,
+                self.dynamic.as_ref(),
+                &self.lights,
+                Some(&self.flashers),
+                true,
+            );
+        } else {
+            let (color, resolve) = self.post.scene_color();
+            crate::pass::draw_full(
+                &mut encoder,
+                color,
+                resolve,
+                &self.post.depth,
+                &self.pipeline,
+                scene,
+                self.dynamic.as_ref(),
+                Some(&self.lights),
+                Some(&self.flashers),
+                &filter,
+            );
+        }
         self.post.finish(&mut encoder, &view);
         self.queue.submit(Some(encoder.finish()));
     }

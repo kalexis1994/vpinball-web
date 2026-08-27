@@ -500,6 +500,11 @@ impl Post {
         &self.hdr.view
     }
 
+    /// What the passes draw into on this device. See [`hdr_format`].
+    pub fn format(&self) -> wgpu::TextureFormat {
+        self.format
+    }
+
     /// The sampler the transmitted-light buffer is read with: clamped, so a
     /// fragment near the edge of the screen does not fetch the far side.
     pub fn sampler(&self) -> &wgpu::Sampler {

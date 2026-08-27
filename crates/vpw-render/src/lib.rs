@@ -9,6 +9,7 @@ pub mod camera;
 pub mod dynamic;
 pub mod env;
 pub mod flashers;
+pub mod flat;
 pub mod lights;
 pub mod pass;
 pub mod pipeline;
