@@ -50,6 +50,9 @@ pub struct TableRenderer {
     /// authored dark on purpose — F-14 asks for 0.08 — and how dark a room a
     /// player wants to sit in is the player's business.
     day_night: Option<f32>,
+    /// Whether the playfield reflection probe runs. See
+    /// [`Self::set_reflection_enabled`].
+    reflection_enabled: bool,
 }
 
 impl TableRenderer {
@@ -105,6 +108,7 @@ impl TableRenderer {
             camera: Camera::default(),
             occupied: Vec::new(),
             day_night: None,
+            reflection_enabled: true,
             view: crate::camera::View::Front,
             pending_display: None,
             framing: None,
@@ -513,6 +517,17 @@ impl TableRenderer {
         }
     }
 
+    /// Turns the playfield's reflection probe off and on.
+    ///
+    /// The probe is a whole second pass over the scene — on a heavy modern
+    /// table that is another six hundred thousand triangles a frame — and
+    /// vertex work is the one cost that shrinking the render resolution does
+    /// not touch. The governor drops it on the low rungs, exactly as the
+    /// original's quality settings do (`RenderProbe::REFL_NONE` is a level).
+    pub fn set_reflection_enabled(&mut self, on: bool) {
+        self.reflection_enabled = on;
+    }
+
     pub fn set_day_night(&mut self, scale: Option<f32>) {
         self.day_night = scale.map(|s| s.clamp(0.0, 1.0));
     }
@@ -588,7 +603,7 @@ impl TableRenderer {
         // The probe is a whole extra pass over the scene, so it is not drawn
         // for a table that does not mirror. The original skips it the same way,
         // by never creating the probe (`RenderProbe::REFL_NONE`).
-        if scene.lighting.reflection_strength > 0.0 {
+        if self.reflection_enabled && scene.lighting.reflection_strength > 0.0 {
             let (color, resolve) = self.post.reflection_color();
             crate::pass::draw_reflection(
                 &mut encoder,

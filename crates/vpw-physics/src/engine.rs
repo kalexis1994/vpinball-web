@@ -24,6 +24,23 @@ use crate::nudge::Nudge;
 use crate::parts::{Bumper, Gate, Kicker, Spinner};
 use crate::plunger::Plunger;
 use crate::quadtree::{Entry, Quadtree};
+
+thread_local! {
+    /// Scratch counters for `VPW_PHYSPROF`, read by whoever set the flag.
+    pub static PROF_CANDIDATES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    pub static PROF_QUERIES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    /// Nanoseconds per section of the step: cycle, triggers, kickers, other.
+    pub static PROF_NS: std::cell::Cell<[u64; 4]> = const { std::cell::Cell::new([0; 4]) };
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn prof_add(slot: usize, from: std::time::Instant) {
+    PROF_NS.with(|c| {
+        let mut v = c.get();
+        v[slot] += from.elapsed().as_nanos() as u64;
+        c.set(v);
+    });
+}
 use crate::shapes::{
     HitCircle, HitLine3D, HitLineZ, HitPlane, HitPoint, HitPoly, HitTriangle, LineSeg, Slingshot,
 };
@@ -675,7 +692,11 @@ impl Engine {
                 _ => {}
             }
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        let t0 = std::time::Instant::now();
         self.simulate_cycle(PHYS_FACTOR);
+        #[cfg(not(target_arch = "wasm32"))]
+        prof_add(0, t0);
 
         // Where every ball ended up this millisecond
         // (`PhysicsEngine.cpp:472`). It goes after the cycle and before
@@ -686,8 +707,16 @@ impl Engine {
             b.record_position(now);
         }
 
+        #[cfg(not(target_arch = "wasm32"))]
+        let t1 = std::time::Instant::now();
         self.check_triggers();
+        #[cfg(not(target_arch = "wasm32"))]
+        prof_add(1, t1);
+        #[cfg(not(target_arch = "wasm32"))]
+        let t2 = std::time::Instant::now();
         self.check_kickers();
+        #[cfg(not(target_arch = "wasm32"))]
+        prof_add(2, t2);
 
         // The bumper rings, after the cycle: if a bumper fired on this step,
         // the ring has to start dropping on this step.
@@ -873,6 +902,10 @@ impl Engine {
                 let candidates = &mut self.candidates;
                 self.tree.query(&bbox, |idx| candidates.push(idx));
 
+                if std::env::var("VPW_PHYSPROF").is_ok() {
+                    PROF_CANDIDATES.with(|c| c.set(c.get() + self.candidates.len() as u64));
+                    PROF_QUERIES.with(|c| c.set(c.get() + 1));
+                }
                 for k in 0..self.candidates.len() {
                     let s = self.candidates[k];
                     // A shape the script switched off stays in the tree and

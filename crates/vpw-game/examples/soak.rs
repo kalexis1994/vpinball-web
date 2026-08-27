@@ -44,6 +44,11 @@ fn main() {
     // A held key is a (code, down-at, up-at) triple; the player below is all
     // schedule and no skill.
     let mut audio = vec![0.0f32; 2 * 735];
+    let (mut step_ns, mut sync_ns, mut audio_ns) = (0u64, 0u64, 0u64);
+    // Read once: thirty thousand `env::var` calls inside a 1000 Hz loop cost
+    // more than the game being measured, which is how this harness once
+    // framed an innocent table for a thirty-second crime.
+    let physprof = std::env::var("VPW_PHYSPROF").is_ok();
     for t in 0..seconds * 1000 {
         // Coin, start, and a fresh ball straight in front of the plunger.
         if t == 2_000 {
@@ -86,15 +91,42 @@ fn main() {
                 game.key("ShiftRight", false);
             }
         }
+        let ts = std::time::Instant::now();
         game.step();
+        step_ns += ts.elapsed().as_nanos() as u64;
         if t % 17 == 16 {
+            let ts = std::time::Instant::now();
             game.game_sync();
             game.new_frame();
+            sync_ns += ts.elapsed().as_nanos() as u64;
         }
         // The audio pump too: in the browser it runs beside the frame loop
         // and its borrow is part of the same story.
         if t % 16 == 0 {
+            let ts = std::time::Instant::now();
             game.render_audio(&mut audio);
+            audio_ns += ts.elapsed().as_nanos() as u64;
+        }
+        if physprof && t % 1_000 == 0 && t > 0 {
+            let c = vpw_physics::engine::PROF_CANDIDATES.with(|c| c.replace(0));
+            let q = vpw_physics::engine::PROF_QUERIES.with(|c| c.replace(0));
+            println!(
+                "  {t:>6} ms  step {:.0}ms sync {:.0}ms audio {:.0}ms",
+                step_ns as f64 / 1e6,
+                sync_ns as f64 / 1e6,
+                audio_ns as f64 / 1e6
+            );
+            (step_ns, sync_ns, audio_ns) = (0, 0, 0);
+            let ns = vpw_physics::engine::PROF_NS.with(|x| x.replace([0; 4]));
+            if q > 0 {
+                println!(
+                    "  {t:>6} ms  {q} queries, {c} candidates ({:.0}/q)  cycle {:.1}ms triggers {:.1}ms kickers {:.1}ms",
+                    c as f64 / q as f64,
+                    ns[0] as f64 / 1e6,
+                    ns[1] as f64 / 1e6,
+                    ns[2] as f64 / 1e6,
+                );
+            }
         }
         if t % 10_000 == 0 && t > 0 {
             let balls = game.engine.borrow().balls.len();

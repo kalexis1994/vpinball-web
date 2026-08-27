@@ -249,8 +249,11 @@ impl Player {
 
     /// Puts the new rung into effect. The DOM path re-measures on the next
     /// frame and needs nothing; an offscreen canvas is resized here from the
-    /// size the page last reported.
+    /// size the page last reported. From the third rung down the playfield's
+    /// reflection probe goes too: it is a second pass over the whole scene,
+    /// and its vertex work is the cost that fewer pixels cannot shrink.
     fn apply_scale(&mut self) {
+        self.renderer.set_reflection_enabled(self.scale_tier < 2);
         if let Surface::Offscreen { canvas, .. } = &self.surface {
             let (fw, fh) = self.full_size;
             if fw == 0 || fh == 0 {
