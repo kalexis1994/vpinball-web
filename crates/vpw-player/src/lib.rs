@@ -1703,16 +1703,10 @@ pub fn set_visible(visible: bool) {
 /// in, the camera will be fixed by the table and this stays only for
 /// inspection.
 #[wasm_bindgen(js_name = cameraOrbit)]
-pub fn camera_orbit(dx: f32, dy: f32) {
-    with_player(|player| {
-        // A photograph has no camera: in flat mode the view is the bake's.
-        if player.renderer.flat_enabled() {
-            return;
-        }
-        let camera = &mut player.renderer.camera;
-        camera.azimuth -= dx * 0.3;
-        camera.inclination = (camera.inclination + dy * 0.3).clamp(5.0, 89.0);
-    });
+pub fn camera_orbit(_dx: f32, _dy: f32) {
+    // The camera is a place to stand, not a thing to drag: every view is a
+    // framed composition, and orbiting out of one leaves a picture nobody
+    // designed. The export stays so old pages do not crash calling it.
 }
 
 /// Traces the GI lightmaps for a table, away from any player.
@@ -1928,15 +1922,8 @@ pub fn set_day_night(scale: f32) {
 
 /// Zooms the camera by one wheel notch, in or out.
 #[wasm_bindgen(js_name = cameraZoom)]
-pub fn camera_zoom(out: bool) {
-    with_player(|player| {
-        if player.renderer.flat_enabled() {
-            return;
-        }
-        let factor = if out { 1.1 } else { 1.0 / 1.1 };
-        let camera = &mut player.renderer.camera;
-        camera.distance = (camera.distance * factor).clamp(100.0, 50_000.0);
-    });
+pub fn camera_zoom(_out: bool) {
+    // Fixed, like the orbit above: the framing is the view's own.
 }
 
 /// Loads a table into the already started player.

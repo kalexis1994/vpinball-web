@@ -90,7 +90,13 @@ impl View {
     /// own is the refinement; this is the value they cluster around.
     fn inclination(self) -> f32 {
         match self {
-            View::Front => 45.0,
+            // Thirty-four rather than the forty-five the files cluster
+            // around: lower is where a person's eyes actually are at a
+            // machine, the near field grows and the head recedes, and the
+            // picture reads as standing at the cabinet instead of hovering
+            // over it. Chosen by photographing the same two tables down a
+            // ladder of angles and looking.
+            View::Front => 34.0,
             View::Overhead => 90.0,
         }
     }
@@ -119,7 +125,9 @@ impl View {
     /// sign that the number was wrong rather than merely untuned.
     fn lens(self) -> Lens {
         match self {
-            View::Front => Lens::Perspective { fov: 45.0 },
+            // A touch wider than the classic forty-five, to match the closer
+            // stance the lower inclination takes.
+            View::Front => Lens::Perspective { fov: 47.0 },
             // The half-height is what the framing works out; this is only a
             // statement that the overhead view does not converge.
             View::Overhead => Lens::Orthographic { half_height: 1.0 },
@@ -216,8 +224,16 @@ impl Camera {
     ) -> Self {
         let (mut min, mut max) = playfield;
         if view.shows_backbox() {
+            // What must fit is the head *up to its display*, not its crown:
+            // the strip above the display is blank cabinet, and demanding it
+            // on screen is what kept the whole machine small on a wide
+            // window. On a portrait screen the width binds instead and the
+            // crown comes back into shot on its own; nothing is lost there.
+            let trim = vpw_table::backbox::DISPLAY_AREA[1];
+            let mut head_max = backbox.1;
+            head_max.z -= (backbox.1.z - backbox.0.z) * trim;
             min = min.min(backbox.0);
-            max = max.max(backbox.1);
+            max = max.max(head_max);
         }
         let camera = Self {
             target: (min + max) * 0.5,
@@ -312,7 +328,58 @@ impl Camera {
                 near = mid;
             }
         }
-        camera.distance = far * margin;
+        camera.distance = far;
+
+        // Centre the *picture*, not the box. The search only moves the eye
+        // along its axis, so whichever corner binds first pins its edge of
+        // the frame and all the slack collects on the other side — a head
+        // with a strip of empty screen above it while the flippers touch the
+        // bottom. Sliding the target across the view until the projected
+        // content sits centred spends that slack evenly, and each slide earns
+        // another (cheaper) distance search, since a centred subject usually
+        // lets the camera come a little closer still.
+        for _ in 0..3 {
+            let vp = camera.view_projection(aspect);
+            let (mut min_x, mut min_y) = (f32::MAX, f32::MAX);
+            let (mut max_x, mut max_y) = (f32::MIN, f32::MIN);
+            for p in corners {
+                let clip = vp * p.extend(1.0);
+                if clip.w <= 0.0 {
+                    continue;
+                }
+                let (x, y) = (clip.x / clip.w, clip.y / clip.w);
+                min_x = min_x.min(x);
+                max_x = max_x.max(x);
+                min_y = min_y.min(y);
+                max_y = max_y.max(y);
+            }
+            let (mid_x, mid_y) = ((min_x + max_x) * 0.5, (min_y + max_y) * 0.5);
+            if mid_x.abs() < 0.005 && mid_y.abs() < 0.005 {
+                break;
+            }
+            let forward = (camera.target - camera.eye()).normalize_or_zero();
+            let up = camera.up();
+            let right = forward.cross(up);
+            let half_h =
+                (camera.lens.fov().unwrap_or(45.0).to_radians() * 0.5).tan() * camera.distance;
+            camera.target += right * (mid_x * half_h * aspect) + up * (mid_y * half_h);
+
+            // The subject moved on screen; the closest fit for it is new.
+            let mut lo = camera.distance * 0.3;
+            let mut hi = camera.distance * 2.0;
+            for _ in 0..30 {
+                let mid = 0.5 * (lo + hi);
+                camera.distance = mid;
+                if overflow(&camera) <= 1.0 {
+                    hi = mid;
+                } else {
+                    lo = mid;
+                }
+            }
+            camera.distance = hi;
+        }
+
+        camera.distance *= margin;
         camera.bracket_depth(corners);
         camera
     }

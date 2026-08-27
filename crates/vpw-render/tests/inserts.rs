@@ -177,6 +177,11 @@ fn shoot(gpu: &mut Offscreen, scene: &Scene) -> Vec<u8> {
         W as f32 / H as f32,
     );
     camera.inclination = 89.0;
+    // The fit may have slid the target to centre the picture *at the fit's
+    // own inclination*; overriding the angle afterwards keeps the slide but
+    // not the composition it served. Straight above, the centre of the rig
+    // is the composition.
+    camera.target = Vec3::new(TABLE * 0.5, TABLE * 0.5, 0.0);
     let uploaded = gpu.upload(scene);
     gpu.upload_lights(scene);
     gpu.set_bloom(0.0);

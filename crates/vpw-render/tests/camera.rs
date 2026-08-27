@@ -136,10 +136,19 @@ fn the_front_view_shows_the_head_and_the_overhead_one_does_not() {
     let aspect = 16.0 / 9.0;
 
     let front = Camera::for_view(View::Front, playfield, backbox, aspect);
-    let top_of_head = Vec3::new(482.0, backbox.0.y, backbox.1.z);
+    // What the front view owes is the head's *display*, not its crown: the
+    // strip above the display is blank cabinet, and letting it crop on a
+    // wide screen is what buys the closer stance. The display's top is the
+    // line that must hold.
+    let head_height = backbox.1.z - backbox.0.z;
+    let display_top = Vec3::new(
+        482.0,
+        backbox.0.y,
+        backbox.1.z - head_height * vpw_table::backbox::DISPLAY_AREA[1],
+    );
     assert!(
-        on_screen(&front, top_of_head, aspect),
-        "the front view has to fit the head: {top_of_head:?}"
+        on_screen(&front, display_top, aspect),
+        "the front view has to fit the display: {display_top:?}"
     );
 
     // And the overhead one frames the playfield without paying for it.
@@ -240,13 +249,19 @@ fn the_head_lands_in_the_upper_part_of_the_front_view() {
         let [left, top, width, height] =
             head_rect(View::Front, aspect).expect("the head is in shot from the front");
 
+        // The head's crown may crop off the top of a wide screen — that is
+        // the front view's closer stance — but its display band, the part
+        // with the score on it, has to land whole.
+        let display = vpw_table::backbox::DISPLAY_AREA;
+        let display_top = top + height * display[1];
+        let display_bottom = top + height * (display[1] + display[3]);
         assert!(
-            (0.0..1.0).contains(&left) && (0.0..1.0).contains(&top),
+            (0.0..1.0).contains(&left),
             "at {aspect:.2} it landed off screen: {left} {top}"
         );
         assert!(
-            left + width <= 1.0 && top + height <= 1.0,
-            "and has to fit: {left}+{width}, {top}+{height}"
+            left + width <= 1.0 && (0.0..=1.0).contains(&display_top) && display_bottom <= 1.0,
+            "and the display has to fit: {left}+{width}, display {display_top}..{display_bottom}"
         );
         // Above the middle: it is the head of the machine, not its apron.
         assert!(

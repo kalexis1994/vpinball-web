@@ -55,7 +55,7 @@ pub const DISPLAY_PIXELS: (u32, u32) = (1024, 256);
 /// Upper middle. On a real backglass the score window is set into the artwork
 /// rather than filling it, and leaving the rest of the face free is what makes
 /// room for the artwork when there is any.
-const DISPLAY_AREA: [f32; 4] = [0.12, 0.16, 0.76, 0.30];
+pub const DISPLAY_AREA: [f32; 4] = [0.12, 0.16, 0.76, 0.30];
 
 /// How much wider the head is than the playfield.
 ///
