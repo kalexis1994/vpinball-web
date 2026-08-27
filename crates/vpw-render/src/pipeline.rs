@@ -54,6 +54,9 @@ pub struct TablePipeline {
     pub envmap: crate::env::EnvMap,
     pub mip_levels: u32,
     pub env_height: u32,
+    /// What the table pass clears to: the room's tint, kept dim. What is
+    /// behind a machine is the room it stands in, out of the light.
+    pub clear: wgpu::Color,
 }
 
 impl TablePipeline {
@@ -363,6 +366,7 @@ impl TablePipeline {
             mip_levels: envmap.mip_levels,
             env_height: envmap.height,
             envmap,
+            clear: crate::pass::CLEAR,
             opaque: make_with("vpw-opaque", &shader, &layout, None, true),
             blended: make_with(
                 "vpw-transparent",
@@ -436,6 +440,13 @@ impl TablePipeline {
     pub fn set_envmap(&mut self, device: &wgpu::Device, envmap: crate::env::EnvMap) {
         self.mip_levels = envmap.mip_levels;
         self.env_height = envmap.height;
+        // The backdrop takes the room's tint, kept far below the table: what
+        // is behind a machine is the room it stands in, out of the light.
+        // The mean is normalised so only the hue survives, then set to a
+        // fixed dim level — a bright map should not mean a bright void.
+        let peak = envmap.mean.iter().cloned().fold(1e-6f32, f32::max);
+        let [r, g, b] = envmap.mean.map(|c| f64::from(c / peak * 0.006));
+        self.clear = wgpu::Color { r, g, b, a: 1.0 };
         self.envmap = envmap;
         self.rebind(device);
     }

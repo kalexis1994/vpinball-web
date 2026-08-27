@@ -61,6 +61,9 @@ pub struct EnvMap {
     /// [`DEFAULT_SOURCE`] for the shipped one. So a photograph can say which
     /// map it was taken under.
     pub source: String,
+    /// The map's average colour, linear. What the room is, boiled down to one
+    /// texel — the backdrop behind the table is painted with its tint.
+    pub mean: [f32; 3],
 }
 
 impl EnvMap {
@@ -172,7 +175,17 @@ impl EnvMap {
 
         let small = shrink(pixels, w, h, SOURCE_W, SOURCE_H);
         let irradiance = convolve_linear(&small);
-        Self::finish(device, queue, radiance, &irradiance, levels, h, source)
+        let mean = mean_of(&small);
+        Self::finish(
+            device,
+            queue,
+            radiance,
+            &irradiance,
+            mean,
+            levels,
+            h,
+            source,
+        )
     }
 
     /// Loads the map from one of the table's own images.
@@ -283,12 +296,30 @@ impl EnvMap {
             );
         }
 
-        let irradiance = convolve(&img);
+        let small = image::imageops::resize(
+            &img,
+            SOURCE_W,
+            SOURCE_H,
+            image::imageops::FilterType::Triangle,
+        );
+        let linear: Vec<[f32; 3]> = small
+            .pixels()
+            .map(|p| {
+                [
+                    srgb_to_linear(p[0]),
+                    srgb_to_linear(p[1]),
+                    srgb_to_linear(p[2]),
+                ]
+            })
+            .collect();
+        let irradiance = convolve_linear(&linear);
+        let mean = mean_of(&linear);
         Some(Self::finish(
             device,
             queue,
             radiance,
             &irradiance,
+            mean,
             levels,
             h,
             source,
@@ -297,11 +328,16 @@ impl EnvMap {
 
     /// The half the two loaders share: the irradiance texture, the sampler,
     /// and the struct.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one argument per thing the struct keeps"
+    )]
     fn finish(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         radiance: wgpu::Texture,
         irradiance: &[u16],
+        mean: [f32; 3],
         levels: u32,
         height: u32,
         source: &str,
@@ -358,8 +394,20 @@ impl EnvMap {
             mip_levels: levels,
             height,
             source: source.to_owned(),
+            mean,
         }
     }
+}
+
+/// The average of a linear map: the room boiled down to one texel.
+fn mean_of(pixels: &[[f32; 3]]) -> [f32; 3] {
+    let mut mean = [0.0f32; 3];
+    for p in pixels {
+        for (m, c) in mean.iter_mut().zip(p) {
+            *m += c;
+        }
+    }
+    mean.map(|m| m / pixels.len().max(1) as f32)
 }
 
 /// Box-averages a linear map to a new size. The mip builder and the
@@ -425,26 +473,6 @@ fn srgb_to_linear(c: u8) -> f32 {
 /// the hemisphere 4k times and a sun-sized spot would need 64k. This one does
 /// not sample — it integrates every texel of a 64×32 shrink, which is its own
 /// low-pass — and the 8-bit maps it can load were never blurred there either.
-fn convolve(src: &image::RgbaImage) -> Vec<u16> {
-    let small = image::imageops::resize(
-        src,
-        SOURCE_W,
-        SOURCE_H,
-        image::imageops::FilterType::Triangle,
-    );
-    let linear: Vec<[f32; 3]> = small
-        .pixels()
-        .map(|p| {
-            [
-                srgb_to_linear(p[0]),
-                srgb_to_linear(p[1]),
-                srgb_to_linear(p[2]),
-            ]
-        })
-        .collect();
-    convolve_linear(&linear)
-}
-
 /// The convolution itself, over a [`SOURCE_W`] × [`SOURCE_H`] linear shrink —
 /// the byte path decodes into this, the Radiance path arrives in it.
 fn convolve_linear(small: &[[f32; 3]]) -> Vec<u16> {
@@ -498,6 +526,27 @@ fn convolve_linear(small: &[[f32; 3]]) -> Vec<u16> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// What the loader feeds the core: the shrink, in linear.
+    fn convolve(src: &image::RgbaImage) -> Vec<u16> {
+        let small = image::imageops::resize(
+            src,
+            SOURCE_W,
+            SOURCE_H,
+            image::imageops::FilterType::Triangle,
+        );
+        let linear: Vec<[f32; 3]> = small
+            .pixels()
+            .map(|p| {
+                [
+                    srgb_to_linear(p[0]),
+                    srgb_to_linear(p[1]),
+                    srgb_to_linear(p[2]),
+                ]
+            })
+            .collect();
+        convolve_linear(&linear)
+    }
 
     fn uniform(v: u8) -> image::RgbaImage {
         image::RgbaImage::from_pixel(128, 64, image::Rgba([v, v, v, 255]))

@@ -195,7 +195,9 @@ pub fn draw_full(
             depth_slice: None,
             resolve_target: None,
             ops: wgpu::Operations {
-                load: wgpu::LoadOp::Clear(CLEAR),
+                // The pipeline's, not the constant: the backdrop wears the
+                // room's tint, and the room is whichever map is installed.
+                load: wgpu::LoadOp::Clear(pipeline.clear),
                 store: wgpu::StoreOp::Store,
             },
         })],
