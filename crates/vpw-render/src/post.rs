@@ -375,7 +375,6 @@ impl Post {
         post
     }
 
-    #[expect(clippy::type_complexity, reason = "one entry per buffer, built twice")]
     fn targets(
         device: &wgpu::Device,
         format: wgpu::TextureFormat,

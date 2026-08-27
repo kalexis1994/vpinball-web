@@ -241,11 +241,7 @@ impl Bsmt2000 {
                     voice.fraction = 0;
                 }
                 0x77 => self.adpcm_77 = data,
-                0x70 | 0x78 => {
-                    if self.stereo {
-                        voice.reg[LEFTVOL] = data;
-                    }
-                }
+                0x70 | 0x78 if self.stereo => voice.reg[LEFTVOL] = data,
                 _ => {}
             }
         }

@@ -348,7 +348,7 @@ fn soften(mut wear: vpw_table::geometry::Image) -> vpw_table::geometry::Image {
     let Some(px) = wear.rgba.as_mut() else {
         return wear;
     };
-    let mut gray: Vec<u16> = px.chunks_exact(4).map(|t| t[0] as u16).collect();
+    let mut gray: Vec<u16> = px.as_chunks::<4>().0.iter().map(|t| t[0] as u16).collect();
     let mut pass = vec![0u16; gray.len()];
     const R: isize = 2;
     for _ in 0..2 {
@@ -375,7 +375,7 @@ fn soften(mut wear: vpw_table::geometry::Image) -> vpw_table::geometry::Image {
             }
         }
     }
-    for (texel, g) in px.chunks_exact_mut(4).zip(&gray) {
+    for (texel, g) in px.as_chunks_mut::<4>().0.iter_mut().zip(&gray) {
         let v = *g as u8;
         texel[0] = v;
         texel[1] = v;
@@ -396,7 +396,9 @@ fn ball_wear(image: &vpw_table::geometry::Image) -> Option<vpw_table::geometry::
         return None;
     }
     let px = rgba
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .flat_map(|texel| {
             // The mark is the colour itself. Decals of this era are additive
             // maps — black adds nothing, a bright stroke is a scratch — and

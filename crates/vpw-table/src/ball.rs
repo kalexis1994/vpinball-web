@@ -207,7 +207,7 @@ mod tests {
         // Multiplicative wear: mostly untouched steel, nothing brighter than
         // white, and enough scuffed texels that a roll is actually visible.
         let mut worn = 0usize;
-        for texel in px.chunks_exact(4) {
+        for texel in px.as_chunks::<4>().0 {
             assert_eq!(texel[3], 255, "wear has no transparency");
             if texel[0] < 250 {
                 worn += 1;

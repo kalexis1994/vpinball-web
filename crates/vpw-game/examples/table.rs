@@ -376,7 +376,7 @@ fn main() {
         }
         // With VPW_CALL in play, every ball is worth watching: the sub that
         // was called is usually one that makes or throws one.
-        if std::env::var("VPW_CALL").is_ok() && t >= 8_500 && t <= 9_200 && t % 50 == 0 {
+        if std::env::var("VPW_CALL").is_ok() && (8_500..=9_200).contains(&t) && t % 50 == 0 {
             let engine = game.engine.borrow();
             if let Some(b) = engine.balls.last() {
                 println!(
