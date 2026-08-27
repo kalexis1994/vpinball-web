@@ -531,6 +531,7 @@ impl Object for Item {
             Kind::Kicker => self.kicker_set(&lower, &value),
             Kind::Bumper => self.bumper_set(&lower, &value),
             Kind::Flasher => self.flasher_set(&lower, &value),
+            Kind::Plunger => self.plunger_set(&lower, &value),
             _ => Err(Error::no_such_member(name)),
         };
         if specific.is_err() {
@@ -1338,6 +1339,29 @@ impl Item {
                     .unwrap_or(0.0);
                 // The original reports 0 at the front and 25 fully drawn back.
                 Ok(Value::Double(f64::from(p) * 25.0))
+            }
+            _ => Err(Error::no_such_member(name)),
+        }
+    }
+
+    fn plunger_set(&self, name: &str, value: &Value) -> Result<()> {
+        let Some(i) = self.shape() else {
+            return Err(Error::no_such_member(name));
+        };
+        match name {
+            // The ROM-controlled launcher. The file can author a plunger this
+            // way, but plenty of tables flip it at run time instead — South
+            // Park's AutoLaunch turns it on, fires, and turns it off — and
+            // the original honours the property live (`Plunger::Fire`,
+            // `plunger.cpp:988`: an auto plunger releases from full
+            // retraction, a solenoid having no notion of how hard).
+            "autoplunger" => {
+                let on = value.to_bool()?;
+                let mut engine = self.engine.borrow_mut();
+                if let Some(Shape::Plunger(p)) = engine.shapes_mut().get_mut(i) {
+                    p.auto_plunger = on;
+                }
+                Ok(())
             }
             _ => Err(Error::no_such_member(name)),
         }

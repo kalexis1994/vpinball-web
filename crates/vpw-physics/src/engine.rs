@@ -350,6 +350,11 @@ impl Engine {
         self.balls.len() - 1
     }
 
+    /// The shapes, mutably, for a host that owns a specific one.
+    pub fn shapes_mut(&mut self) -> &mut [Shape] {
+        &mut self.shapes
+    }
+
     pub fn shapes(&self) -> &[Shape] {
         &self.shapes
     }

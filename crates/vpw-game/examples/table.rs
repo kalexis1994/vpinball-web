@@ -289,8 +289,22 @@ fn main() {
                     && let Ok(at) = at.trim().parse::<u32>()
                     && t == at
                 {
+                    // `Name:arg@ms` passes one boolean or number along.
+                    let (name, args) = match name.split_once(':') {
+                        Some((n, a)) => {
+                            let v = match a.trim() {
+                                "1" | "true" => vpw_vbscript::value::Value::Bool(true),
+                                "0" | "false" => vpw_vbscript::value::Value::Bool(false),
+                                other => {
+                                    vpw_vbscript::value::Value::Double(other.parse().unwrap_or(0.0))
+                                }
+                            };
+                            (n, vec![v])
+                        }
+                        None => (name, Vec::new()),
+                    };
                     println!("  calling {name} at {t} ms");
-                    if let Err(e) = game.script_mut().call(name.trim(), &[]) {
+                    if let Err(e) = game.script_mut().call(name.trim(), &args) {
                         println!("  {name}: {e}");
                     }
                 }
