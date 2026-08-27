@@ -138,6 +138,7 @@ impl Flashers {
         queue: &wgpu::Queue,
         frame_layout: &wgpu::BindGroupLayout,
         color_format: wgpu::TextureFormat,
+        samples: u32,
     ) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("vpw-flasher-shader"),
@@ -229,7 +230,10 @@ impl Flashers {
                     stencil: Default::default(),
                     bias: Default::default(),
                 }),
-                multisample: Default::default(),
+                multisample: wgpu::MultisampleState {
+                    count: samples,
+                    ..Default::default()
+                },
                 multiview_mask: None,
                 cache: None,
             })

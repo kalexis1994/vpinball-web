@@ -11,6 +11,16 @@ use crate::lights::Lights;
 use crate::pipeline::TablePipeline;
 use crate::scene::GpuScene;
 
+/// What to do with the attachment when the pass ends: keep it, unless it was
+/// only ever the staging ground for a resolve.
+fn store_for(resolve: Option<&wgpu::TextureView>) -> wgpu::StoreOp {
+    if resolve.is_some() {
+        wgpu::StoreOp::Discard
+    } else {
+        wgpu::StoreOp::Store
+    }
+}
+
 /// Background color. The original uses the table's `colorbackdrop`; until we
 /// read that field, a very dark blue that competes with nothing.
 pub const CLEAR: wgpu::Color = wgpu::Color {
@@ -70,6 +80,7 @@ pub fn draw_lights_only(
 pub fn draw_reflection(
     encoder: &mut wgpu::CommandEncoder,
     color: &wgpu::TextureView,
+    resolve: Option<&wgpu::TextureView>,
     depth: &wgpu::TextureView,
     pipeline: &TablePipeline,
     scene: &GpuScene,
@@ -80,12 +91,15 @@ pub fn draw_reflection(
         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
             view: color,
             depth_slice: None,
-            resolve_target: None,
+            resolve_target: resolve,
             ops: wgpu::Operations {
                 // Black, not the table's background: what is not reflected must
                 // add nothing, and this is added rather than blended.
                 load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                store: wgpu::StoreOp::Store,
+                // The multisamples are working data: once resolved they are
+                // done, and discarding them is what keeps them on-tile on the
+                // GPUs where that matters.
+                store: store_for(resolve),
             },
         })],
         depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
@@ -133,6 +147,7 @@ pub fn draw(
     draw_full(
         encoder,
         color,
+        None,
         depth,
         pipeline,
         scene,
@@ -154,7 +169,7 @@ pub fn draw_filtered(
     filter: impl Fn(&crate::scene::Batch) -> bool,
 ) {
     draw_full(
-        encoder, color, depth, pipeline, scene, None, None, None, filter,
+        encoder, color, None, depth, pipeline, scene, None, None, None, filter,
     );
 }
 
@@ -180,6 +195,7 @@ pub fn draw_filtered(
 pub fn draw_full(
     encoder: &mut wgpu::CommandEncoder,
     color: &wgpu::TextureView,
+    resolve: Option<&wgpu::TextureView>,
     depth: &wgpu::TextureView,
     pipeline: &TablePipeline,
     scene: &GpuScene,
@@ -193,12 +209,13 @@ pub fn draw_full(
         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
             view: color,
             depth_slice: None,
-            resolve_target: None,
+            resolve_target: resolve,
             ops: wgpu::Operations {
                 // The pipeline's, not the constant: the backdrop wears the
                 // room's tint, and the room is whichever map is installed.
                 load: wgpu::LoadOp::Clear(pipeline.clear),
-                store: wgpu::StoreOp::Store,
+                // See `draw_reflection` for why the multisamples are discarded.
+                store: store_for(resolve),
             },
         })],
         depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {

@@ -89,16 +89,32 @@ impl Offscreen {
         // always there, and asking the adapter costs nothing.
         let hdr = crate::post::hdr_format(&adapter);
         let hdr_usages = adapter.get_texture_format_features(hdr).allowed_usages;
-        let post = Post::new(&device, &queue, hdr, FORMAT, width, height);
-        let mut pipeline = TablePipeline::new(&device, &queue, hdr);
+        // The same four-or-one the browser decides, asked of the same flags,
+        // so a photograph is a photograph of what a player would get.
+        let flags = adapter.get_texture_format_features(hdr).flags;
+        let samples = if flags.sample_count_supported(4) {
+            4
+        } else {
+            1
+        };
+        // VPW_MSAA=1 or =4 overrides, which is how the benchmark takes a
+        // matched pair on the same warmed-up device.
+        let samples = std::env::var("VPW_MSAA")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .filter(|s| *s == 1 || (*s == 4 && flags.sample_count_supported(4)))
+            .unwrap_or(samples);
+        eprintln!("offscreen MSAA {samples}x");
+        let post = Post::new(&device, &queue, hdr, FORMAT, samples, width, height);
+        let mut pipeline = TablePipeline::new(&device, &queue, hdr, samples);
         pipeline.set_probes(
             &device,
             post.transmission_view(),
             post.sampler(),
             post.reflection_view(),
         );
-        let lights = Lights::new(&device, &pipeline, hdr);
-        let flashers = Flashers::new(&device, &queue, &pipeline.light_frame_layout, hdr);
+        let lights = Lights::new(&device, &pipeline, hdr, samples);
+        let flashers = Flashers::new(&device, &queue, &pipeline.light_frame_layout, hdr, samples);
 
         Ok(Self {
             device,
@@ -310,6 +326,21 @@ impl Offscreen {
         camera: &Camera,
         filter: impl Fn(&crate::scene::Batch) -> bool,
     ) -> Vec<u8> {
+        self.draw_only(scene, camera, filter);
+        self.read_back()
+    }
+
+    /// Draws and submits a frame without reading it back.
+    ///
+    /// For measuring: the read-back costs more than the frame and would bury
+    /// any rendering change under its constant. A benchmark submits many of
+    /// these, waits for the queue, and divides.
+    pub fn draw_only(
+        &self,
+        scene: &GpuScene,
+        camera: &Camera,
+        filter: impl Fn(&crate::scene::Batch) -> bool,
+    ) {
         let aspect = self.width as f32 / self.height as f32;
         let gi = self.lights.gi_sources(crate::scene::MAX_GI_BULBS);
         self.pipeline.set_frame(
@@ -341,18 +372,22 @@ impl Offscreen {
         // for a table that does not mirror. The original skips it the same way,
         // by never creating the probe (`RenderProbe::REFL_NONE`).
         if scene.lighting.reflection_strength > 0.0 {
+            let (color, resolve) = self.post.reflection_color();
             crate::pass::draw_reflection(
                 &mut encoder,
-                self.post.reflection_view(),
+                color,
+                resolve,
                 self.post.reflection_depth(),
                 &self.pipeline,
                 scene,
                 self.dynamic.as_ref(),
             );
         }
+        let (color, resolve) = self.post.scene_color();
         crate::pass::draw_full(
             &mut encoder,
-            self.post.scene_view(),
+            color,
+            resolve,
             &self.post.depth,
             &self.pipeline,
             scene,
@@ -363,7 +398,6 @@ impl Offscreen {
         );
         self.post.finish(&mut encoder, &view);
         self.queue.submit(Some(encoder.finish()));
-        self.read_back()
     }
 
     /// Copies the texture back to the CPU. wgpu's copy demands rows aligned to

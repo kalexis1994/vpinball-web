@@ -29,7 +29,10 @@ type RafClosure = Closure<dyn FnMut(f64)>;
 #[wasm_bindgen(start)]
 pub fn init() {
     console_error_panic_hook::set_once();
-    let _ = console_log::init_with_level(log::Level::Info);
+    // Debug and up: the once-a-second stats line logs at debug, which the
+    // console hides behind its Verbose switch — present when wanted, silent
+    // otherwise. The logger has to let it through for the switch to matter.
+    let _ = console_log::init_with_level(log::Level::Debug);
 }
 
 /// Loop statistics, so we have numbers from day one: the point of the port is
@@ -46,13 +49,23 @@ struct FrameStats {
     /// worked out from the window that just closed.
     sound_at: u64,
     sound_rate: f64,
+    /// Milliseconds the render half of each frame took, summed over the
+    /// window, and the average from the window that just closed. The number a
+    /// rendering change has to answer to: fps saturates at the display's
+    /// refresh and hides everything below it.
+    render_ms_sum: f64,
+    render_ms_avg: f64,
+    /// Seconds reported since the last loud one. Every tenth window speaks at
+    /// info: once a second is a wall, once in ten is a pulse.
+    windows: u32,
 }
 
 impl FrameStats {
     /// Accumulates and, once per second, returns (fps, ticks/s) and resets.
-    fn tick(&mut self, now_ms: f64, ticks: u32, sound: u64) -> Option<(f64, f64)> {
+    fn tick(&mut self, now_ms: f64, ticks: u32, sound: u64, render_ms: f32) -> Option<(f64, f64)> {
         self.frames += 1;
         self.physics_ticks += u64::from(ticks);
+        self.render_ms_sum += f64::from(render_ms);
         if self.window_start_ms == 0.0 {
             self.window_start_ms = now_ms;
             self.sound_at = sound;
@@ -65,6 +78,8 @@ impl FrameStats {
         self.last_fps = f64::from(self.frames) / elapsed;
         self.last_tps = self.physics_ticks as f64 / elapsed;
         self.sound_rate = sound.saturating_sub(self.sound_at) as f64 / elapsed;
+        self.render_ms_avg = self.render_ms_sum / f64::from(self.frames.max(1));
+        self.render_ms_sum = 0.0;
         self.sound_at = sound;
         self.frames = 0;
         self.physics_ticks = 0;
@@ -261,14 +276,22 @@ impl Player {
             .table
             .as_ref()
             .map_or(0, |t| t.machine().sound_stats().1);
-        if let Some((fps, tps)) = self.stats.tick(now_ms, ticks, made) {
-            // Debug, not info: the HUD reads these same numbers through
-            // `loopStats`, and a console that scrolls once a second buries
-            // anything worth reading in it. Chrome's "Verbose" level brings
-            // the line back when the HUD is not enough.
-            log::debug!(
-                "{fps:.1} fps | {tps:.0} physics ticks/s (target 1000) | \
+        if let Some((fps, tps)) = self.stats.tick(now_ms, ticks, made, render_ms) {
+            // Once in ten at info, the rest at debug: the HUD reads these
+            // numbers through `loopStats`, and a console that scrolls once a
+            // second buries anything worth reading — but a pulse every ten
+            // keeps the render cost measurable without opening Verbose.
+            self.stats.windows += 1;
+            let level = if self.stats.windows.is_multiple_of(10) {
+                log::Level::Info
+            } else {
+                log::Level::Debug
+            };
+            log::log!(
+                level,
+                "{fps:.1} fps | {tps:.0} physics ticks/s (target 1000) | render {:.2} ms avg | \
                  sound board {:.0} samples/s (target 24242)",
+                self.stats.render_ms_avg,
                 self.stats.sound_rate
             );
         }

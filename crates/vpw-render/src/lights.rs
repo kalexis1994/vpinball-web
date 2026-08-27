@@ -389,6 +389,7 @@ impl Lights {
         device: &wgpu::Device,
         pipeline: &crate::pipeline::TablePipeline,
         color_format: wgpu::TextureFormat,
+        samples: u32,
     ) -> Self {
         // One module, the material shader with the light stages after it. See
         // the header of `light.wgsl` for why the two share a module.
@@ -522,8 +523,14 @@ impl Lights {
                     cull_mode: None,
                     ..Default::default()
                 },
+                // The depth test doubles as the address: a halo with one is
+                // drawn in the scene pass, which is multisampled; the flat
+                // one draws into the transmitted-light buffer, which is not.
+                multisample: wgpu::MultisampleState {
+                    count: if depth.is_some() { samples } else { 1 },
+                    ..Default::default()
+                },
                 depth_stencil: depth,
-                multisample: Default::default(),
                 multiview_mask: None,
                 cache: None,
             })

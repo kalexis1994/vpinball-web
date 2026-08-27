@@ -311,6 +311,18 @@ impl GpuContext {
     /// how you get a validation error instead of a picture. See where the
     /// surface is configured.
     #[inline]
+    /// How many samples the scene should draw with into `format`: four when
+    /// the device multisamples it, one when it does not. Asked, not assumed —
+    /// that is the whole difference between robust and usually-fine.
+    pub fn msaa_samples(&self, format: wgpu::TextureFormat) -> u32 {
+        let flags = self.adapter.get_texture_format_features(format).flags;
+        if flags.sample_count_supported(4) {
+            4
+        } else {
+            1
+        }
+    }
+
     pub fn format(&self) -> wgpu::TextureFormat {
         self.config.format.add_srgb_suffix()
     }

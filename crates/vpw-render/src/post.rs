@@ -105,6 +105,41 @@ impl Target {
     }
 }
 
+/// A multisampled colour buffer, or nothing when one sample is all there is.
+///
+/// Attachment only — it is never sampled, it resolves. `None` at one sample
+/// keeps the plain path exactly what it was.
+fn msaa_target(
+    device: &wgpu::Device,
+    format: wgpu::TextureFormat,
+    label: &str,
+    samples: u32,
+    width: u32,
+    height: u32,
+) -> Option<wgpu::TextureView> {
+    if samples <= 1 {
+        return None;
+    }
+    Some(
+        device
+            .create_texture(&wgpu::TextureDescriptor {
+                label: Some(label),
+                size: wgpu::Extent3d {
+                    width: width.max(1),
+                    height: height.max(1),
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: samples,
+                dimension: wgpu::TextureDimension::D2,
+                format,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                view_formats: &[],
+            })
+            .create_view(&Default::default()),
+    )
+}
+
 /// The uniform every post pass reads.
 ///
 /// `texel` and `params` together are the original's `w_h_height` and
@@ -139,6 +174,17 @@ pub struct Post {
     reflection: Target,
     /// Its own depth, since it is drawn before the table and at its own size.
     reflection_depth: wgpu::TextureView,
+    /// How many samples the scene passes draw with. One when the device
+    /// cannot multisample the HDR format; four when it can, which is every
+    /// device that matters.
+    samples: u32,
+    /// The multisampled partners of `hdr` and `reflection`, present when
+    /// `samples > 1`: fragments land here and resolve into the plain ones,
+    /// which are what the later passes sample. Discarded every frame — on a
+    /// tile-based GPU the four samples then never leave tile memory, which is
+    /// what makes MSAA close to free there.
+    scene_msaa: Option<wgpu::TextureView>,
+    reflection_msaa: Option<wgpu::TextureView>,
 
     cut_off: wgpu::RenderPipeline,
     wide_h: wgpu::RenderPipeline,
@@ -183,6 +229,7 @@ impl Post {
         queue: &wgpu::Queue,
         format: wgpu::TextureFormat,
         output_format: wgpu::TextureFormat,
+        samples: u32,
         width: u32,
         height: u32,
     ) -> Post {
@@ -287,12 +334,15 @@ impl Post {
             // Filled in by `resize` below, which is the one place that builds
             // targets and the bind groups that point at them.
             hdr: Target::new(device, format, "vpw-hdr", 1, 1),
-            depth: crate::pipeline::depth_texture(device, 1, 1),
+            depth: crate::pipeline::depth_texture(device, 1, 1, 1),
             bloom: Target::new(device, format, "vpw-bloom", 1, 1),
             scratch: Target::new(device, format, "vpw-blur-scratch", 1, 1),
             transmission: Target::new(device, format, "vpw-transmission", 1, 1),
             reflection: Target::new(device, format, "vpw-reflection", 1, 1),
-            reflection_depth: crate::pipeline::depth_texture(device, 1, 1),
+            reflection_depth: crate::pipeline::depth_texture(device, 1, 1, 1),
+            samples,
+            scene_msaa: None,
+            reflection_msaa: None,
             from_hdr: None,
             from_bloom: None,
             from_scratch: None,
@@ -316,9 +366,11 @@ impl Post {
         post
     }
 
+    #[expect(clippy::type_complexity, reason = "one entry per buffer, built twice")]
     fn targets(
         device: &wgpu::Device,
         format: wgpu::TextureFormat,
+        samples: u32,
         width: u32,
         height: u32,
     ) -> (
@@ -329,6 +381,8 @@ impl Post {
         wgpu::TextureView,
         Target,
         wgpu::TextureView,
+        Option<wgpu::TextureView>,
+        Option<wgpu::TextureView>,
     ) {
         let (sw, sh) = ((width / DOWNSCALE).max(1), (height / DOWNSCALE).max(1));
         // The reflection is drawn at half size in each direction. The original
@@ -345,10 +399,30 @@ impl Post {
             Target::new(device, format, "vpw-bloom", sw, sh),
             Target::new(device, format, "vpw-blur-scratch", sw, sh),
             Target::new(device, format, "vpw-transmission", sw, sh),
-            crate::pipeline::depth_texture(device, width, height),
+            crate::pipeline::depth_texture(device, width, height, samples),
             Target::new(device, format, "vpw-reflection", rw, rh),
-            crate::pipeline::depth_texture(device, rw, rh),
+            crate::pipeline::depth_texture(device, rw, rh, samples),
+            msaa_target(device, format, "vpw-hdr-msaa", samples, width, height),
+            msaa_target(device, format, "vpw-reflection-msaa", samples, rw, rh),
         )
+    }
+
+    /// The scene's colour attachment and where it resolves: the multisampled
+    /// buffer over the plain one when there is one, the plain one alone when
+    /// there is not.
+    pub fn scene_color(&self) -> (&wgpu::TextureView, Option<&wgpu::TextureView>) {
+        match &self.scene_msaa {
+            Some(msaa) => (msaa, Some(&self.hdr.view)),
+            None => (&self.hdr.view, None),
+        }
+    }
+
+    /// The reflection probe's, on the same terms.
+    pub fn reflection_color(&self) -> (&wgpu::TextureView, Option<&wgpu::TextureView>) {
+        match &self.reflection_msaa {
+            Some(msaa) => (msaa, Some(&self.reflection.view)),
+            None => (&self.reflection.view, None),
+        }
     }
 
     fn bind(
@@ -434,8 +508,8 @@ impl Post {
     }
 
     pub fn resize(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, width: u32, height: u32) {
-        let (hdr, bloom, scratch, transmission, depth, reflection, reflection_depth) =
-            Self::targets(device, self.format, width, height);
+        let (hdr, bloom, scratch, transmission, depth, reflection, reflection_depth, msaa, rmsaa) =
+            Self::targets(device, self.format, self.samples, width, height);
         (
             self.hdr,
             self.bloom,
@@ -444,6 +518,8 @@ impl Post {
             self.depth,
             self.reflection,
             self.reflection_depth,
+            self.scene_msaa,
+            self.reflection_msaa,
         ) = (
             hdr,
             bloom,
@@ -452,6 +528,8 @@ impl Post {
             depth,
             reflection,
             reflection_depth,
+            msaa,
+            rmsaa,
         );
         self.write_uniforms(queue);
 

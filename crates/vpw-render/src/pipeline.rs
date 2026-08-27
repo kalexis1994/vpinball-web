@@ -64,6 +64,7 @@ impl TablePipeline {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         color_format: wgpu::TextureFormat,
+        samples: u32,
     ) -> Self {
         // Two shader modules that share everything but the vertex stage. See
         // the header of `material.wgsl` for why the split is there rather than
@@ -252,7 +253,10 @@ impl TablePipeline {
                     stencil: Default::default(),
                     bias: Default::default(),
                 }),
-                multisample: Default::default(),
+                multisample: wgpu::MultisampleState {
+                    count: samples,
+                    ..Default::default()
+                },
                 multiview_mask: None,
                 cache: None,
             })
@@ -592,7 +596,12 @@ impl TablePipeline {
 }
 
 /// Creates the depth texture at the requested size.
-pub fn depth_texture(device: &wgpu::Device, width: u32, height: u32) -> wgpu::TextureView {
+pub fn depth_texture(
+    device: &wgpu::Device,
+    width: u32,
+    height: u32,
+    samples: u32,
+) -> wgpu::TextureView {
     device
         .create_texture(&wgpu::TextureDescriptor {
             label: Some("vpw-depth"),
@@ -602,7 +611,7 @@ pub fn depth_texture(device: &wgpu::Device, width: u32, height: u32) -> wgpu::Te
                 depth_or_array_layers: 1,
             },
             mip_level_count: 1,
-            sample_count: 1,
+            sample_count: samples,
             dimension: wgpu::TextureDimension::D2,
             format: DEPTH_FORMAT,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,

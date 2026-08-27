@@ -62,19 +62,37 @@ impl TableRenderer {
         // What the passes draw into, decided once from what this device can
         // actually draw into. See [`crate::post::hdr_format`].
         let hdr = gpu.hdr_format;
-        let post = Post::new(&gpu.device, &gpu.queue, hdr, gpu.format(), width, height);
+        // Four samples where the device offers them for the HDR format, one
+        // where it does not; the whole scene pass follows the answer.
+        let samples = gpu.msaa_samples(hdr);
+        log::info!("MSAA {samples}x");
+        let post = Post::new(
+            &gpu.device,
+            &gpu.queue,
+            hdr,
+            gpu.format(),
+            samples,
+            width,
+            height,
+        );
         // The table is drawn into the floating-point buffer, not onto the
         // screen, so both it and the lights are built for that format. Only the
         // final composite targets the surface.
-        let mut pipeline = TablePipeline::new(&gpu.device, &gpu.queue, hdr);
+        let mut pipeline = TablePipeline::new(&gpu.device, &gpu.queue, hdr, samples);
         pipeline.set_probes(
             &gpu.device,
             post.transmission_view(),
             post.sampler(),
             post.reflection_view(),
         );
-        let lights = Lights::new(&gpu.device, &pipeline, hdr);
-        let flashers = Flashers::new(&gpu.device, &gpu.queue, &pipeline.light_frame_layout, hdr);
+        let lights = Lights::new(&gpu.device, &pipeline, hdr, samples);
+        let flashers = Flashers::new(
+            &gpu.device,
+            &gpu.queue,
+            &pipeline.light_frame_layout,
+            hdr,
+            samples,
+        );
         Ok(Self {
             gpu,
             pipeline,
@@ -298,6 +316,7 @@ impl TableRenderer {
             &self.gpu.queue,
             &self.pipeline.light_frame_layout,
             self.gpu.hdr_format,
+            self.gpu.msaa_samples(self.gpu.hdr_format),
         );
     }
 
@@ -570,9 +589,11 @@ impl TableRenderer {
         // for a table that does not mirror. The original skips it the same way,
         // by never creating the probe (`RenderProbe::REFL_NONE`).
         if scene.lighting.reflection_strength > 0.0 {
+            let (color, resolve) = self.post.reflection_color();
             crate::pass::draw_reflection(
                 &mut encoder,
-                self.post.reflection_view(),
+                color,
+                resolve,
                 self.post.reflection_depth(),
                 &self.pipeline,
                 scene,
@@ -584,9 +605,11 @@ impl TableRenderer {
         // across the top of the picture, standing where the glass would be —
         // and the whole point of that view is that the screen is the glass.
         let head = self.view.shows_backbox();
+        let (color, resolve) = self.post.scene_color();
         crate::pass::draw_full(
             &mut encoder,
-            self.post.scene_view(),
+            color,
+            resolve,
             &self.post.depth,
             &self.pipeline,
             scene,
