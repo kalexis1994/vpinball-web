@@ -15,6 +15,7 @@ import {
   saveMachineState,
   setCameraView,
   setDayNight,
+  setEnvironment,
   setTelemetry,
   startPlayer,
   type Loop,
@@ -116,6 +117,9 @@ export function Player({ table, title, source, rom, onExit }: Props) {
         await setCameraView(settings().camera);
         // And the stored day/night, on the same terms.
         await setDayNight(settings().brightness);
+        // The stored room too: the bar's map is a fetch away, so it goes on
+        // after the table is playable rather than making it wait.
+        void setEnvironment(settings().environment);
         setPhase('ready');
 
         timer = window.setInterval(() => {
@@ -215,8 +219,9 @@ export function Player({ table, title, source, rom, onExit }: Props) {
         setView(s.camera);
         void setCameraView(s.camera);
         // The lighting slider works while a table is playing behind the
-        // settings screen, the same way the volume does.
+        // settings screen, the same way the volume does. So does the room.
         void setDayNight(s.brightness);
+        void setEnvironment(s.environment);
       }),
     [],
   );

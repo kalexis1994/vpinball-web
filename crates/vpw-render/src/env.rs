@@ -43,6 +43,7 @@ const IRRADIANCE_H: u32 = 16;
 const SOURCE_W: u32 = 64;
 const SOURCE_H: u32 = 32;
 
+#[derive(Clone)]
 pub struct EnvMap {
     /// The map with its mip chain, for the specular term.
     pub radiance: wgpu::TextureView,
@@ -72,6 +73,106 @@ impl EnvMap {
     /// Loads the map that ships with Visual Pinball.
     pub fn default_map(device: &wgpu::Device, queue: &wgpu::Queue) -> Option<Self> {
         Self::load(device, queue, DEFAULT_ENVMAP)
+    }
+
+    /// Loads an equirectangular map from Radiance `.hdr` bytes.
+    ///
+    /// The high-dynamic-range way in, and the reason it exists: a room is
+    /// dim walls and a few small bright sources, and in an 8-bit map those
+    /// sources flatten to white at 1.0 — a ball reflecting them shows pale
+    /// smudges. Radiance data keeps the lamp twenty times the wall, the
+    /// radiance texture stores half floats, and the reflections and the
+    /// bloom get real numbers. The rest of the pipeline is already HDR;
+    /// this is just the door.
+    pub fn from_hdr(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        bytes: &[u8],
+        source: &str,
+    ) -> Option<Self> {
+        let decoded = image::load_from_memory_with_format(bytes, image::ImageFormat::Hdr)
+            .ok()?
+            .to_rgb32f();
+        let (w, h) = decoded.dimensions();
+        if w == 0 || h == 0 {
+            return None;
+        }
+        let pixels: Vec<[f32; 3]> = decoded.pixels().map(|p| p.0).collect();
+        Some(Self::from_linear(device, queue, &pixels, w, h, source))
+    }
+
+    /// Builds the map from linear floating-point texels.
+    fn from_linear(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        pixels: &[[f32; 3]],
+        w: u32,
+        h: u32,
+        source: &str,
+    ) -> Self {
+        let levels = 32 - w.max(h).leading_zeros();
+        let radiance = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("vpw-envmap-hdr"),
+            size: wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: levels,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            // Linear half floats, where the 8-bit path stores sRGB bytes: the
+            // range is the entire point, and the shader receives linear light
+            // from both paths — there the hardware decodes, here it just
+            // reads.
+            format: wgpu::TextureFormat::Rgba16Float,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+
+        let mut level: Vec<[f32; 3]> = pixels.to_vec();
+        let (mut lw, mut lh) = (w, h);
+        for i in 0..levels {
+            if i > 0 {
+                let (nw, nh) = ((lw / 2).max(1), (lh / 2).max(1));
+                level = shrink(&level, lw, lh, nw, nh);
+                (lw, lh) = (nw, nh);
+            }
+            let texels: Vec<u16> = level
+                .iter()
+                .flat_map(|c| {
+                    [
+                        half::f16::from_f32(c[0]).to_bits(),
+                        half::f16::from_f32(c[1]).to_bits(),
+                        half::f16::from_f32(c[2]).to_bits(),
+                        half::f16::ONE.to_bits(),
+                    ]
+                })
+                .collect();
+            queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &radiance,
+                    mip_level: i,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                bytemuck::cast_slice(&texels),
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(lw * 8),
+                    rows_per_image: Some(lh),
+                },
+                wgpu::Extent3d {
+                    width: lw,
+                    height: lh,
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
+
+        let small = shrink(pixels, w, h, SOURCE_W, SOURCE_H);
+        let irradiance = convolve_linear(&small);
+        Self::finish(device, queue, radiance, &irradiance, levels, h, source)
     }
 
     /// Loads the map from one of the table's own images.
@@ -183,6 +284,28 @@ impl EnvMap {
         }
 
         let irradiance = convolve(&img);
+        Some(Self::finish(
+            device,
+            queue,
+            radiance,
+            &irradiance,
+            levels,
+            h,
+            source,
+        ))
+    }
+
+    /// The half the two loaders share: the irradiance texture, the sampler,
+    /// and the struct.
+    fn finish(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        radiance: wgpu::Texture,
+        irradiance: &[u16],
+        levels: u32,
+        height: u32,
+        source: &str,
+    ) -> Self {
         let irr = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("vpw-irradiance"),
             size: wgpu::Extent3d {
@@ -196,16 +319,16 @@ impl EnvMap {
             // Linear, not sRGB: the irradiance was already computed in linear.
             // Half floats and not bytes, as in the original (`Renderer.cpp:227`
             // allocates RGBA16F and `:773-785` writes it unclamped). With an
-            // 8-bit source nothing ever goes above one, so what this buys is
-            // the darks: a linear byte's first step is 1/255, and a dim room
-            // sits below it.
+            // 8-bit source nothing ever goes above one; with a Radiance one
+            // plenty does, and the darks of a dim room sit below a linear
+            // byte's first step either way.
             format: wgpu::TextureFormat::Rgba16Float,
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
         queue.write_texture(
             irr.as_image_copy(),
-            bytemuck::cast_slice(&irradiance),
+            bytemuck::cast_slice(irradiance),
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(IRRADIANCE_W * 8),
@@ -218,7 +341,7 @@ impl EnvMap {
             },
         );
 
-        Some(Self {
+        Self {
             radiance: radiance.create_view(&wgpu::TextureViewDescriptor::default()),
             irradiance: irr.create_view(&wgpu::TextureViewDescriptor::default()),
             sampler: device.create_sampler(&wgpu::SamplerDescriptor {
@@ -233,10 +356,38 @@ impl EnvMap {
                 ..Default::default()
             }),
             mip_levels: levels,
-            height: h,
+            height,
             source: source.to_owned(),
-        })
+        }
     }
+}
+
+/// Box-averages a linear map to a new size. The mip builder and the
+/// irradiance shrink share it; a box is plenty for both, since everything
+/// downstream is either filtered again or integrated.
+fn shrink(src: &[[f32; 3]], w: u32, h: u32, nw: u32, nh: u32) -> Vec<[f32; 3]> {
+    let mut out = Vec::with_capacity((nw * nh) as usize);
+    for y in 0..nh {
+        let y0 = (y * h / nh) as usize;
+        let y1 = (((y + 1) * h).div_ceil(nh) as usize).min(h as usize);
+        for x in 0..nw {
+            let x0 = (x * w / nw) as usize;
+            let x1 = (((x + 1) * w).div_ceil(nw) as usize).min(w as usize);
+            let mut acc = [0.0f32; 3];
+            let mut n = 0.0f32;
+            for sy in y0..y1 {
+                for sx in x0..x1 {
+                    let p = src[sy * w as usize + sx];
+                    for (a, c) in acc.iter_mut().zip(&p) {
+                        *a += c;
+                    }
+                    n += 1.0;
+                }
+            }
+            out.push(acc.map(|c| c / n.max(1.0)));
+        }
+    }
+    out
 }
 
 /// Direction of texel `(x, y)` of an equirectangular map.
@@ -281,7 +432,22 @@ fn convolve(src: &image::RgbaImage) -> Vec<u16> {
         SOURCE_H,
         image::imageops::FilterType::Triangle,
     );
+    let linear: Vec<[f32; 3]> = small
+        .pixels()
+        .map(|p| {
+            [
+                srgb_to_linear(p[0]),
+                srgb_to_linear(p[1]),
+                srgb_to_linear(p[2]),
+            ]
+        })
+        .collect();
+    convolve_linear(&linear)
+}
 
+/// The convolution itself, over a [`SOURCE_W`] × [`SOURCE_H`] linear shrink —
+/// the byte path decodes into this, the Radiance path arrives in it.
+fn convolve_linear(small: &[[f32; 3]]) -> Vec<u16> {
     // Direction and weight of every source texel. The weight is the solid angle
     // it covers, which in equirectangular goes with the sine of the polar
     // angle.
@@ -290,14 +456,9 @@ fn convolve(src: &image::RgbaImage) -> Vec<u16> {
         let theta = (y as f32 + 0.5) / SOURCE_H as f32 * PI;
         let area = theta.sin();
         for x in 0..SOURCE_W {
-            let p = small.get_pixel(x, y);
             samples.push((
                 direction(x, y, SOURCE_W, SOURCE_H),
-                [
-                    srgb_to_linear(p[0]),
-                    srgb_to_linear(p[1]),
-                    srgb_to_linear(p[2]),
-                ],
+                small[(y * SOURCE_W + x) as usize],
                 area,
             ));
         }

@@ -18,6 +18,11 @@ export type CameraView = 'front' | 'overhead';
 
 export const CAMERA_VIEWS: readonly CameraView[] = ['front', 'overhead'];
 
+/** What room the machine stands in: the table's own light, or a real one. */
+export type Environment = 'table' | 'bar';
+
+export const ENVIRONMENTS: readonly Environment[] = ['table', 'bar'];
+
 export interface Settings {
   /** Master volume, 0 to 1. */
   volume: number;
@@ -29,6 +34,12 @@ export interface Settings {
    * settings carry exactly this override for exactly that reason.
    */
   brightness: number | null;
+  /**
+   * The room the machine stands in. `table` is the environment map the table
+   * itself asked for; `bar` is a real room's HDR — dim walls, a few bright
+   * lamps — which is mostly seen reflected in the steel and the plastics.
+   */
+  environment: Environment;
 }
 
 const DEFAULTS: Settings = {
@@ -42,6 +53,8 @@ const DEFAULTS: Settings = {
   camera: 'front',
   // The table's own, until the player says otherwise: the author lit the room.
   brightness: null,
+  // The table's own: the author lit the room here too.
+  environment: 'table',
 };
 
 let current: Settings = load();
@@ -71,6 +84,9 @@ function clean(s: Partial<Settings>): Partial<Settings> {
   // nobody asked for is worse than one at the default.
   if (CAMERA_VIEWS.includes(s.camera as CameraView)) {
     out.camera = s.camera as CameraView;
+  }
+  if (ENVIRONMENTS.includes(s.environment as Environment)) {
+    out.environment = s.environment as Environment;
   }
   if (s.brightness === null) {
     out.brightness = null;

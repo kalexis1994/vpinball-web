@@ -1601,6 +1601,23 @@ pub fn apply_gi_bake(
 /// are authored dark on purpose — F-14 asks for 8% — and how dark a room the
 /// player sits in is the player's call, which is why the original carries the
 /// very same override in its settings.
+/// Puts the table in a room, or back in its own light.
+///
+/// `bytes` is a Radiance `.hdr` equirectangular map the page fetched — a real
+/// room, dim walls and a few bright lamps, which is what the steel and the
+/// plastics then reflect. Empty bytes restore the environment the table asked
+/// for. Returns whether anything changed; before a table has loaded there is
+/// nothing to light and the answer is no.
+#[wasm_bindgen(js_name = setEnvironment)]
+pub fn set_environment(bytes: &[u8]) -> bool {
+    with_player(|player| {
+        player
+            .renderer
+            .set_environment((!bytes.is_empty()).then_some(bytes))
+    })
+    .unwrap_or(false)
+}
+
 #[wasm_bindgen(js_name = setDayNight)]
 pub fn set_day_night(scale: f32) {
     with_player(|player| {

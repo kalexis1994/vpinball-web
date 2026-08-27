@@ -227,6 +227,20 @@ impl Offscreen {
     }
 
     /// Uploads the table's lit lights.
+    /// Puts the table in a room: a Radiance `.hdr` equirectangular map
+    /// replaces whatever environment the upload installed. The photograph
+    /// harnesses use it to shoot a table under the same room the player can
+    /// choose.
+    pub fn set_environment_hdr(&mut self, bytes: &[u8]) -> bool {
+        match crate::env::EnvMap::from_hdr(&self.device, &self.queue, bytes, "room") {
+            Some(map) => {
+                self.pipeline.set_envmap(&self.device, map);
+                true
+            }
+            None => false,
+        }
+    }
+
     pub fn upload_lights(&mut self, scene: &Scene) {
         self.lights
             .upload(&self.device, &self.queue, &self.pipeline, scene);

@@ -27,7 +27,7 @@ import {
 import BakeWorker from './bake.worker?worker';
 import { provideLibraries } from './scripts';
 import type { BakeRequest, BakeResponse } from './bake.worker';
-import { CAMERA_VIEWS, type CameraView } from './settings';
+import { CAMERA_VIEWS, type CameraView, type Environment } from './settings';
 import type { ParsedTable, RomInfo } from './types';
 
 export interface LoadStats extends SceneStats {
@@ -439,6 +439,41 @@ export async function cameraView(): Promise<CameraView | null> {
 export async function setDayNight(brightness: number | null): Promise<void> {
   if (!started) return;
   await (await host()).call('setDayNight', [brightness ?? -1]);
+}
+
+/** The bar's environment map, fetched once and kept: switching rooms twice
+ * should not download the room twice. */
+let roomBytes: Promise<Uint8Array> | null = null;
+
+/**
+ * Puts the machine in a room, or back in the table's own light.
+ *
+ * The room is a Radiance `.hdr` the page ships (`public/env/`); the map is
+ * fetched on first use and cached for the session. A copy crosses to the
+ * player each time — transferring the cached buffer would consume it.
+ */
+export async function setEnvironment(env: Environment): Promise<void> {
+  if (!started) return;
+  const h = await host();
+  if (env === 'table') {
+    await h.call('setEnvironment', [new Uint8Array(0)]);
+    return;
+  }
+  roomBytes ??= fetch(`${import.meta.env.BASE_URL}env/bar.hdr`)
+    .then((r) => {
+      if (!r.ok) throw new Error(`the room's map answered ${r.status}`);
+      return r.arrayBuffer();
+    })
+    .then((b) => new Uint8Array(b));
+  try {
+    const bytes = await roomBytes;
+    const copy = bytes.slice();
+    const on = await h.call<boolean>('setEnvironment', [copy], [copy.buffer as ArrayBuffer]);
+    if (on) console.info('[env] the room is on');
+  } catch (e) {
+    roomBytes = null;
+    console.warn('[env] the room did not load:', e);
+  }
 }
 
 /** The next view round, for a key that cycles rather than choosing. */

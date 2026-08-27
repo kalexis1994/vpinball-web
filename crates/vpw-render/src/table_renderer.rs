@@ -23,6 +23,9 @@ pub struct TableRenderer {
     /// depth buffer too, since both are sized to the window.
     post: Post,
     scene: Option<GpuScene>,
+    /// The environment the table asked for, kept aside while a room of the
+    /// player's choosing stands in for it. See [`Self::set_environment`].
+    table_env: Option<crate::env::EnvMap>,
     /// The pieces that move. `None` until a table is loaded, and also for a
     /// table with nothing that moves.
     dynamic: Option<DynamicParts>,
@@ -77,6 +80,7 @@ impl TableRenderer {
             pipeline,
             post,
             scene: None,
+            table_env: None,
             dynamic: None,
             lights,
             flashers,
@@ -238,11 +242,12 @@ impl TableRenderer {
         );
         // The light the table asked to be seen under, or the shipped map when
         // it asked for none (`Renderer.cpp:208-210`). Per table, not per
-        // pipeline: on F-14 it is the only light there is.
-        self.pipeline.set_envmap(
-            &self.gpu.device,
-            crate::env::EnvMap::for_table(&self.gpu.device, &self.gpu.queue, scene),
-        );
+        // pipeline: on F-14 it is the only light there is. A copy is kept, so
+        // that a player who tries a room and comes back gets the table's own
+        // light and not a reload.
+        let table_env = crate::env::EnvMap::for_table(&self.gpu.device, &self.gpu.queue, scene);
+        self.table_env = Some(table_env.clone());
+        self.pipeline.set_envmap(&self.gpu.device, table_env);
         // The floor's picture, for the ball's planar reflection.
         if let Some(view) = gpu_scene.field_picture.clone() {
             self.pipeline.set_field_picture(&self.gpu.device, view);
@@ -459,6 +464,36 @@ impl TableRenderer {
     /// and multiplying the chosen one in, on the three terms the original
     /// scales by it (`Renderer.cpp:1037,1051,1063`): the scene lights, the
     /// ambient, and the environment.
+    /// Puts the table in a room of the player's choosing, or back in its own.
+    ///
+    /// `Some(bytes)` is a Radiance `.hdr` equirectangular map — a real room,
+    /// with its dim walls and its few bright lamps kept twenty times apart,
+    /// which is what makes the reflections on the steel read as somewhere.
+    /// `None` restores the environment the table asked for. Returns whether
+    /// the map was accepted; a table that has not loaded yet has nothing to
+    /// restore and nothing to light, and says no.
+    pub fn set_environment(&mut self, hdr: Option<&[u8]>) -> bool {
+        match hdr {
+            Some(bytes) => {
+                let Some(map) =
+                    crate::env::EnvMap::from_hdr(&self.gpu.device, &self.gpu.queue, bytes, "room")
+                else {
+                    log::warn!("the room's environment map does not decode");
+                    return false;
+                };
+                self.pipeline.set_envmap(&self.gpu.device, map);
+                true
+            }
+            None => match self.table_env.clone() {
+                Some(map) => {
+                    self.pipeline.set_envmap(&self.gpu.device, map);
+                    true
+                }
+                None => false,
+            },
+        }
+    }
+
     pub fn set_day_night(&mut self, scale: Option<f32>) {
         self.day_night = scale.map(|s| s.clamp(0.0, 1.0));
     }

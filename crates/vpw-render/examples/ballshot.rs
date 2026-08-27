@@ -50,6 +50,13 @@ fn main() {
         let n = gpu.bake_gi(&scene);
         eprintln!("baked {n} groups");
     }
+    // VPW_ENV=room.hdr photographs the table inside a room: the same
+    // Radiance map the player can choose in the page.
+    if let Ok(path) = std::env::var("VPW_ENV") {
+        let bytes = std::fs::read(&path).expect("could not read the room's map");
+        assert!(gpu.set_environment_hdr(&bytes), "the room did not decode");
+        eprintln!("environment: {path}");
+    }
     // VPW_NOBALL=1 photographs the same framing with no ball at all, for
     // telling an artifact around the ball from the artwork under it.
     let no_ball = std::env::var("VPW_NOBALL").is_ok();

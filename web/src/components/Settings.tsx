@@ -11,7 +11,14 @@
 // instead of reading it once.
 
 import { useEffect, useState } from 'react';
-import { CAMERA_VIEWS, settings, updateSettings, type CameraView } from '../lib/settings';
+import {
+  CAMERA_VIEWS,
+  ENVIRONMENTS,
+  settings,
+  updateSettings,
+  type CameraView,
+  type Environment,
+} from '../lib/settings';
 import { ScreenHead } from './ScreenHead';
 
 interface Props {
@@ -22,6 +29,7 @@ export function Settings({ onBack }: Props) {
   const [volume, setVolume] = useState(() => settings().volume);
   const [camera, setCamera] = useState<CameraView>(() => settings().camera);
   const [brightness, setBrightness] = useState<number | null>(() => settings().brightness);
+  const [room, setRoom] = useState<Environment>(() => settings().environment);
 
   // Keep the screen honest if something else changed them — the camera has a
   // key of its own, and it can have been pressed while this screen was open
@@ -30,6 +38,7 @@ export function Settings({ onBack }: Props) {
     setVolume(settings().volume);
     setCamera(settings().camera);
     setBrightness(settings().brightness);
+    setRoom(settings().environment);
   }, []);
 
   return (
@@ -111,6 +120,27 @@ export function Settings({ onBack }: Props) {
             in its own settings. It applies while a table is playing.
           </span>
         </label>
+
+        <div className="setting">
+          <span className="setting-label">Room</span>
+          <span className="setting-control setting-choice">
+            {ENVIRONMENTS.map((e) => (
+              <button
+                key={e}
+                type="button"
+                className={`choice${e === room ? ' choice-on' : ''}`}
+                aria-pressed={e === room}
+                onClick={() => {
+                  setRoom(e);
+                  updateSettings({ environment: e });
+                }}
+              >
+                {ROOM_LABELS[e]}
+              </button>
+            ))}
+          </span>
+          <span className="setting-hint">{ROOM_HINTS[room]}</span>
+        </div>
       </section>
 
       <section className="section">
@@ -140,6 +170,16 @@ export function Settings({ onBack }: Props) {
     </main>
   );
 }
+
+const ROOM_LABELS: Record<Environment, string> = {
+  table: "Table's own",
+  bar: 'A bar',
+};
+
+const ROOM_HINTS: Record<Environment, string> = {
+  table: 'The environment the table was authored under.',
+  bar: 'A real bar, in HDR: its lamps and windows show up reflected in the ball and the plastics.',
+};
 
 const CAMERA_LABELS: Record<CameraView, string> = {
   front: 'In front',
