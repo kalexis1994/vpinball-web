@@ -26,6 +26,19 @@ export const ENVIRONMENTS: readonly Environment[] = ['table', 'bar'];
 export interface Settings {
   /** Master volume, 0 to 1. */
   volume: number;
+  /**
+   * The flat engine: the table photographed once and played as pictures,
+   * with only the moving pieces in real 3D — for machines whose GPU cannot
+   * afford the full render. While it is on the camera is the photograph's,
+   * so the view choice below does not apply.
+   */
+  flat: boolean;
+  /**
+   * Whether the resolution governor runs: it drops the render resolution to
+   * hold sixty frames and climbs back when there is room. Off, the picture
+   * stays at full resolution whatever the frame rate does.
+   */
+  adaptive: boolean;
   /** Which of the named views the camera starts in. */
   camera: CameraView;
   /**
@@ -41,6 +54,12 @@ const DEFAULTS: Settings = {
   // wants it louder can say so, where one deafened on the first table may not
   // stay to find the slider.
   volume: 0.7,
+  // The full renderer: the flat engine is the low-end escape hatch, and the
+  // machine that needs it is the one that turns it on.
+  flat: false,
+  // On: sixty frames out of the box is the better first impression, and the
+  // player who wants every pixel can say so here.
+  adaptive: true,
   // Standing in front of the machine, because that is what it looks like and
   // the first thing anybody wants is to see what they have loaded. The overhead
   // view is the one you switch to once you want to *play* it.
@@ -81,6 +100,12 @@ function clean(s: Partial<Settings>): Partial<Settings> {
   }
   if (ENVIRONMENTS.includes(s.environment as Environment)) {
     out.environment = s.environment as Environment;
+  }
+  if (typeof s.flat === 'boolean') {
+    out.flat = s.flat;
+  }
+  if (typeof s.adaptive === 'boolean') {
+    out.adaptive = s.adaptive;
   }
   return out;
 }

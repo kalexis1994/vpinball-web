@@ -1,14 +1,16 @@
 // How the player wants it to behave.
 //
-// Two settings so far. The volume is the one that matters on a phone: a table's
-// mix runs close to full scale and the first thing anyone does with a new one is
-// reach for the volume. The camera is the one that matters on any screen that
-// is not shaped like a pinball machine.
+// Two tabs: Sound and Graphics. The volume is the one that matters on a
+// phone — a table's mix runs close to full scale and the first thing anyone
+// does with a new one is reach for the volume. Everything about the picture —
+// the renderer, the resolution governor, the room, the camera — lives
+// together under Graphics, because those are the knobs a player turns when
+// the machine in front of them is slow or looks wrong.
 //
-// The slider applies as it moves rather than on release. That is the difference
-// between finding a level and guessing at one — and it works while a table is
-// playing behind this screen, because the audio subscribes to the setting
-// instead of reading it once.
+// Every control applies as it changes rather than on save. That is the
+// difference between finding a level and guessing at one — and it works while
+// a table is playing behind this screen, because the player subscribes to the
+// settings instead of reading them once.
 
 import { useEffect, useState } from 'react';
 import {
@@ -25,10 +27,20 @@ interface Props {
   onBack: () => void;
 }
 
+type Tab = 'sound' | 'graphics';
+
+const TABS: readonly { id: Tab; label: string }[] = [
+  { id: 'sound', label: 'Sound' },
+  { id: 'graphics', label: 'Graphics' },
+];
+
 export function Settings({ onBack }: Props) {
   const [volume, setVolume] = useState(() => settings().volume);
   const [camera, setCamera] = useState<CameraView>(() => settings().camera);
   const [room, setRoom] = useState<Environment>(() => settings().environment);
+  const [flat, setFlat] = useState(() => settings().flat);
+  const [adaptive, setAdaptive] = useState(() => settings().adaptive);
+  const [tab, setTab] = useState<Tab>('sound');
 
   // Keep the screen honest if something else changed them — the camera has a
   // key of its own, and it can have been pressed while this screen was open
@@ -37,93 +49,184 @@ export function Settings({ onBack }: Props) {
     setVolume(settings().volume);
     setCamera(settings().camera);
     setRoom(settings().environment);
+    setFlat(settings().flat);
+    setAdaptive(settings().adaptive);
   }, []);
 
   return (
     <main className="shell">
       <ScreenHead title="Settings" onBack={onBack} />
 
-      <section className="section">
-        <h2 className="section-head">Sound</h2>
+      <nav className="tabs" role="tablist" aria-label="Setting groups">
+        {TABS.map((t) => (
+          <button
+            key={t.id}
+            role="tab"
+            aria-selected={tab === t.id}
+            className={`tab${tab === t.id ? ' tab-on' : ''}`}
+            onClick={() => setTab(t.id)}
+          >
+            {t.label}
+          </button>
+        ))}
+      </nav>
 
-        <label className="setting" htmlFor="volume">
-          <span className="setting-label">
-            Master volume
-            <span className="setting-value mono">{Math.round(volume * 100)}%</span>
-          </span>
-          <span className="setting-control">
-            <MuteIcon quiet />
-            <input
-              id="volume"
-              className="slider"
-              type="range"
-              min={0}
-              max={1}
-              step={0.01}
-              value={volume}
-              onChange={(e) => {
-                const next = Number(e.target.value);
-                setVolume(next);
-                updateSettings({ volume: next });
-              }}
-            />
-            <MuteIcon />
-          </span>
-          <span className="setting-hint">
-            Applies straight away, and is remembered for next time.
-          </span>
-        </label>
-      </section>
-
-      <section className="section">
-        <h2 className="section-head">Lighting</h2>
-
-        <div className="setting">
-          <span className="setting-label">Room</span>
-          <span className="setting-control setting-choice">
-            {ENVIRONMENTS.map((e) => (
-              <button
-                key={e}
-                type="button"
-                className={`choice${e === room ? ' choice-on' : ''}`}
-                aria-pressed={e === room}
-                onClick={() => {
-                  setRoom(e);
-                  updateSettings({ environment: e });
+      {tab === 'sound' && (
+        <section className="section tab-pane">
+          <label className="setting" htmlFor="volume">
+            <span className="setting-label">
+              Master volume
+              <span className="setting-value mono">{Math.round(volume * 100)}%</span>
+            </span>
+            <span className="setting-control">
+              <MuteIcon quiet />
+              <input
+                id="volume"
+                className="slider"
+                type="range"
+                min={0}
+                max={1}
+                step={0.01}
+                value={volume}
+                onChange={(e) => {
+                  const next = Number(e.target.value);
+                  setVolume(next);
+                  updateSettings({ volume: next });
                 }}
-              >
-                {ROOM_LABELS[e]}
-              </button>
-            ))}
-          </span>
-          <span className="setting-hint">{ROOM_HINTS[room]}</span>
-        </div>
-      </section>
+              />
+              <MuteIcon />
+            </span>
+            <span className="setting-hint">
+              Applies straight away, and is remembered for next time.
+            </span>
+          </label>
+        </section>
+      )}
 
-      <section className="section">
-        <h2 className="section-head">View</h2>
+      {tab === 'graphics' && (
+        <div className="tab-pane">
+          <section className="section">
+            <div className="setting">
+              <span className="setting-label">Renderer</span>
+              <span className="setting-control setting-choice">
+                <button
+                  type="button"
+                  className={`choice${flat ? '' : ' choice-on'}`}
+                  aria-pressed={!flat}
+                  onClick={() => {
+                    setFlat(false);
+                    updateSettings({ flat: false });
+                  }}
+                >
+                  Full 3D
+                </button>
+                <button
+                  type="button"
+                  className={`choice${flat ? ' choice-on' : ''}`}
+                  aria-pressed={flat}
+                  onClick={() => {
+                    setFlat(true);
+                    updateSettings({ flat: true });
+                  }}
+                >
+                  Flat (2D)
+                </button>
+              </span>
+              <span className="setting-hint">
+                {flat
+                  ? 'The table is photographed once and played as pictures; only the ball and the moving pieces stay 3D. Made for weak GPUs — and the camera is fixed while it is on.'
+                  : 'The full renderer: real lighting, reflections and a camera you can move.'}
+              </span>
+            </div>
+          </section>
 
-        <div className="setting">
-          <span className="setting-label">Camera</span>
-          <span className="setting-control setting-choice">
-            {CAMERA_VIEWS.map((v) => (
-              <button
-                key={v}
-                type="button"
-                className={`choice${v === camera ? ' choice-on' : ''}`}
-                aria-pressed={v === camera}
-                onClick={() => {
-                  setCamera(v);
-                  updateSettings({ camera: v });
-                }}
-              >
-                {CAMERA_LABELS[v]}
-              </button>
-            ))}
-          </span>
-          <span className="setting-hint">{CAMERA_HINTS[camera]} Press C while playing to switch.</span>
+          <section className="section">
+            <div className="setting">
+              <span className="setting-label">Adaptive resolution</span>
+              <span className="setting-control setting-choice">
+                <button
+                  type="button"
+                  className={`choice${adaptive ? ' choice-on' : ''}`}
+                  aria-pressed={adaptive}
+                  onClick={() => {
+                    setAdaptive(true);
+                    updateSettings({ adaptive: true });
+                  }}
+                >
+                  On
+                </button>
+                <button
+                  type="button"
+                  className={`choice${adaptive ? '' : ' choice-on'}`}
+                  aria-pressed={!adaptive}
+                  onClick={() => {
+                    setAdaptive(false);
+                    updateSettings({ adaptive: false });
+                  }}
+                >
+                  Off
+                </button>
+              </span>
+              <span className="setting-hint">
+                {adaptive
+                  ? 'Trades pixels for frames: the picture softens when the GPU falls behind and sharpens again when there is room.'
+                  : 'The picture stays at full resolution whatever the frame rate does.'}
+              </span>
+            </div>
+          </section>
+
+          <section className="section">
+            <div className="setting">
+              <span className="setting-label">Room</span>
+              <span className="setting-control setting-choice">
+                {ENVIRONMENTS.map((e) => (
+                  <button
+                    key={e}
+                    type="button"
+                    className={`choice${e === room ? ' choice-on' : ''}`}
+                    aria-pressed={e === room}
+                    onClick={() => {
+                      setRoom(e);
+                      updateSettings({ environment: e });
+                    }}
+                  >
+                    {ROOM_LABELS[e]}
+                  </button>
+                ))}
+              </span>
+              <span className="setting-hint">{ROOM_HINTS[room]}</span>
+            </div>
+          </section>
+
+          <section className="section">
+            <div className="setting">
+              <span className="setting-label">Camera</span>
+              <span className="setting-control setting-choice">
+                {CAMERA_VIEWS.map((v) => (
+                  <button
+                    key={v}
+                    type="button"
+                    className={`choice${v === camera ? ' choice-on' : ''}`}
+                    aria-pressed={v === camera}
+                    disabled={flat}
+                    onClick={() => {
+                      setCamera(v);
+                      updateSettings({ camera: v });
+                    }}
+                  >
+                    {CAMERA_LABELS[v]}
+                  </button>
+                ))}
+              </span>
+              <span className="setting-hint">
+                {flat
+                  ? 'The flat renderer holds the camera: a photograph is taken from one place.'
+                  : `${CAMERA_HINTS[camera]} Press C while playing to switch.`}
+              </span>
+            </div>
+          </section>
         </div>
-      </section>
+      )}
     </main>
   );
 }

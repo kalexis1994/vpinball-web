@@ -477,6 +477,27 @@ export async function setEnvironment(env: Environment): Promise<void> {
   }
 }
 
+/**
+ * Switches the flat engine: the table photographed once and played as
+ * pictures, with only the ball, the flippers and the display in real 3D —
+ * for machines whose GPU cannot afford the full render. The bake spreads
+ * over a couple of seconds of play; the switch is seamless when it lands.
+ */
+export async function setFlat(on: boolean): Promise<void> {
+  if (!started) return;
+  await (await host()).call('setFlat', [on]);
+}
+
+/**
+ * Switches the resolution governor: on, it trades pixels for frames on a
+ * machine that cannot have both; off, the picture stays sharp whatever the
+ * frame rate does.
+ */
+export async function setAdaptive(on: boolean): Promise<void> {
+  if (!started) return;
+  await (await host()).call('setAdaptive', [on]);
+}
+
 /** The next view round, for a key that cycles rather than choosing. */
 export function nextCameraView(from: CameraView): CameraView {
   const i = CAMERA_VIEWS.indexOf(from);

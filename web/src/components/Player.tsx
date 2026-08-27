@@ -15,6 +15,8 @@ import {
   saveMachineState,
   setCameraView,
   setEnvironment,
+  setAdaptive,
+  setFlat,
   setTelemetry,
   startPlayer,
   type Loop,
@@ -45,6 +47,15 @@ const PHASES: Record<Phase, string> = {
 };
 
 /**
+ * The curtain's states. `loading` shows the marquee and the chase lamps over
+ * black; when the table is ready the lamps go out first (`blackout` — a fade
+ * to plain black, the moment a real machine's attract mode goes dark), then
+ * the black itself lifts off the table (`reveal`), then the curtain leaves
+ * the DOM (`done`).
+ */
+type Intro = 'loading' | 'blackout' | 'reveal' | 'done';
+
+/**
  * Game view: mounts the canvas, starts the player and hands it the table.
  *
  * The table's own keys are wired by `connectInput` (`lib/input.ts`), outside
@@ -64,6 +75,24 @@ export function Player({ table, title, source, rom, onExit }: Props) {
   // in `main.tsx` for why this is asked rather than done.
   const [update, setUpdate] = useState<(() => void) | null>(null);
   const [view, setView] = useState<CameraView>(() => settings().camera);
+  const [intro, setIntro] = useState<Intro>('loading');
+
+  // The curtain follows the phase: the moment the table is ready the lamps
+  // fade, the black holds a beat, and then it lifts. A new load (a different
+  // table into the same view) drops the curtain again.
+  useEffect(() => {
+    if (phase !== 'ready') {
+      setIntro('loading');
+      return;
+    }
+    setIntro('blackout');
+    const lift = window.setTimeout(() => setIntro('reveal'), 600);
+    const gone = window.setTimeout(() => setIntro('done'), 600 + 1000);
+    return () => {
+      window.clearTimeout(lift);
+      window.clearTimeout(gone);
+    };
+  }, [phase]);
 
   useEffect(() => {
     const offered = (e: Event) => setUpdate(() => (e as CustomEvent<() => void>).detail);
@@ -117,6 +146,11 @@ export function Player({ table, title, source, rom, onExit }: Props) {
         // The stored room: the bar's map is a fetch away, so it goes on
         // after the table is playable rather than making it wait.
         void setEnvironment(settings().environment);
+        // The stored renderer choice; `?flat=1` forces it on from the
+        // address bar, which is how the debug route exercises it.
+        const forced = new URLSearchParams(window.location.search).get('flat') === '1';
+        void setFlat(forced || settings().flat);
+        void setAdaptive(settings().adaptive);
         setPhase('ready');
 
         timer = window.setInterval(() => {
@@ -218,6 +252,10 @@ export function Player({ table, title, source, rom, onExit }: Props) {
         // The room switch works while a table is playing behind the
         // settings screen, the same way the volume does.
         void setEnvironment(s.environment);
+        // And so does the renderer: the flat engine bakes over a couple of
+        // seconds of play, then takes the frame; off is immediate.
+        void setFlat(s.flat);
+        void setAdaptive(s.adaptive);
       }),
     [],
   );
@@ -265,15 +303,28 @@ export function Player({ table, title, source, rom, onExit }: Props) {
         )}
       </div>
 
-      {/* Loading and errors still get words, because there is nothing to look
-          at yet and "something went wrong" is not an icon. */}
-      {(error || phase !== 'ready') && (
+      {/* The curtain: the table's name up in lights while the machine gets
+          ready, a fade to black, and the black lifting off the playfield. */}
+      {intro !== 'done' && !error && (
+        <div className={`intro intro-${intro}`} aria-hidden={intro !== 'loading'}>
+          <div className="intro-body">
+            <span className="intro-kicker">Now loading</span>
+            <h2 className="intro-title">{name}</h2>
+            <span className="intro-lamps" aria-hidden="true">
+              <i /><i /><i /><i /><i />
+            </span>
+            <p className="intro-phase" aria-live="polite">
+              {PHASES[phase]}
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* Errors still get words, because there is nothing to look at and
+          "something went wrong" is not an icon. */}
+      {error && (
         <div className="player-status">
-          {error ? (
-            <p className="notice notice-error">{error}</p>
-          ) : (
-            <p className="notice">{PHASES[phase]}</p>
-          )}
+          <p className="notice notice-error">{error}</p>
         </div>
       )}
     </div>

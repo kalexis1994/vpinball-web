@@ -10,10 +10,14 @@
   --text: #ece6de;
   --text-dim: #a3968a;
   --accent: #ff8a3d;
+  --accent-hi: #ffb066;
   --accent-ink: #1a0d02;
   --ok: #4ade80;
   --warn: #fbbf24;
   --error: #f87171;
+  /* The lamps' glow, at the strengths the pieces below reach for. */
+  --glow-soft: rgba(255, 138, 61, 0.16);
+  --glow: rgba(255, 138, 61, 0.35);
 }
 
 * { box-sizing: border-box; }
@@ -21,9 +25,16 @@
 body {
   margin: 0;
   min-height: 100vh;
-  background: var(--bg);
   color: var(--text);
   font: 15px/1.55 system-ui, -apple-system, Segoe UI, sans-serif;
+  /* The bar at night: pools of lamp light on a warm near-black, fixed so
+     the room stands still while the content scrolls through it. */
+  background:
+    radial-gradient(58rem 40rem at 12% -8%, rgba(255, 138, 61, 0.09), transparent 60%),
+    radial-gradient(50rem 36rem at 105% 12%, rgba(255, 96, 40, 0.06), transparent 55%),
+    radial-gradient(70rem 52rem at 50% 118%, rgba(120, 60, 25, 0.1), transparent 60%),
+    var(--bg);
+  background-attachment: fixed;
 }
 
 .mono, code {
@@ -60,12 +71,19 @@ body {
 .btn:disabled { opacity: 0.5; cursor: default; }
 
 .btn-primary {
-  background: var(--accent);
+  background: linear-gradient(180deg, var(--accent-hi), var(--accent));
   border-color: var(--accent);
   color: var(--accent-ink);
   font-weight: 600;
+  box-shadow: 0 0 14px var(--glow-soft), inset 0 1px 0 rgba(255, 255, 255, 0.25);
+  transition: background 120ms, border-color 120ms, box-shadow 160ms, transform 120ms;
 }
-.btn-primary:hover:not(:disabled) { background: #ffa163; border-color: #ffa163; }
+.btn-primary:hover:not(:disabled) {
+  background: linear-gradient(180deg, #ffc084, var(--accent-hi));
+  border-color: var(--accent-hi);
+  box-shadow: 0 0 22px var(--glow), inset 0 1px 0 rgba(255, 255, 255, 0.3);
+}
+.btn-primary:active:not(:disabled) { transform: translateY(1px); }
 
 .btn-ghost { background: transparent; color: var(--text-dim); }
 .btn-ghost:hover:not(:disabled) { background: var(--surface-hi); color: var(--text); }
@@ -95,21 +113,57 @@ body {
 .card {
   display: flex;
   flex-direction: column;
-  background: var(--surface);
+  background: linear-gradient(180deg, var(--surface-hi), var(--surface) 42%);
   border: 1px solid var(--line);
-  border-radius: 12px;
+  border-radius: 14px;
   overflow: hidden;
+  transition: transform 180ms ease, border-color 180ms, box-shadow 220ms ease;
+  animation: rise-in 360ms ease backwards;
+}
+/* The shelf lights up one table after the next, not all at once. */
+.grid > :nth-child(2)  { animation-delay: 40ms; }
+.grid > :nth-child(3)  { animation-delay: 80ms; }
+.grid > :nth-child(4)  { animation-delay: 120ms; }
+.grid > :nth-child(5)  { animation-delay: 160ms; }
+.grid > :nth-child(6)  { animation-delay: 200ms; }
+.grid > :nth-child(7)  { animation-delay: 240ms; }
+.grid > :nth-child(n + 8) { animation-delay: 280ms; }
+
+.card:hover {
+  transform: translateY(-3px);
+  border-color: rgba(255, 138, 61, 0.55);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45), 0 0 24px var(--glow-soft);
 }
 
 .card-thumb {
+  position: relative;
   aspect-ratio: 4 / 3;
-  background: #100c08;
+  background:
+    radial-gradient(60% 70% at 50% 36%, rgba(255, 138, 61, 0.08), transparent 70%),
+    #100c08;
   display: grid;
   place-items: center;
   border-bottom: 1px solid var(--line);
+  overflow: hidden;
 }
-.card-thumb img { width: 100%; height: 100%; object-fit: cover; }
-.card-thumb-empty { font-size: 2.5rem; filter: grayscale(1); opacity: 0.35; }
+.card-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transition: transform 300ms ease;
+}
+.card:hover .card-thumb img { transform: scale(1.04); }
+/* A sweep of light across the glass when the hand comes near. */
+.card-thumb::after {
+  content: '';
+  position: absolute;
+  inset: -30% -60%;
+  background: linear-gradient(105deg, transparent 42%, rgba(255, 224, 190, 0.09) 50%, transparent 58%);
+  transform: translateX(-70%);
+  pointer-events: none;
+}
+.card:hover .card-thumb::after { transition: transform 550ms ease; transform: translateX(70%); }
+.card-thumb-empty { font-size: 2.6rem; filter: grayscale(0.6); opacity: 0.5; }
 
 .card-body { padding: 0.85rem 0.9rem 0.6rem; flex: 1; }
 .card-body h3 {
@@ -186,6 +240,126 @@ body {
   color: var(--text-dim);
   font-size: 0.82rem;
   max-width: 60ch;
+}
+
+/* --- The curtain ------------------------------------------------------------
+ *
+ * What stands between choosing a table and seeing it: the name up in lights
+ * over black, a row of chase lamps doing what a machine's attract mode does,
+ * and then the whole thing going dark before the black lifts off the table.
+ * Two fades on purpose — lamps out first, then the reveal — because a cut
+ * from a loading screen straight to a lit playfield reads as a glitch, and a
+ * beat of pure black reads as a curtain.
+ */
+
+.intro {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  display: grid;
+  place-items: center;
+  background: #000;
+  opacity: 1;
+  transition: opacity 1000ms ease;
+}
+
+/* A pool of lamp light behind the name, gone by the blackout. */
+.intro::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(42rem 26rem at 50% 42%, rgba(255, 138, 61, 0.09), transparent 65%);
+  transition: opacity 600ms ease;
+}
+
+.intro-reveal {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.intro-body {
+  position: relative;
+  text-align: center;
+  padding: 0 1.5rem;
+  transition: opacity 600ms ease, transform 600ms ease;
+}
+
+.intro-blackout .intro-body,
+.intro-reveal .intro-body,
+.intro-blackout::before,
+.intro-reveal::before {
+  opacity: 0;
+}
+.intro-blackout .intro-body,
+.intro-reveal .intro-body {
+  transform: scale(0.97);
+}
+
+.intro-kicker {
+  display: block;
+  color: var(--text-dim);
+  font-size: 0.78rem;
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+  animation: rise-in 500ms ease backwards;
+}
+
+.intro-title {
+  margin: 0.6rem 0 0;
+  font-size: clamp(1.6rem, 5.5vw, 2.8rem);
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+  max-width: 24ch;
+  overflow-wrap: anywhere;
+  background: linear-gradient(105deg, var(--text) 30%, var(--accent-hi) 70%, var(--accent));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  filter: drop-shadow(0 0 20px var(--glow-soft)) drop-shadow(0 2px 30px rgba(255, 138, 61, 0.12));
+  animation: rise-in 500ms ease 80ms backwards;
+}
+
+/* Attract mode: five lamps chasing, the way a machine says it is alive. */
+.intro-lamps {
+  display: flex;
+  gap: 0.65rem;
+  justify-content: center;
+  margin-top: 1.4rem;
+  animation: rise-in 500ms ease 160ms backwards;
+}
+
+.intro-lamps i {
+  width: 0.55rem;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: #2c2115;
+  animation: lamp-chase 1.15s infinite;
+}
+.intro-lamps i:nth-child(2) { animation-delay: 0.12s; }
+.intro-lamps i:nth-child(3) { animation-delay: 0.24s; }
+.intro-lamps i:nth-child(4) { animation-delay: 0.36s; }
+.intro-lamps i:nth-child(5) { animation-delay: 0.48s; }
+
+@keyframes lamp-chase {
+  0%, 45%, 100% { background: #2c2115; box-shadow: none; }
+  15% {
+    background: var(--accent-hi);
+    box-shadow: 0 0 10px var(--glow), 0 0 22px var(--glow-soft);
+  }
+}
+
+.intro-phase {
+  margin: 1.1rem 0 0;
+  min-height: 1.4em;
+  color: var(--text-dim);
+  font-size: 0.85rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .intro, .intro::before, .intro-body { transition-duration: 1ms; }
+  .intro-kicker, .intro-title, .intro-lamps { animation: none; }
+  .intro-lamps i { animation: none; background: var(--accent); }
 }
 
 /* --- Player ---------------------------------------------------------------- */
@@ -505,57 +679,93 @@ body {
   margin-inline: auto;
 }
 
-.home-head { text-align: center; }
+.home-head { text-align: center; animation: rise-in 480ms ease backwards; }
 
 .home-title {
   margin: 0;
-  font-size: clamp(2rem, 9vw, 3rem);
-  font-weight: 700;
+  font-size: clamp(2.2rem, 9vw, 3.4rem);
+  font-weight: 800;
   letter-spacing: -0.03em;
   line-height: 1;
   /* The accent runs across the title rather than sitting behind a button: it
-     is the one place on the screen that can carry colour without competing. */
-  background: linear-gradient(105deg, var(--text) 30%, var(--accent));
+     is the one place on the screen that can carry colour without competing.
+     The glow underneath is a separate filtered shadow because a clipped
+     gradient text cannot cast a text-shadow of its own colour. */
+  background: linear-gradient(105deg, var(--text) 25%, var(--accent-hi) 62%, var(--accent));
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
+  filter: drop-shadow(0 0 18px var(--glow-soft)) drop-shadow(0 2px 26px rgba(255, 138, 61, 0.12));
+}
+
+/* The marquee's tube: a lit line under the name, brightest in the middle. */
+.home-marquee {
+  display: block;
+  width: min(16rem, 60%);
+  height: 2px;
+  margin: 0.9rem auto 0;
+  border-radius: 99px;
+  background: linear-gradient(90deg, transparent, var(--accent) 30%, var(--accent-hi) 50%, var(--accent) 70%, transparent);
+  box-shadow: 0 0 12px var(--glow), 0 0 32px var(--glow-soft);
 }
 
 .home-sub {
-  margin: 0.6rem 0 0;
+  margin: 0.8rem 0 0;
   color: var(--text-dim);
-  font-size: 0.95rem;
+  font-size: 0.82rem;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
 }
 
 .home-menu {
   display: flex;
   flex-direction: column;
-  gap: 0.75rem;
+  gap: 0.8rem;
 }
 
 .home-item {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 1rem;
   width: 100%;
-  padding: 1.1rem 1.15rem;
+  padding: 1.15rem 1.2rem;
   border: 1px solid var(--line);
-  border-radius: 14px;
-  background: var(--surface);
+  border-radius: 16px;
+  /* Glass over the room: the backdrop's lamp pools show through it. */
+  background: linear-gradient(180deg, rgba(34, 26, 18, 0.72), rgba(23, 17, 12, 0.72));
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
   color: var(--text);
   font: inherit;
   text-align: left;
   cursor: pointer;
-  transition: border-color 120ms, background 120ms, transform 120ms;
+  overflow: hidden;
+  transition: border-color 160ms, box-shadow 220ms ease, transform 160ms ease;
+  animation: rise-in 420ms ease backwards;
+}
+.home-item:nth-child(2) { animation-delay: 90ms; }
+.home-item:nth-child(3) { animation-delay: 180ms; }
+
+/* The sweep of light that crosses the glass when the hand comes near. */
+.home-item::before {
+  content: '';
+  position: absolute;
+  inset: -40% -30%;
+  background: linear-gradient(105deg, transparent 44%, rgba(255, 224, 190, 0.07) 50%, transparent 56%);
+  transform: translateX(-80%);
+  pointer-events: none;
 }
 
 .home-item:hover:not(:disabled),
 .home-item:focus-visible {
-  border-color: var(--accent);
-  background: var(--surface-hi);
+  border-color: rgba(255, 138, 61, 0.65);
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.4), 0 0 26px var(--glow-soft);
+  transform: translateY(-2px);
 }
+.home-item:hover:not(:disabled)::before { transition: transform 600ms ease; transform: translateX(80%); }
 
-.home-item:active:not(:disabled) { transform: translateY(1px); }
+.home-item:active:not(:disabled) { transform: translateY(0); }
 
 .home-item:disabled {
   opacity: 0.45;
@@ -564,30 +774,37 @@ body {
 
 .home-item-icon {
   flex: 0 0 auto;
-  width: 2.6rem;
-  height: 2.6rem;
+  width: 2.8rem;
+  height: 2.8rem;
   display: grid;
   place-items: center;
-  border-radius: 10px;
-  background: var(--surface-hi);
+  border-radius: 12px;
+  background: radial-gradient(120% 120% at 30% 20%, rgba(255, 138, 61, 0.22), rgba(34, 26, 18, 0.9) 70%);
+  border: 1px solid rgba(255, 138, 61, 0.25);
   color: var(--accent);
+  box-shadow: inset 0 0 12px rgba(255, 138, 61, 0.12);
+  transition: box-shadow 200ms, border-color 200ms;
+}
+.home-item:hover:not(:disabled) .home-item-icon {
+  border-color: rgba(255, 138, 61, 0.55);
+  box-shadow: inset 0 0 16px rgba(255, 138, 61, 0.22), 0 0 14px var(--glow-soft);
 }
 
-.home-item-icon svg { width: 1.4rem; height: 1.4rem; }
-.home-item:disabled .home-item-icon { color: var(--text-dim); }
+.home-item-icon svg { width: 1.45rem; height: 1.45rem; }
+.home-item:disabled .home-item-icon { color: var(--text-dim); box-shadow: none; border-color: var(--line); }
 
 .home-item-text { flex: 1; min-width: 0; }
 
 .home-item-label {
   display: block;
-  font-size: 1.15rem;
-  font-weight: 600;
+  font-size: 1.18rem;
+  font-weight: 650;
   letter-spacing: -0.01em;
 }
 
 .home-item-hint {
   display: block;
-  margin-top: 0.1rem;
+  margin-top: 0.12rem;
   color: var(--text-dim);
   font-size: 0.85rem;
 }
@@ -597,27 +814,61 @@ body {
   color: var(--text-dim);
   display: grid;
   place-items: center;
+  transition: transform 160ms ease, color 160ms;
+}
+.home-item:hover:not(:disabled) .home-item-chevron {
+  transform: translateX(3px);
+  color: var(--accent);
 }
 
 .home-item-chevron svg { width: 1.1rem; height: 1.1rem; }
 
+@keyframes rise-in {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .home-head, .home-item, .card { animation: none; }
+  .home-item, .home-item-chevron, .card, .card-thumb img { transition: none; }
+  .home-item::before, .card-thumb::after { display: none; }
+}
+
 /* --- The screens below it -------------------------------------------------- */
 
 .screen-head {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 0.75rem;
   flex-wrap: wrap;
   padding-bottom: 1.25rem;
   margin-bottom: 0.5rem;
-  border-bottom: 1px solid var(--line);
+}
+
+/* The rule under the head is a lit tube, not a hairline: brightest at the
+   left where the title sits, gone before the right edge. */
+.screen-head::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 1px;
+  background: linear-gradient(90deg, var(--accent) 0%, rgba(255, 138, 61, 0.35) 30%, var(--line) 70%, transparent);
+  box-shadow: 0 0 10px var(--glow-soft);
 }
 
 .screen-head h1 {
   flex: 1;
   margin: 0;
-  font-size: 1.5rem;
+  font-size: 1.55rem;
+  font-weight: 700;
   letter-spacing: -0.02em;
+  background: linear-gradient(105deg, var(--text) 55%, var(--accent-hi));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
 }
 
 .btn-back {
@@ -627,17 +878,22 @@ body {
 }
 
 .search {
-  padding: 0.5rem 0.75rem;
+  padding: 0.5rem 0.9rem;
   border: 1px solid var(--line);
-  border-radius: 9px;
-  background: var(--surface);
+  border-radius: 999px;
+  background: rgba(23, 17, 12, 0.8);
   color: var(--text);
   font: inherit;
   font-size: 0.9rem;
   min-width: 9rem;
+  transition: border-color 160ms, box-shadow 160ms;
 }
 
-.search:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.search:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(255, 138, 61, 0.18), 0 0 16px var(--glow-soft);
+}
 
 .section { margin-top: 2rem; }
 
@@ -709,12 +965,59 @@ body {
 
 /* --- Settings -------------------------------------------------------------- */
 
+/* The tab bar: a row of pills, the chosen one lit like a cabinet button. */
+.tabs {
+  display: flex;
+  gap: 0.5rem;
+  margin: 1.25rem 0 0.25rem;
+  padding: 0.3rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(23, 17, 12, 0.72);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  width: fit-content;
+}
+
+.tab {
+  padding: 0.45rem 1.3rem;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 0.92rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: color 140ms, background 160ms, box-shadow 200ms;
+}
+
+.tab:hover:not(.tab-on) { color: var(--text); }
+
+.tab-on {
+  background: linear-gradient(180deg, var(--accent-hi), var(--accent));
+  border-color: var(--accent);
+  color: var(--accent-ink);
+  box-shadow: 0 0 16px var(--glow-soft), inset 0 1px 0 rgba(255, 255, 255, 0.25);
+}
+
+.tab-pane { animation: rise-in 260ms ease backwards; }
+
+@media (prefers-reduced-motion: reduce) {
+  .tab-pane { animation: none; }
+}
+
 .setting {
   display: block;
   padding: 1rem 1.1rem;
   border: 1px solid var(--line);
-  border-radius: 12px;
-  background: var(--surface);
+  border-radius: 14px;
+  background: linear-gradient(180deg, rgba(34, 26, 18, 0.6), var(--surface));
+  transition: border-color 180ms, box-shadow 200ms;
+}
+.setting:hover, .setting:focus-within {
+  border-color: rgba(255, 138, 61, 0.4);
+  box-shadow: 0 0 18px rgba(0, 0, 0, 0.3), 0 0 14px var(--glow-soft);
 }
 
 .setting-label {
@@ -777,7 +1080,8 @@ body {
   margin-top: -0.475rem;
   border: none;
   border-radius: 50%;
-  background: var(--accent);
+  background: radial-gradient(circle at 32% 28%, var(--accent-hi), var(--accent) 65%);
+  box-shadow: 0 0 10px var(--glow);
 }
 
 .slider::-moz-range-thumb {
@@ -785,7 +1089,8 @@ body {
   height: 1.25rem;
   border: none;
   border-radius: 50%;
-  background: var(--accent);
+  background: radial-gradient(circle at 32% 28%, var(--accent-hi), var(--accent) 65%);
+  box-shadow: 0 0 10px var(--glow);
 }
 
 /* --- The import review ------------------------------------------------------
@@ -803,8 +1108,8 @@ body {
   align-items: flex-end;
   justify-content: center;
   padding: 0;
-  background: #040408cc;
-  backdrop-filter: blur(3px);
+  background: #040408d5;
+  backdrop-filter: blur(6px);
 }
 
 @media (min-width: 40rem) {
@@ -818,10 +1123,12 @@ body {
   max-width: 40rem;
   max-height: 92vh;
   max-height: 92dvh;
-  border: 1px solid var(--line);
+  border: 1px solid rgba(255, 138, 61, 0.28);
   border-radius: 16px 16px 0 0;
-  background: var(--surface);
+  background: linear-gradient(180deg, var(--surface-hi), var(--surface) 30%);
+  box-shadow: 0 -8px 48px rgba(0, 0, 0, 0.5), 0 0 32px var(--glow-soft);
   overflow: hidden;
+  animation: rise-in 260ms ease backwards;
 }
 
 @media (min-width: 40rem) {
@@ -1004,15 +1311,22 @@ body {
   cursor: pointer;
 }
 
-.choice:hover {
+.choice:hover:not(:disabled) {
   border-color: var(--accent);
   color: var(--text);
 }
 
+.choice:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
 .choice-on {
   border-color: var(--accent);
-  background: var(--accent);
+  background: linear-gradient(180deg, var(--accent-hi), var(--accent));
   color: var(--accent-ink);
+  font-weight: 600;
+  box-shadow: 0 0 14px var(--glow-soft), inset 0 1px 0 rgba(255, 255, 255, 0.25);
 }
 
 /* The machine is missing. Deliberately in the way: the alternative is a player

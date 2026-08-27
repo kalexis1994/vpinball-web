@@ -26,6 +26,7 @@ export function Home({ tables, roms, onGo }: Props) {
     <main className="home">
       <header className="home-head">
         <h1 className="home-title">vpinball&#8203;-web</h1>
+        <span className="home-marquee" aria-hidden="true" />
         <p className="home-sub">Visual Pinball, in the browser</p>
       </header>
 
