@@ -470,6 +470,7 @@ export async function setEnvironment(env: Environment): Promise<void> {
     const copy = bytes.slice();
     const on = await h.call<boolean>('setEnvironment', [copy], [copy.buffer as ArrayBuffer]);
     if (on) console.info('[env] the room is on');
+    else console.warn('[env] the player declined the room (no table yet, or the map did not decode)');
   } catch (e) {
     roomBytes = null;
     console.warn('[env] the room did not load:', e);
