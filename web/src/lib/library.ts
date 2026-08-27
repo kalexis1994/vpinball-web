@@ -146,12 +146,28 @@ export async function addTable(file: File, known?: ParsedTable): Promise<TableEn
   // `known` is what the import flow already found out when it built its preview.
   // Parsing a hundred-megabyte table twice to show it and then keep it is the
   // sort of thing that makes an import feel broken.
+
+/** A fresh id for a library entry.
+ *
+ * `crypto.randomUUID` exists only in secure contexts, and this player
+ * deliberately runs on plain-http LAN addresses too — the same pages that
+ * already cost us the audio worklet and WebGPU. `getRandomValues` has no such
+ * restriction, and building the UUID by hand from it is the whole fallback.
+ */
+function newId(): string {
+  if (typeof crypto.randomUUID === 'function') return crypto.randomUUID();
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  bytes[6] = (bytes[6] & 0x0f) | 0x40; // version 4
+  bytes[8] = (bytes[8] & 0x3f) | 0x80; // variant 10
+  const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
   const parsed = known ?? (await parseInWorker(await file.arrayBuffer()));
 
   const existing = (await loadLibrary()).find(
     (e) => e.fileName === file.name && e.fileSize === file.size,
   );
-  const id = existing?.id ?? crypto.randomUUID();
+  const id = existing?.id ?? newId();
 
   const entry: TableEntry = {
     id,
