@@ -55,7 +55,7 @@ fn booted() -> Option<Machine> {
 fn the_rom_zip_decompresses_and_the_board_takes_it() {
     let Some(machine) = booted() else { return };
     assert!(machine.is_running());
-    assert_eq!(machine.game_name(), Some(SET));
+    assert_eq!(machine.game_name().as_deref(), Some(SET));
 }
 
 #[test]
@@ -130,7 +130,7 @@ fn the_table_starts_its_own_rom() {
         game.machine().is_running(),
         "the table's script should have started the ROM"
     );
-    assert_eq!(game.machine().game_name(), Some(SET));
+    assert_eq!(game.machine().game_name().as_deref(), Some(SET));
 
     // Five seconds of table time, which is also five seconds of board time.
     run(&mut game, 5000);

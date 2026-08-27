@@ -50,7 +50,7 @@ fn booted() -> Option<Machine> {
 fn the_zip_holds_three_boards_and_all_of_them_load() {
     let Some(machine) = booted() else { return };
     assert!(machine.is_running());
-    assert_eq!(machine.game_name(), Some(SET));
+    assert_eq!(machine.game_name().as_deref(), Some(SET));
 }
 
 #[test]

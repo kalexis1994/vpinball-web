@@ -144,6 +144,13 @@ struct Player {
     /// Seconds the governor sits out after concluding the display, not the
     /// GPU, is what limits the rate.
     frozen: u32,
+    /// Seconds since the last climb, saturating. A climb that is followed
+    /// within a few seconds by a drop is a climb that should not have been
+    /// tried, and trying it again every few seconds is a screen that blinks.
+    climbed_ago: u32,
+    /// Seconds left of the no-climbing sentence handed down when a climb
+    /// bounced. The ladder has found its level; let it stand.
+    climb_lockout: u32,
 }
 
 /// The rungs of the resolution ladder, as fractions of the canvas size.
@@ -239,6 +246,8 @@ impl Player {
             self.frozen -= 1;
             return;
         }
+        self.climbed_ago = self.climbed_ago.saturating_add(1);
+        self.climb_lockout = self.climb_lockout.saturating_sub(1);
         let avg = self.stats.render_ms_avg;
         let fps = self.stats.last_fps;
 
@@ -269,16 +278,28 @@ impl Player {
             if avg <= OVER_MS {
                 self.judging = Some(fps);
             }
+            // A drop right after a climb convicts the climb: this rung was
+            // tried and did not hold, and every retry is a visible blink —
+            // the surface reconfigures with the canvas. No climbing for a
+            // good while; the ladder has found its level.
+            if self.climbed_ago <= 5 {
+                self.climb_lockout = 300;
+                log::info!("that resolution did not hold; staying down for a while");
+            }
             log::info!(
                 "{fps:.0} fps, render {avg:.1} ms: dropping to {:.0}% resolution",
                 SCALES[self.scale_tier] * 100.0
             );
             self.apply_scale();
-        } else if comfy && self.scale_tier > 0 {
+        } else if comfy && self.scale_tier > 0 && self.climb_lockout == 0 {
             self.calm += 1;
-            if self.calm >= 3 {
+            // Ten comfortable seconds, not three: every transition is a
+            // surface reconfigure the player sees as a blink, so the climb
+            // has to be worth the flash.
+            if self.calm >= 10 {
                 self.scale_tier -= 1;
                 self.calm = 0;
+                self.climbed_ago = 0;
                 log::info!(
                     "{fps:.0} fps, render {avg:.1} ms: back up to {:.0}% resolution",
                     SCALES[self.scale_tier] * 100.0
@@ -1526,6 +1547,8 @@ fn install_and_run(renderer: TableRenderer, surface: Surface) {
         calm: 0,
         judging: None,
         frozen: 0,
+        climbed_ago: u32::MAX,
+        climb_lockout: 0,
     }));
     PLAYER.with(|p| *p.borrow_mut() = Some(player.clone()));
 

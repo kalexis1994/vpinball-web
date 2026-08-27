@@ -374,7 +374,7 @@ pub struct Machine {
     /// The set that is loaded. Only its name is ever wanted, and the two
     /// families describe a game with different types, so the name is what is
     /// kept.
-    game: Cell<Option<&'static str>>,
+    game: RefCell<Option<String>>,
     running: Cell<bool>,
     /// What the lamps and solenoids looked like when the script last asked.
     /// The difference against the board is what `ChangedLamps` reports.
@@ -394,7 +394,7 @@ impl Machine {
     pub fn new() -> Self {
         Self {
             board: RefCell::new(Hardware::S11(Box::new(System11::new()))),
-            game: Cell::new(None),
+            game: RefCell::new(None),
             running: Cell::new(false),
             seen_lamps: RefCell::new([false; LAMPS]),
             seen_segments: RefCell::new([0; SEGMENTS]),
@@ -410,8 +410,8 @@ impl Machine {
     }
 
     /// The set that is loaded.
-    pub fn game_name(&self) -> Option<&'static str> {
-        self.game.get()
+    pub fn game_name(&self) -> Option<String> {
+        self.game.borrow().clone()
     }
 
     /// Builds the machine for a named set from a zip.
@@ -420,28 +420,54 @@ impl Machine {
     /// manifest, because it differs by family and getting it wrong runs the CPU
     /// on garbage rather than failing.
     pub fn load(&self, set: &str, zip: &[u8], cmos: Option<&[u8]>) -> Result<(), String> {
-        // The name is checked before the zip is opened: "that is not a set
-        // this emulator knows" is a better answer than "that is not a zip",
-        // and for an unknown set it is also the true one.
+        // The registries answer first: a row is an override that knows
+        // something no zip can say. A set in neither registry is no longer an
+        // error — most Whitestar zips are self-describing, and
+        // `vpw_ws::games::detect` reads them by their own shape.
         enum Which {
             S11(vpw_s11::games::Game),
             Whitestar(vpw_ws::games::Game),
+            Detect,
         }
         let which = if let Some(game) = vpw_s11::games::find(set) {
             Which::S11(game)
         } else if let Some(game) = vpw_ws::games::find(set) {
             Which::Whitestar(game)
         } else {
-            return Err(format!("'{set}' is not a set this emulator knows"));
+            Which::Detect
         };
 
-        let images = read_zip(zip)?;
-        let name = match which {
-            Which::S11(game) => self.load_s11(game, set, &images, cmos)?,
-            Which::Whitestar(game) => self.load_whitestar(game, &images, cmos)?,
+        // On the detection path the set name still leads the error: for an
+        // unknown set with an unreadable file, "not a set this emulator
+        // knows" is the answer the player can act on, and it is also true.
+        let images = match (&which, read_zip(zip)) {
+            (_, Ok(images)) => images,
+            (Which::Detect, Err(_)) => {
+                return Err(format!("'{set}' is not a set this emulator knows"));
+            }
+            (_, Err(e)) => return Err(e),
         };
+        match which {
+            Which::S11(game) => {
+                self.load_s11(game, set, &images, cmos)?;
+            }
+            Which::Whitestar(game) => {
+                let det = detected_from_row(game, &images)?;
+                self.load_whitestar(det, cmos)?;
+            }
+            Which::Detect => {
+                let det = vpw_ws::games::detect(set, &images).ok_or_else(|| {
+                    format!(
+                        "'{set}' is not a set this emulator knows, and its zip \
+                         is not shaped like a Whitestar set"
+                    )
+                })?;
+                log::info!("'{set}': read from the zip's own shape");
+                self.load_whitestar(det, cmos)?;
+            }
+        }
 
-        self.game.set(Some(name));
+        *self.game.borrow_mut() = Some(set.to_string());
         self.running.set(true);
         self.owed.set(0.0);
         *self.seen_lamps.borrow_mut() = [false; LAMPS];
@@ -459,49 +485,35 @@ impl Machine {
     /// there.
     fn load_whitestar(
         &self,
-        game: vpw_ws::games::Game,
-        images: &[(String, Vec<u8>)],
+        det: vpw_ws::games::Detected<'_>,
         cmos: Option<&[u8]>,
-    ) -> Result<&'static str, String> {
-        let cpu = pick_like(images, game.cpu)
-            .ok_or_else(|| format!("'{}' is not in the zip", game.cpu))?;
-
+    ) -> Result<(), String> {
         let mut machine = vpw_ws::Whitestar::new();
-        machine.board.boards = game.boards;
+        machine.board.boards = det.boards;
         // Where this game keeps its "the flippers are live" flag. Without it
         // solenoid 15 never comes on, and `vpmFlips` reads solenoid 15 —
         // `GameOnSolenoid` (`sega.vbs:23`) — to decide whether a flipper key
         // does anything at all. A table with this missing looks completely
         // healthy and cannot be played.
-        machine.board.fast_flip_addr = game.fast_flips;
-        machine.load_rom(cpu)?;
+        machine.board.fast_flip_addr = det.fast_flips;
+        machine.load_rom(det.cpu)?;
         // The display is a board of its own with its own processor and its own
         // half-megabyte ROM. A set without it still plays; it just has nothing
         // to say for itself.
-        if let Some(display) = pick_like(images, game.display) {
+        if let Some(display) = det.display {
             machine.load_display_rom(display)?;
         }
-        // The sound board is a third processor with five images of its own. A
-        // set without them plays silently rather than not at all, which is
-        // what a machine with the sound board unplugged does.
-        let images_for = |name: &str| pick_like(images, name);
-        match game.sound {
-            vpw_ws::games::Sound::At91 { bios, u7, samples } => {
-                match (images_for(bios), images_for(u7), samples.map(images_for)) {
-                    (Some(bios), Some(u7), [Some(a), Some(b), Some(c), Some(d)]) => {
-                        machine.load_sound(bios, u7, [a, b, c, d]);
-                    }
-                    _ => log::warn!("{}: the sound board's images are not all here", game.set),
-                }
+        // The sound board is a third processor with images of its own. A set
+        // without them plays silently rather than not at all, which is what a
+        // machine with the sound board unplugged does.
+        match det.sound {
+            Some(vpw_ws::games::DetectedSound::At91 { bios, u7, samples }) => {
+                machine.load_sound(bios, u7, samples);
             }
-            vpw_ws::games::Sound::Bsmt { u7, samples } => {
-                match (images_for(u7), samples.map(images_for)) {
-                    (Some(u7), [Some(a), Some(b), Some(c), Some(d)]) => {
-                        machine.load_sound_bsmt(u7, [a, b, c, d]);
-                    }
-                    _ => log::warn!("{}: the sound board's images are not all here", game.set),
-                }
+            Some(vpw_ws::games::DetectedSound::Bsmt { u7, samples }) => {
+                machine.load_sound_bsmt(u7, samples);
             }
+            None => log::warn!("the sound board's images are not all here"),
         }
         if let Some(saved) = cmos {
             let ram = machine.board.ram_mut();
@@ -515,7 +527,7 @@ impl Machine {
             ram.copy_from_slice(saved);
         }
         *self.board.borrow_mut() = Hardware::Whitestar(Box::new(machine));
-        Ok(game.set)
+        Ok(())
     }
 
     fn load_s11(
@@ -1298,6 +1310,50 @@ fn pick<'a>(images: &'a [(String, Vec<u8>)], name: &str) -> Option<&'a [u8]> {
 ///
 /// Sound images are named after the chip position — `u21`, `u22`, `u4` — but
 /// with a game-specific prefix and suffix that the manifest does not record.
+/// An override row, resolved against the zip into the shape [`Whitestar`]'s
+/// loader takes — the same shape detection produces, so there is one loader
+/// and two ways of arriving at it.
+fn detected_from_row<'a>(
+    game: vpw_ws::games::Game,
+    images: &'a [(String, Vec<u8>)],
+) -> Result<vpw_ws::games::Detected<'a>, String> {
+    let cpu =
+        pick_like(images, game.cpu).ok_or_else(|| format!("'{}' is not in the zip", game.cpu))?;
+    let images_for = |name: &str| pick_like(images, name);
+    let sound = match game.sound {
+        vpw_ws::games::Sound::At91 { bios, u7, samples } => {
+            match (images_for(bios), images_for(u7), samples.map(images_for)) {
+                (Some(bios), Some(u7), [Some(a), Some(b), Some(c), Some(d)]) => {
+                    Some(vpw_ws::games::DetectedSound::At91 {
+                        bios,
+                        u7,
+                        samples: [a, b, c, d],
+                    })
+                }
+                _ => None,
+            }
+        }
+        vpw_ws::games::Sound::Bsmt { u7, samples } => {
+            match (images_for(u7), samples.map(images_for)) {
+                (Some(u7), [Some(a), Some(b), Some(c), Some(d)]) => {
+                    Some(vpw_ws::games::DetectedSound::Bsmt {
+                        u7,
+                        samples: [a, b, c, d],
+                    })
+                }
+                _ => None,
+            }
+        }
+    };
+    Ok(vpw_ws::games::Detected {
+        cpu,
+        display: pick_like(images, game.display),
+        sound,
+        boards: game.boards,
+        fast_flips: game.fast_flips,
+    })
+}
+
 fn pick_like<'a>(images: &'a [(String, Vec<u8>)], marker: &str) -> Option<&'a [u8]> {
     images
         .iter()
