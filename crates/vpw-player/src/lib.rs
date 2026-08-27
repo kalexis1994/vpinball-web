@@ -138,6 +138,12 @@ struct Player {
     scale_tier: usize,
     /// Seconds spent comfortably under budget, before daring to climb.
     calm: u32,
+    /// The fps a step-down was taken at, when that step was taken on the
+    /// fps signal and still awaits judgement. See [`Player::govern`].
+    judging: Option<f64>,
+    /// Seconds the governor sits out after concluding the display, not the
+    /// GPU, is what limits the rate.
+    frozen: u32,
 }
 
 /// The rungs of the resolution ladder, as fractions of the canvas size.
@@ -222,22 +228,59 @@ impl Player {
         // drawing leaves nothing for the physics and the browser.
         const OVER_MS: f64 = 11.0;
         const UNDER_MS: f64 = 5.0;
+        // The fps thresholds are the second signal, and the one that matters
+        // on a weak GPU: `render_ms` is the cost of *encoding* the frame,
+        // and a queue submitted in two milliseconds can still take the GPU
+        // thirty to draw — which shows up nowhere but the frame rate.
+        const SLOW_FPS: f64 = 50.0;
+        const COMFY_FPS: f64 = 57.0;
+
+        if self.frozen > 0 {
+            self.frozen -= 1;
+            return;
+        }
         let avg = self.stats.render_ms_avg;
-        if avg > OVER_MS && self.scale_tier + 1 < SCALES.len() {
-            self.scale_tier += 1;
-            self.calm = 0;
+        let fps = self.stats.last_fps;
+
+        // Judgement on the previous fps-driven step: if pixels came off and
+        // no frames came back while the encode stayed cheap, the limit is
+        // the display's refresh, not the GPU — put the pixels back and stop
+        // pestering a machine that was never the problem.
+        if let Some(before) = self.judging.take()
+            && fps < before + 3.0
+            && avg < UNDER_MS
+            && self.scale_tier > 0
+        {
+            self.scale_tier -= 1;
             log::info!(
-                "render {avg:.1} ms: dropping to {:.0}% resolution",
+                "no frames gained: back to {:.0}% and standing down for a minute",
                 SCALES[self.scale_tier] * 100.0
             );
             self.apply_scale();
-        } else if avg < UNDER_MS && self.scale_tier > 0 {
+            self.frozen = 60;
+            return;
+        }
+
+        let slow = avg > OVER_MS || (fps > 1.0 && fps < SLOW_FPS);
+        let comfy = avg < UNDER_MS && fps > COMFY_FPS;
+        if slow && self.scale_tier + 1 < SCALES.len() {
+            self.scale_tier += 1;
+            self.calm = 0;
+            if avg <= OVER_MS {
+                self.judging = Some(fps);
+            }
+            log::info!(
+                "{fps:.0} fps, render {avg:.1} ms: dropping to {:.0}% resolution",
+                SCALES[self.scale_tier] * 100.0
+            );
+            self.apply_scale();
+        } else if comfy && self.scale_tier > 0 {
             self.calm += 1;
             if self.calm >= 3 {
                 self.scale_tier -= 1;
                 self.calm = 0;
                 log::info!(
-                    "render {avg:.1} ms: back up to {:.0}% resolution",
+                    "{fps:.0} fps, render {avg:.1} ms: back up to {:.0}% resolution",
                     SCALES[self.scale_tier] * 100.0
                 );
                 self.apply_scale();
@@ -1481,6 +1524,8 @@ fn install_and_run(renderer: TableRenderer, surface: Surface) {
         full_size: (0, 0),
         scale_tier: 0,
         calm: 0,
+        judging: None,
+        frozen: 0,
     }));
     PLAYER.with(|p| *p.borrow_mut() = Some(player.clone()));
 
