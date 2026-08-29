@@ -96,3 +96,48 @@ fn a_part_the_script_leaves_alone_is_still_drawn() {
     let (scene, _game) = table("Wallsprim.visible = true\n");
     assert!(drawn(&scene, "Wallsprim"));
 }
+
+// --- the table's own name ----------------------------------------------------
+
+/// A table whose object is not called `Table1` still gets its keys.
+///
+/// Visual Pinball's editor calls the table object `Table1` and most tables
+/// keep it, so looking only for `Table1_KeyDown` works nearly always — and the
+/// times it does not are silent and total. The Sopranos calls its table
+/// `Table`: the flippers still moved, because the physics answers the keyboard
+/// itself, and nothing that had to go through the machine did. No coin, no
+/// start, no game.
+#[test]
+fn the_key_handler_is_named_after_the_table_object() {
+    for (object, script) in [
+        ("Table", "Sub Table_KeyDown(k) : seen = seen + 1 : End Sub"),
+        (
+            "Table1",
+            "Sub Table1_KeyDown(k) : seen = seen + 1 : End Sub",
+        ),
+        // The file says one thing and the script another, which is a table
+        // that should still play.
+        (
+            "Whatever",
+            "Sub Table1_KeyDown(k) : seen = seen + 1 : End Sub",
+        ),
+    ] {
+        let mut vpx = vpin::vpx::VPX::default();
+        vpx.gamedata.name = object.into();
+        vpx.gamedata.code = format!("Dim seen : seen = 0\n{script}\n").as_bytes().into();
+
+        let mut scene = vpw_table::geometry::extract(&vpx);
+        let libraries: Rc<dyn ScriptLibrary> = Rc::new(NoLibraries);
+        let mut game = Game::load(&vpx, &mut scene, Resources::new(libraries))
+            .expect("the table should have loaded");
+
+        game.key("Digit5", true);
+        assert_eq!(
+            game.script()
+                .get_global("seen")
+                .and_then(|v| v.to_number().ok()),
+            Some(1.0),
+            "the key never reached {object}'s handler"
+        );
+    }
+}

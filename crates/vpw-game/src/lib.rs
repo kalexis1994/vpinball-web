@@ -208,6 +208,9 @@ pub struct Game {
     parts: Vec<AnimatedPart>,
     script: Interpreter,
     state: Rc<GameState>,
+    /// What the script calls the table object, from the file. See
+    /// [`Self::handler`].
+    table_object: String,
     ball_radius: f32,
     /// Table time since the table was loaded, in milliseconds.
     clock_ms: f64,
@@ -389,6 +392,7 @@ impl Game {
             parts,
             script,
             state,
+            table_object: table_object_name(&vpx.gamedata.name),
             ball_radius: DEFAULT_BALL_SIZE,
             clock_ms: 0.0,
             fired: Cell::new(0),
@@ -553,19 +557,14 @@ impl Game {
         &self.state.machine
     }
 
-    /// Tells the script the table is starting. Runs `Table1_Init`.
+    /// Tells the script the table is starting. Runs the table's own `_Init`.
     pub fn start(&mut self) -> Result<(), VbError> {
         if self.started {
             return Ok(());
         }
         self.started = true;
-        // The handler is named after the table object, which is almost always
-        // `Table1` but does not have to be.
-        for name in ["Table1_Init", "Table_Init"] {
-            if self.script.has_proc(name) {
-                self.script.call(name, &[])?;
-                break;
-            }
+        if let Some(name) = self.handler("Init") {
+            self.script.call(&name, &[])?;
         }
 
         // And then every part's own `_Init`. Visual Pinball calls these on each
@@ -1138,6 +1137,26 @@ impl Game {
         self.fire_frame_timers(-2.0);
     }
 
+    /// The table's own handler for an event, if the script has one.
+    ///
+    /// Named after the **table object**, which is whatever its author called
+    /// it. `Table1` is the editor's default and most tables keep it, but The
+    /// Sopranos calls its table `Table` — and looking only for `Table1_KeyDown`
+    /// there meant no key ever reached the script, so the coin door and the
+    /// start button did nothing at all. The flippers still moved, because the
+    /// physics answers the keyboard itself; nothing that had to go through the
+    /// machine worked.
+    ///
+    /// The stored name is tried first and the two common defaults after it,
+    /// because the name in the file and the name in the script are two
+    /// different strings and a table where they disagree should still play.
+    fn handler(&self, event: &str) -> Option<String> {
+        [self.table_object.as_str(), "Table1", "Table"]
+            .iter()
+            .map(|t| format!("{t}_{event}"))
+            .find(|name| self.script.has_proc(name))
+    }
+
     /// A key went down or came up. Also hands it to the script, which is what
     /// gives a table its own key bindings.
     pub fn key(&mut self, code: &str, pressed: bool) -> bool {
@@ -1146,8 +1165,7 @@ impl Game {
             .key(&mut self.engine.borrow_mut(), code, pressed);
         if let Some(vp_key) = vp_key_code(code) {
             let suffix = if pressed { "KeyDown" } else { "KeyUp" };
-            let handler = format!("Table1_{suffix}");
-            if self.script.has_proc(&handler)
+            if let Some(handler) = self.handler(suffix)
                 && let Err(e) = self.script.call(&handler, &[Value::Long(vp_key)])
             {
                 log::error!("{handler}: {e}");
@@ -1927,6 +1945,20 @@ impl Object for StopSound {
 
     fn default_value(&self) -> VbResult<Value> {
         Ok(Value::Empty)
+    }
+}
+
+/// The name a table's own event handlers are prefixed with.
+///
+/// Visual Pinball's editor calls the table object `Table1` and stores whatever
+/// it ends up being called in the file's `NAME`. Empty falls back to the
+/// default rather than to nothing, so a file that never wrote one still finds
+/// the handlers a script written against the default would have.
+fn table_object_name(stored: &str) -> String {
+    if stored.trim().is_empty() {
+        "Table1".into()
+    } else {
+        stored.trim().into()
     }
 }
 
