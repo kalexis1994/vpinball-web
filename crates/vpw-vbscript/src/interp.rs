@@ -1555,7 +1555,10 @@ impl Interpreter {
                 let program = parser::parse(&src).map_err(|e| blame_generated(e, &src))?;
                 let _relaxed = self.without_option_explicit();
                 self.hoist(&program.body);
-                self.run_block(&program.body)?;
+                // Blamed on the way out: the line number belongs to *this*
+                // text, and nothing further up the stack has it to look at.
+                self.run_block(&program.body)
+                    .map_err(|e| e.blame("in an executed script", &src))?;
                 Ok(Some(Value::Empty))
             }
             "executeglobal" => {
@@ -1572,7 +1575,12 @@ impl Interpreter {
                     self.run_block(&program.body)
                 });
                 *self.frames.borrow_mut() = saved;
-                r?;
+                // The libraries come in through here — `LoadVPM` is
+                // `ExecuteGlobal GetTextFile("sega.vbs")` — so an error in
+                // `core.vbs` is an error in a text only this frame can still
+                // see. Naming it here is what stops "line 1972" from being a
+                // number nobody can place.
+                r.map_err(|e| e.blame("in a loaded library", &src))?;
                 Ok(Some(Value::Empty))
             }
 

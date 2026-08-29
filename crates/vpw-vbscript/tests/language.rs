@@ -1186,3 +1186,32 @@ fn a_prompt_nobody_can_answer_returns_its_default() {
     );
     assert_eq!(text("a = InputBox(\"Anything?\")", "a"), "");
 }
+
+/// An error out of a loaded library names the library, not the table.
+///
+/// A user reported "the table's script failed: line 1972: Object required".
+/// Line 1972 of *what*? The table's own script, `core.vbs` and the machine
+/// library are all running under one interpreter and all three are long, so
+/// the number on its own places nothing — and the person reading it is usually
+/// not the person who can open all three.
+///
+/// The blame is taken where the source is still at hand, and the line number
+/// is consumed as it goes, so an outer frame cannot claim a line that belongs
+/// to a library.
+#[test]
+fn an_error_says_which_script_and_quotes_the_line() {
+    let e = fails(
+        "Dim lib\n\
+         lib = \"Dim a\" & vbNewLine & \"a = Nothing.Missing\"\n\
+         ExecuteGlobal lib\n",
+    );
+    let said = e.to_string();
+    assert!(said.contains("in a loaded library"), "{said}");
+    assert!(said.contains("line 2"), "{said}");
+    // The line itself, which is the part somebody can search for.
+    assert!(said.contains("a = Nothing.Missing"), "{said}");
+    // The line the *caller* was on is still there, and that is the
+    // `ExecuteGlobal` itself: inner blame first, outer after, which reads as a
+    // stack rather than as two claims on the same number.
+    assert_eq!(e.line, Some(3), "{said}");
+}

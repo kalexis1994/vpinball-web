@@ -42,6 +42,34 @@ fn main() {
         println!("  bulb lights {bulbs} of {}", vals.len());
     }
     let mut scene = vpw_table::geometry::extract(&vpx);
+
+    // VPW_HIDE=name leaves out every mesh whose name contains that text,
+    // before anything is uploaded. `VPW_ONLY` and `VPW_EXCEPT` work on
+    // batches, which are a material and a texture; this works on parts, which
+    // is what has a name and stands somewhere. Between the two, "what is that
+    // slab" takes a couple of minutes instead of an afternoon.
+    // VPW_SHOW=name is the other way round: everything else goes, which is how
+    // you find out what the thing in the way actually looks like.
+    if let Ok(show) = std::env::var("VPW_SHOW") {
+        let show = show.to_lowercase();
+        for m in &mut scene.meshes {
+            if !m.name.to_lowercase().contains(&show) {
+                m.visible = false;
+            }
+        }
+    }
+    if let Ok(hide) = std::env::var("VPW_HIDE") {
+        let hide = hide.to_lowercase();
+        let mut gone = 0;
+        for m in &mut scene.meshes {
+            if m.visible && m.name.to_lowercase().contains(&hide) {
+                m.visible = false;
+                gone += 1;
+            }
+        }
+        println!("hidden {gone} meshes matching '{hide}'");
+    }
+
     // VPW_LIT=1 turns every lamp on. A table's lamps belong to the game, and
     // without a ROM running almost none of them are lit — which is right, and
     // useless for looking at what the lighting does.
@@ -383,6 +411,49 @@ fn main() {
             "table {table:.4} vs screen {aspect:.4}: {:.1}% of bar is unavoidable",
             (1.0 - (table / aspect).min(aspect / table)) * 100.0
         );
+    }
+
+    // VPW_MESHES=1 lists every mesh with where it stands, biggest first.
+    //
+    // The question this answers is "what is that black slab covering half the
+    // playfield", and it is not answerable from the batch list: a batch is a
+    // material and a texture, and the thing in the way is a *part*, with a
+    // name and a position.
+    if std::env::var("VPW_MESHES").is_ok() {
+        let mut meshes: Vec<_> = scene
+            .meshes
+            .iter()
+            .filter_map(|m| m.bounds().map(|b| (m, b)))
+            .collect();
+        // By footprint on the playfield, since what hides a table is what is
+        // wide, not what has the most triangles.
+        meshes.sort_by(|a, b| {
+            let area = |x: &vpw_table::geometry::Bounds| (x.max.x - x.min.x) * (x.max.y - x.min.y);
+            area(&b.1).total_cmp(&area(&a.1))
+        });
+        println!(
+            "{:<28} {:>7} {:<22} {:>6} {:>6} {:>6} {:>6} {:>6} {:>6}",
+            "mesh", "tris", "image", "x0", "x1", "y0", "y1", "z0", "z1"
+        );
+        let show: usize = std::env::var("VPW_MESHES")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(24);
+        for (m, b) in meshes.iter().take(show) {
+            println!(
+                "{:<28} {:>7} {:<22} {:>6.0} {:>6.0} {:>6.0} {:>6.0} {:>6.0} {:>6.0}{}",
+                m.name,
+                m.triangles(),
+                m.image,
+                b.min.x,
+                b.max.x,
+                b.min.y,
+                b.max.y,
+                b.min.z,
+                b.max.z,
+                if m.visible { "" } else { "  hidden" }
+            );
+        }
     }
 
     // VPW_ONLY=name draws only the batches whose material or image contains

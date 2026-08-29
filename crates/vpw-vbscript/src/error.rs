@@ -157,6 +157,44 @@ impl Error {
             control: None,
         }
     }
+    /// Names the script an error happened in, and quotes the line.
+    ///
+    /// A bare "line 1972" is not something anybody can act on. A table's own
+    /// script, `core.vbs` and whichever machine library it loaded are all
+    /// running under one interpreter, and all three are long: the number on
+    /// its own does not say which of them it counts, and the person reading it
+    /// is usually not the person who can open all three.
+    ///
+    /// So the line is quoted where the source is still at hand. It is the
+    /// difference between a bug report that has to be answered with a question
+    /// and one that can be answered.
+    ///
+    /// The line number is taken *out* of the error as it goes, so this is safe
+    /// to call at every level that knows a source: the outer frames see an
+    /// error with no line left to blame and pass it on as it is, which is what
+    /// keeps the table's script from claiming a line that belongs to a
+    /// library.
+    #[must_use]
+    pub fn blame(mut self, what: &str, src: &str) -> Self {
+        let Some(line) = self.line.take() else {
+            return self;
+        };
+        let text = src
+            .lines()
+            .nth(line.saturating_sub(1) as usize)
+            .unwrap_or("")
+            .trim();
+        self.description = if text.is_empty() {
+            Rc::from(format!("{} — {what}, line {line}", self.description))
+        } else {
+            Rc::from(format!(
+                "{} — {what}, line {line}: {text}",
+                self.description
+            ))
+        };
+        self
+    }
+
     /// What `Err.Raise` produces: a script raising an error of its own.
     pub fn raised(number: i32, source: Rc<str>, description: Rc<str>) -> Self {
         Self {

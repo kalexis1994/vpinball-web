@@ -399,7 +399,46 @@ impl Game {
         };
         game.load_script(&vpx.gamedata.code.string)?;
         game.arm_hit_reporting();
+        game.hide_what_the_script_hid(scene);
         Ok(game)
+    }
+
+    /// Takes out of the static scene whatever the script switched off while it
+    /// ran.
+    ///
+    /// A table's first lines are very often a fork on `Table.ShowDT` — one set
+    /// of parts for a desktop and another for a cabinet — and the set that
+    /// does not belong is switched off by name. The Sopranos does exactly
+    /// that, and without this its cabinet walls stand in the middle of the
+    /// playfield as a black slab: the file stores them visible, because the
+    /// file is what the script edits.
+    ///
+    /// The moving parts were already covered. Their visibility is asked for
+    /// every frame ([`Self::part_visible`]) because the script changes it
+    /// *while playing* — hiding the built-in flipper bat under a primitive one
+    /// is the usual reason. This is the other half: the parts that never move,
+    /// whose meshes are baked into one buffer when the scene is uploaded, and
+    /// for which the decision taken here is the only decision there is.
+    ///
+    /// One-way, and that is the limitation: a table that hides a static part
+    /// at load and shows it again mid-game keeps it hidden. Doing better means
+    /// moving that part onto the dynamic path, which costs it a draw call —
+    /// worth paying for the dozen parts that move, not for the three thousand
+    /// that do not.
+    fn hide_what_the_script_hid(&self, scene: &mut Scene) {
+        let mut hidden = 0;
+        for mesh in &mut scene.meshes {
+            if mesh.visible
+                && let Some(item) = self.state.items.get(owner_of(&mesh.name))
+                && !item.visible()
+            {
+                mesh.visible = false;
+                hidden += 1;
+            }
+        }
+        if hidden > 0 {
+            log::debug!("the script hid {hidden} static meshes before the table was drawn");
+        }
     }
 
     /// Loads the table's script, pulling in whatever libraries it asks for.
@@ -417,11 +456,17 @@ impl Game {
                 // A library that fails is worth reporting but not worth
                 // refusing to start over: several are optional, and a table
                 // that cannot find its DMD library still plays.
-                log::warn!("library '{name}': {e}");
+                log::warn!("library '{name}': {}", e.blame(name, &text));
             }
         }
         let _ = code;
-        self.script.load(code)
+        // And the table's own, named and quoted the same way. An error that
+        // came out of a library was already blamed on its way through
+        // `ExecuteGlobal` and has no line left, so this cannot take the credit
+        // for somebody else's line 1972.
+        self.script
+            .load(code)
+            .map_err(|e| e.blame("in the table's own script", code))
     }
 
     /// Marks the shapes whose hits the script actually wants.
@@ -1882,6 +1927,19 @@ impl Object for StopSound {
 
     fn default_value(&self) -> VbResult<Value> {
         Ok(Value::Empty)
+    }
+}
+
+/// The name of the part a generated mesh belongs to.
+///
+/// One part often becomes several meshes, and the extra ones say what they are
+/// in brackets: a wall is `Plastic1 (top)` and `Plastic1 (side)`, a ramp's
+/// handrails are `Ramp1 (wire 1)` and so on. The script only ever knows the
+/// part, so the bracket has to come off before anything is looked up by name.
+fn owner_of(mesh: &str) -> &str {
+    match mesh.rfind(" (") {
+        Some(at) if mesh.ends_with(')') => &mesh[..at],
+        _ => mesh,
     }
 }
 

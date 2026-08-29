@@ -122,9 +122,17 @@ fn machine() -> ((Vec3, Vec3), (Vec3, Vec3)) {
 }
 
 /// Whether a point lands inside the picture.
+///
+/// Sideways *and* in depth: an orthographic camera does not divide by `w`, so
+/// a point in front of the near plane still lands in the middle of the frame
+/// and only its depth says it was clipped. Checking the box in all three
+/// directions is what makes "this is behind the glass" a thing a test can ask.
 fn on_screen(c: &Camera, p: Vec3, aspect: f32) -> bool {
     let clip = c.view_projection(aspect) * p.extend(1.0);
-    clip.w > 0.0 && (clip.x / clip.w).abs() <= 1.0 && (clip.y / clip.w).abs() <= 1.0
+    clip.w > 0.0
+        && (clip.x / clip.w).abs() <= 1.0
+        && (clip.y / clip.w).abs() <= 1.0
+        && (0.0..=1.0).contains(&(clip.z / clip.w))
 }
 
 #[test]
@@ -457,4 +465,48 @@ fn the_depth_planes_stay_close_enough_to_be_useful() {
             c.far / c.near
         );
     }
+}
+
+#[test]
+fn the_overhead_view_starts_at_the_glass() {
+    // A room modelled around the machine — a backdrop, a ceiling, a lit box an
+    // author built for a front view — is above the glass, and from directly
+    // overhead you are inside it looking at the underside of its lid. The
+    // Sopranos has one reaching 1215 units up, and it came out as a dark smear
+    // over half the playfield.
+    //
+    // So the view whose whole idea is that the screen *is* the glass starts at
+    // it: everything higher is clipped, and everything a playfield actually
+    // has — a tall ramp is two or three hundred units — is kept.
+    let (playfield, backbox) = machine();
+    let aspect = 0.4615;
+    let c = Camera::for_view(View::Overhead, playfield, backbox, aspect);
+
+    // Well above the glass and still well below the camera, so what keeps it
+    // out of the picture is the near plane and nothing else.
+    let above = Vec3::new(482.0, 1080.0, 600.0);
+    assert!(
+        !on_screen(&c, above, aspect),
+        "the room's lid is still in the way"
+    );
+
+    // And the table under it is not: the playfield, a tall ramp, and the space
+    // just under the glass.
+    for z in [0.0, 60.0, 300.0] {
+        assert!(
+            on_screen(&c, Vec3::new(482.0, 1080.0, z), aspect),
+            "clipped the table at z {z}"
+        );
+    }
+}
+
+#[test]
+fn the_front_view_keeps_everything_above_the_glass() {
+    // The ceiling only gets in the way of a camera that is above it. From the
+    // front the head stands three times higher than the glass and has to stay
+    // in shot, so nothing is clipped there.
+    let (playfield, backbox) = machine();
+    let aspect = 0.4615;
+    let c = Camera::for_view(View::Front, playfield, backbox, aspect);
+    assert!(on_screen(&c, Vec3::new(482.0, 0.0, 900.0), aspect));
 }

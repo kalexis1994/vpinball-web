@@ -154,6 +154,14 @@ impl View {
     }
 }
 
+/// How high above the playfield the overhead view stops looking, in VPU.
+///
+/// Visual Pinball's own upper window border, which is what a cabinet's glass
+/// is measured against: 20 cm above the playfield, or about 371 units
+/// (`ViewSetup.h`, and the `WTZ0` field of every table written since 10.8).
+/// The glass is the natural ceiling for a view that is looking through it.
+const GLASS_CEILING_VPU: f32 = 371.0;
+
 /// The eight corners of an axis-aligned box.
 pub fn box_corners(min: Vec3, max: Vec3) -> [Vec3; 8] {
     [
@@ -243,7 +251,37 @@ impl Camera {
         };
         let mut corners = box_corners(min, max).to_vec();
         corners.extend_from_slice(occupied);
-        Self::fit(camera, &corners, aspect, view.margin())
+        let mut camera = Self::fit(camera, &corners, aspect, view.margin());
+        if matches!(view, View::Overhead) {
+            camera.clip_above(playfield.0.z + GLASS_CEILING_VPU);
+        }
+        camera
+    }
+
+    /// Puts the near plane at a height, for the view that looks straight down.
+    ///
+    /// Looking down from above, anything higher than the glass is between the
+    /// camera and the table and can only ever be in the way. Most tables have
+    /// nothing up there and never notice; the ones that do are the ones with a
+    /// room modelled around the machine — a backdrop, a ceiling, a lit box the
+    /// author built for a front view — and from directly overhead you are
+    /// inside it, looking at the underside of its lid. The Sopranos is one:
+    /// a single primitive reaching 1215 units up, which came out as a dark
+    /// smear over half the playfield.
+    ///
+    /// Nothing on a playfield is anywhere near this high — a tall ramp is two
+    /// or three hundred — so the plane costs real geometry nothing, and the
+    /// view whose whole idea is that the screen *is* the glass is exactly the
+    /// one that should start at it.
+    fn clip_above(&mut self, ceiling: f32) {
+        // The camera looks straight down, so the distance from the eye to a
+        // height is the difference of the two. Only ever pushed further out,
+        // never pulled in: the bracket already worked out how much precision
+        // the depth buffer needs, and this is not the place to spend it.
+        let near = (self.eye().z - ceiling).max(self.near);
+        if near < self.far {
+            self.near = near;
+        }
     }
 
     /// Frames a whole box: picks target and distance so that it fits.
