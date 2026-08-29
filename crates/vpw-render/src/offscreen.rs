@@ -160,7 +160,7 @@ impl Offscreen {
             &self.pipeline,
             &self.post,
             scene,
-            &self.lights,
+            &mut self.lights,
             camera.view_projection(aspect),
             camera.eye(),
             &scene.lighting,
@@ -296,7 +296,7 @@ impl Offscreen {
             }),
             bake.layers.len() as u32,
         );
-        self.lights.set_baked_groups(&self.queue, groups);
+        self.lights.set_baked_groups(groups);
     }
 
     /// Uploads the table's lit lights.
@@ -372,13 +372,13 @@ impl Offscreen {
     }
 
     /// Draws a frame and returns the RGBA of the image.
-    pub fn render(&self, scene: &GpuScene, camera: &Camera) -> Vec<u8> {
+    pub fn render(&mut self, scene: &GpuScene, camera: &Camera) -> Vec<u8> {
         self.render_filtered(scene, camera, |_| true)
     }
 
     /// The same, but drawing only the batches that pass the filter.
     pub fn render_filtered(
-        &self,
+        &mut self,
         scene: &GpuScene,
         camera: &Camera,
         filter: impl Fn(&crate::scene::Batch) -> bool,
@@ -393,11 +393,13 @@ impl Offscreen {
     /// any rendering change under its constant. A benchmark submits many of
     /// these, waits for the queue, and divides.
     pub fn draw_only(
-        &self,
+        &mut self,
         scene: &GpuScene,
         camera: &Camera,
         filter: impl Fn(&crate::scene::Batch) -> bool,
     ) {
+        // The frame's light lists, before any pass records.
+        self.lights.prepare(&self.device, &self.queue, None);
         // The aspect is the output's; the pixel sizes are the scene
         // buffers', which the render scale may have shrunk — exactly as
         // `TableRenderer::render` divides them.

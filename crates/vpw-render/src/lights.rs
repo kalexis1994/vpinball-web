@@ -41,28 +41,26 @@ struct GpuLight {
     blend: [f32; 4],
 }
 
-/// One vertex of a light's mesh: where it is, and where on the insert's
-/// picture it looks (`light.cpp:515-520`). A light with no picture carries
-/// zeros there; the untextured techniques never read them.
+/// One vertex of a light's mesh: where it is, where on the insert's picture
+/// it looks (`light.cpp:515-520`), and which lamp it belongs to. The id is
+/// what lets every lamp of a class share one draw call: the vertex stage
+/// fetches that lamp's row of the data texture. A light with no picture
+/// carries zero uvs; the untextured techniques never read them.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct GpuLightVertex {
     pos: [f32; 3],
     uv: [f32; 2],
+    id: u32,
 }
 
-/// One uploaded light: its shape and its data block.
+/// One uploaded light: where its indices live in the master list, and its
+/// data block.
 pub struct Light {
-    pub vertices: wgpu::Buffer,
-    pub indices: wgpu::Buffer,
-    pub index_count: u32,
-    pub bind_group: wgpu::BindGroup,
-    /// The uniform, kept so the state can be written to it: a lamp goes on and
-    /// off many times a second and rebuilding its buffers for that would be
-    /// absurd.
-    uniform: wgpu::Buffer,
-    /// Exactly what is in the uniform, so a change can be written without
-    /// rebuilding the parts that did not move.
+    /// This lamp's slice of [`Lights::master_indices`]: start, count.
+    range: (u32, u32),
+    /// This lamp's row of the data texture, kept on the CPU so a change can
+    /// be written without rebuilding the parts that did not move.
     data: GpuLight,
     /// The two colours as the file gives them, before the incandescent fader
     /// tints them by the filament's temperature. Kept because that tint is a
@@ -81,10 +79,10 @@ pub struct Light {
     /// Whether the **file** declared this one a blinker. See
     /// [`Lights::blinks`].
     blinking: bool,
-    /// The insert's picture and the material it is lit through, when it has a
-    /// picture that resolved. `None` is the original's null `offTexel`
+    /// The insert's picture, as an index into [`Lights::texel_binds`], when
+    /// it has one that resolved. `None` is the original's null `offTexel`
     /// (`light.cpp:708`), which takes the halo-only technique (`:823`).
-    texel: Option<wgpu::BindGroup>,
+    texel: Option<usize>,
     /// Whether the light is drawn at zero intensity. See
     /// `vpw_table::light::Light::drawn_when_off`.
     drawn_when_off: bool,
@@ -161,43 +159,36 @@ enum Which {
     Texel,
     /// The modulating halo of a bulb light, depth-tested.
     Bulb,
-    /// Into the transmitted-light buffer, no depth, bulbs only.
-    Transmitted,
 }
 
 impl Light {
-    /// Pushes whatever the lamp has just changed into the uniform.
-    ///
-    /// Two shapes of write, because the common one is tiny. A lamp that only
-    /// got brighter has moved one float, and a table has hundreds of lamps; a
-    /// lamp on the incandescent fader has also changed colour, since the tint
-    /// is a function of its filament's temperature (`light.cpp:723-735`), and
-    /// that is the two colours either side of the intensity — so the three
-    /// travel together.
-    fn write(&mut self, queue: &wgpu::Queue) {
+    /// Pushes whatever the lamp has just changed into its data row. The GPU
+    /// copy follows in one piece on the next [`Lights::prepare`] — hundreds
+    /// of lamps fit in a twenty-eight-kilobyte texture, and one upload a
+    /// frame beats a queue write per blink.
+    fn write(&mut self) {
         let intensity = self.lamp.level();
         let tint = self.lamp.tint();
         self.data.color[3] = intensity;
         if tint == [1.0; 3] {
-            queue.write_buffer(
-                &self.uniform,
-                std::mem::offset_of!(GpuLight, color) as u64 + 3 * 4,
-                bytemuck::bytes_of(&intensity),
-            );
             return;
         }
         for (i, t) in tint.iter().enumerate() {
             self.data.color[i] = self.base_color[i] * t;
             self.data.color2[i] = self.base_color2[i] * t;
         }
-        // `color` and `color2` are adjacent, so one write covers both.
-        let at = std::mem::offset_of!(GpuLight, color) as u64;
-        queue.write_buffer(
-            &self.uniform,
-            at,
-            bytemuck::cast_slice(&[self.data.color, self.data.color2]),
-        );
     }
+}
+
+/// One run of the per-frame index list: a pipeline, the picture it binds if
+/// it is the lit-insert one, and the slice of indices it draws. What used to
+/// be a draw call per lamp is one of these per *class* — plus one per
+/// distinct insert picture, which F-14 keeps to one for its sixty inserts.
+struct Segment {
+    which: Which,
+    texel: Option<usize>,
+    start: u32,
+    count: u32,
 }
 
 /// Where a lamp stands and how far its light can reach, kept on the CPU from
@@ -228,6 +219,26 @@ pub struct Lights {
     /// halo folded in. See `fs_texel`.
     texel: wgpu::RenderPipeline,
     pub layout: wgpu::BindGroupLayout,
+    /// Every lamp's mesh in one vertex buffer, id per vertex.
+    vertices: Option<wgpu::Buffer>,
+    /// Every lamp's indices, on the CPU: [`Lights::prepare`] copies the lit
+    /// lamps' slices into the frame's index buffer.
+    master_indices: Vec<u32>,
+    /// The data texture: four texels per lamp, one row each.
+    data_tex: Option<wgpu::Texture>,
+    data_bind: Option<wgpu::BindGroup>,
+    /// The lit inserts' pictures, shared per (material, image).
+    texel_binds: Vec<wgpu::BindGroup>,
+    /// The index buffer [`Lights::prepare`] fills for the frame, and how many
+    /// indices fit in it before it must grow.
+    frame_indices: Option<wgpu::Buffer>,
+    frame_capacity: usize,
+    /// What [`Lights::draw`] runs this frame.
+    segments: Vec<Segment>,
+    /// The transmitted-light pass's slice of the frame indices.
+    transmitted_range: (u32, u32),
+    /// Whether a lamp changed since the data texture was last written.
+    dirty: bool,
     /// What goes in the material's slot for a light that has no picture.
     ///
     /// The light's own data is at group 2 so that a lit insert can take the
@@ -368,7 +379,7 @@ impl Lights {
     /// Marks each group's lamps as living in that layer of the baked
     /// lightmap. Resolved by name rather than index, because a bake can come
     /// back from a cache that outlived the scene it was traced from.
-    pub fn set_baked_groups(&mut self, queue: &wgpu::Queue, groups: &[Vec<String>]) {
+    pub fn set_baked_groups(&mut self, groups: &[Vec<String>]) {
         for l in &mut self.lights {
             l.baked = None;
         }
@@ -390,12 +401,8 @@ impl Lights {
                 1.0
             };
             l.data.center[3] = l.range_w * shrink;
-            queue.write_buffer(
-                &l.uniform,
-                std::mem::offset_of!(GpuLight, center) as u64,
-                bytemuck::bytes_of(&l.data.center),
-            );
         }
+        self.dirty = true;
     }
 
     /// Builds the pipelines against the table's own layouts.
@@ -429,11 +436,13 @@ impl Lights {
             label: Some("vpw-light-layout"),
             entries: &[wgpu::BindGroupLayoutEntry {
                 binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
+                visibility: wgpu::ShaderStages::VERTEX,
+                ty: wgpu::BindingType::Texture {
+                    // Rgba32Float, fetched with `textureLoad`: unfilterable
+                    // is a statement of fact, not a restriction.
+                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
                 },
                 count: None,
             }],
@@ -491,6 +500,11 @@ impl Lights {
                     format: wgpu::VertexFormat::Float32x2,
                     offset: 12,
                     shader_location: 1,
+                },
+                wgpu::VertexAttribute {
+                    format: wgpu::VertexFormat::Uint32,
+                    offset: 20,
+                    shader_location: 2,
                 },
             ],
         })];
@@ -610,6 +624,16 @@ impl Lights {
             texel,
             layout,
             empty,
+            vertices: None,
+            master_indices: Vec::new(),
+            data_tex: None,
+            data_bind: None,
+            texel_binds: Vec::new(),
+            frame_indices: None,
+            frame_capacity: 0,
+            segments: Vec::new(),
+            transmitted_range: (0, 0),
+            dirty: false,
             lights: Vec::new(),
             names: Vec::new(),
             mesh_bounds: Vec::new(),
@@ -666,57 +690,55 @@ impl Lights {
         let white = crate::scene::white_texture(device, queue);
         // One slot per (surface material, picture): the picture is uploaded
         // once, not once per insert.
-        let mut slots: HashMap<(String, String), Option<wgpu::BindGroup>> = HashMap::new();
+        let mut slots: HashMap<(String, String), Option<usize>> = HashMap::new();
+        self.texel_binds.clear();
 
-        self.lights = lights
-            .iter()
-            .map(|l| {
-                // The lamp starts where the file leaves it — lit if the file
-                // says lit — rather than at zero with a fade to climb out of.
-                let lamp = vpw_table::light::Lamp::new(l);
-                let tint = lamp.tint();
-                let data = GpuLight {
-                    center: [
-                        l.center.x,
-                        l.center.y,
-                        l.center.z,
-                        1.0 / l.falloff_radius.max(1.0),
-                    ],
-                    color: [
-                        l.color[0] * tint[0],
-                        l.color[1] * tint[1],
-                        l.color[2] * tint[2],
-                        lamp.level(),
-                    ],
-                    blend: [
-                        l.modulate,
-                        l.transmission_scale,
-                        if l.image_mode { 1.0 } else { 0.0 },
-                        0.0,
-                    ],
-                    color2: [
-                        l.color2[0] * tint[0],
-                        l.color2[1] * tint[1],
-                        l.color2[2] * tint[2],
-                        l.falloff_power.max(0.1),
-                    ],
-                };
-                let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("vpw-light"),
-                    contents: bytemuck::bytes_of(&data),
-                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                });
+        let mut vertices: Vec<GpuLightVertex> = Vec::new();
+        let mut master: Vec<u32> = Vec::new();
 
-                let texel = if l.image.is_empty() {
-                    None
-                } else {
-                    let key = (
-                        l.surface_material.to_ascii_lowercase(),
-                        l.image.to_ascii_lowercase(),
-                    );
-                    slots
-                        .entry(key)
-                        .or_insert_with(|| {
+        self.lights =
+            lights
+                .iter()
+                .enumerate()
+                .map(|(id, l)| {
+                    // The lamp starts where the file leaves it — lit if the file
+                    // says lit — rather than at zero with a fade to climb out of.
+                    let lamp = vpw_table::light::Lamp::new(l);
+                    let tint = lamp.tint();
+                    let data = GpuLight {
+                        center: [
+                            l.center.x,
+                            l.center.y,
+                            l.center.z,
+                            1.0 / l.falloff_radius.max(1.0),
+                        ],
+                        color: [
+                            l.color[0] * tint[0],
+                            l.color[1] * tint[1],
+                            l.color[2] * tint[2],
+                            lamp.level(),
+                        ],
+                        blend: [
+                            l.modulate,
+                            l.transmission_scale,
+                            if l.image_mode { 1.0 } else { 0.0 },
+                            0.0,
+                        ],
+                        color2: [
+                            l.color2[0] * tint[0],
+                            l.color2[1] * tint[1],
+                            l.color2[2] * tint[2],
+                            l.falloff_power.max(0.1),
+                        ],
+                    };
+                    let texel = if l.image.is_empty() {
+                        None
+                    } else {
+                        let key = (
+                            l.surface_material.to_ascii_lowercase(),
+                            l.image.to_ascii_lowercase(),
+                        );
+                        *slots.entry(key).or_insert_with(|| {
                             let slot = crate::scene::material_slot(
                                 device,
                                 queue,
@@ -729,60 +751,228 @@ impl Lights {
                             );
                             // A name that is not one of the table's images is
                             // the original's null `offTexel`: the halo alone.
-                            slot.textured.then_some(slot.bind_group)
+                            if slot.textured {
+                                self.texel_binds.push(slot.bind_group);
+                                Some(self.texel_binds.len() - 1)
+                            } else {
+                                None
+                            }
                         })
-                        .clone()
-                };
+                    };
 
-                let vertices: Vec<GpuLightVertex> = l
-                    .vertices
+                    let base = vertices.len() as u32;
+                    vertices.extend(l.vertices.iter().enumerate().map(|(i, &pos)| {
+                        GpuLightVertex {
+                            pos,
+                            uv: l.uvs.get(i).copied().unwrap_or([0.0; 2]),
+                            id: id as u32,
+                        }
+                    }));
+                    let start = master.len() as u32;
+                    master.extend(l.indices.iter().map(|&i| i + base));
+
+                    Light {
+                        range: (start, l.indices.len() as u32),
+                        data,
+                        base_color: l.color,
+                        base_color2: l.color2,
+                        lamp,
+                        bulb: l.is_bulb,
+                        transmission: l.transmission_scale,
+                        blinking: l.blinking,
+                        full: l.intensity,
+                        baked: None,
+                        range_w: 1.0 / l.falloff_radius.max(1.0),
+                        // Only with a picture that resolved: a light whose picture
+                        // is missing falls back to the halo, and a halo at zero
+                        // intensity is nothing.
+                        drawn_when_off: texel.is_some() && l.drawn_when_off(),
+                        texel,
+                    }
+                })
+                .collect();
+
+        self.master_indices = master;
+        self.vertices = (!vertices.is_empty()).then(|| {
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("vpw-light-vertices"),
+                contents: bytemuck::cast_slice(&vertices),
+                usage: wgpu::BufferUsages::VERTEX,
+            })
+        });
+
+        // The data texture: one row per lamp, four texels wide. Height one
+        // minimum so a table without lamps still binds something.
+        let rows = self.lights.len().max(1) as u32;
+        let tex = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("vpw-light-data"),
+            size: wgpu::Extent3d {
+                width: 4,
+                height: rows,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba32Float,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        self.data_bind = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("vpw-light-data-bg"),
+            layout: &self.layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(&tex.create_view(&Default::default())),
+            }],
+        }));
+        self.data_tex = Some(tex);
+        self.frame_indices = None;
+        self.frame_capacity = 0;
+        self.dirty = true;
+    }
+
+    /// Writes the frame's index list and, when a lamp changed, the data
+    /// texture. Once per frame, before any pass records: what used to be a
+    /// bind-and-draw per lamp becomes a texture upload and a few
+    /// `draw_indexed` ranges.
+    ///
+    /// `levels` overrides what every lamp says it is showing — the flat bake
+    /// photographs the table with levels of its own choosing, and the real
+    /// ones come back on the next prepared frame.
+    pub fn prepare(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, levels: Option<&[f32]>) {
+        self.segments.clear();
+        self.transmitted_range = (0, 0);
+        if self.lights.is_empty() {
+            return;
+        }
+
+        if self.dirty || levels.is_some() {
+            let rows: Vec<GpuLight> = match levels {
+                Some(lv) => self
+                    .lights
                     .iter()
                     .enumerate()
-                    .map(|(i, &pos)| GpuLightVertex {
-                        pos,
-                        uv: l.uvs.get(i).copied().unwrap_or([0.0; 2]),
+                    .map(|(i, l)| {
+                        let mut d = l.data;
+                        d.color[3] = lv.get(i).copied().unwrap_or(0.0);
+                        d
                     })
-                    .collect();
+                    .collect(),
+                None => self.lights.iter().map(|l| l.data).collect(),
+            };
+            if let Some(tex) = &self.data_tex {
+                queue.write_texture(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: tex,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    bytemuck::cast_slice(&rows),
+                    wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(64),
+                        rows_per_image: Some(rows.len() as u32),
+                    },
+                    wgpu::Extent3d {
+                        width: 4,
+                        height: rows.len() as u32,
+                        depth_or_array_layers: 1,
+                    },
+                );
+            }
+            // A forced view is a loan: the real levels go back up next frame.
+            self.dirty = levels.is_some();
+        }
 
-                Light {
-                    vertices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                        label: Some("vpw-light-vertices"),
-                        contents: bytemuck::cast_slice(&vertices),
-                        usage: wgpu::BufferUsages::VERTEX,
-                    }),
-                    indices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                        label: Some("vpw-light-indices"),
-                        contents: bytemuck::cast_slice(&l.indices),
-                        usage: wgpu::BufferUsages::INDEX,
-                    }),
-                    index_count: l.indices.len() as u32,
-                    bind_group: device.create_bind_group(&wgpu::BindGroupDescriptor {
-                        label: Some("vpw-light-bg"),
-                        layout: &self.layout,
-                        entries: &[wgpu::BindGroupEntry {
-                            binding: 0,
-                            resource: uniform.as_entire_binding(),
-                        }],
-                    }),
-                    uniform,
-                    data,
-                    base_color: l.color,
-                    base_color2: l.color2,
-                    lamp,
-                    bulb: l.is_bulb,
-                    transmission: l.transmission_scale,
-                    blinking: l.blinking,
-                    full: l.intensity,
-                    baked: None,
-                    range_w: 1.0 / l.falloff_radius.max(1.0),
-                    // Only with a picture that resolved: a light whose picture
-                    // is missing falls back to the halo, and a halo at zero
-                    // intensity is nothing.
-                    drawn_when_off: texel.is_some() && l.drawn_when_off(),
-                    texel,
+        let level = |i: usize, l: &Light| {
+            levels
+                .and_then(|v| v.get(i).copied())
+                .unwrap_or_else(|| l.lamp.level())
+        };
+
+        let mut ix: Vec<u32> = Vec::new();
+        let push = |ix: &mut Vec<u32>, master: &[u32], l: &Light| {
+            let (s, n) = l.range;
+            ix.extend_from_slice(&master[s as usize..(s + n) as usize]);
+        };
+
+        // The original's order: classic discs, lit inserts, bulbs.
+        let start = ix.len() as u32;
+        for (i, l) in self.lights.iter().enumerate() {
+            if !l.bulb && l.texel.is_none() && level(i, l) > 0.0 {
+                push(&mut ix, &self.master_indices, l);
+            }
+        }
+        if ix.len() as u32 > start {
+            self.segments.push(Segment {
+                which: Which::Classic,
+                texel: None,
+                start,
+                count: ix.len() as u32 - start,
+            });
+        }
+
+        for t in 0..self.texel_binds.len() {
+            let start = ix.len() as u32;
+            for (i, l) in self.lights.iter().enumerate() {
+                // A lit insert draws dark too (`light.cpp:713-718`), when its
+                // picture says so.
+                if l.texel == Some(t) && (level(i, l) > 0.0 || l.drawn_when_off) {
+                    push(&mut ix, &self.master_indices, l);
                 }
-            })
-            .collect();
+            }
+            if ix.len() as u32 > start {
+                self.segments.push(Segment {
+                    which: Which::Texel,
+                    texel: Some(t),
+                    start,
+                    count: ix.len() as u32 - start,
+                });
+            }
+        }
+
+        let start = ix.len() as u32;
+        for (i, l) in self.lights.iter().enumerate() {
+            if l.bulb && level(i, l) > 0.0 {
+                push(&mut ix, &self.master_indices, l);
+            }
+        }
+        if ix.len() as u32 > start {
+            self.segments.push(Segment {
+                which: Which::Bulb,
+                texel: None,
+                start,
+                count: ix.len() as u32 - start,
+            });
+        }
+
+        // The transmitted-light buffer takes bulbs with something to
+        // transmit, and only those (`light.cpp:600`).
+        let start = ix.len() as u32;
+        for (i, l) in self.lights.iter().enumerate() {
+            if l.bulb && l.transmission > 0.0 && level(i, l) > 0.0 {
+                push(&mut ix, &self.master_indices, l);
+            }
+        }
+        self.transmitted_range = (start, ix.len() as u32 - start);
+
+        if ix.is_empty() {
+            return;
+        }
+        if ix.len() > self.frame_capacity {
+            self.frame_capacity = ix.len().next_power_of_two();
+            self.frame_indices = Some(device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("vpw-light-frame-indices"),
+                size: (self.frame_capacity * 4) as u64,
+                usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }));
+        }
+        if let Some(buffer) = &self.frame_indices {
+            queue.write_buffer(buffer, 0, bytemuck::cast_slice(&ix));
+        }
     }
 
     /// Turns a lamp on, off, or part way, with no fade at all.
@@ -795,12 +985,13 @@ impl Lights {
     /// For a caller with no clock to offer. Everything drawing a table should
     /// use [`Lights::animate`] instead: the fade is not decoration, it is what
     /// separates a bulb from a switch.
-    pub fn set_state(&mut self, queue: &wgpu::Queue, index: usize, state: f32, scale: f32) {
+    pub fn set_state(&mut self, index: usize, state: f32, scale: f32) {
         let Some(light) = self.lights.get_mut(index) else {
             return;
         };
         if light.lamp.snap(state, scale) {
-            light.write(queue);
+            light.write();
+            self.dirty = true;
         }
     }
 
@@ -813,19 +1004,13 @@ impl Lights {
     ///
     /// Writes nothing when nothing moved, which is almost always: a table has
     /// hundreds of lamps and a handful change on any given frame.
-    pub fn animate(
-        &mut self,
-        queue: &wgpu::Queue,
-        index: usize,
-        state: f32,
-        scale: f32,
-        dt_ms: f32,
-    ) {
+    pub fn animate(&mut self, index: usize, state: f32, scale: f32, dt_ms: f32) {
         let Some(light) = self.lights.get_mut(index) else {
             return;
         };
         if light.lamp.update(state, scale, dt_ms) {
-            light.write(queue);
+            light.write();
+            self.dirty = true;
         }
     }
 
@@ -851,52 +1036,6 @@ impl Lights {
             bounds: self.mesh_bounds.get(index).copied().unwrap_or_default(),
             baked: l.baked.is_some(),
         })
-    }
-
-    /// Every lamp's current level, for a bake to put back afterwards.
-    pub fn save_levels(&self) -> Vec<f32> {
-        self.lights.iter().map(|l| l.data.color[3]).collect()
-    }
-
-    /// Writes one level straight into a lamp's uniform, without touching the
-    /// lamp's own state. The flat bake photographs the table with every lamp
-    /// held at a chosen level and puts the real ones back before the next
-    /// live frame; the fade state never learns it happened.
-    pub fn force_level(&self, queue: &wgpu::Queue, index: usize, level: f32) {
-        let Some(l) = self.lights.get(index) else {
-            return;
-        };
-        queue.write_buffer(
-            &l.uniform,
-            std::mem::offset_of!(GpuLight, color) as u64 + 3 * 4,
-            bytemuck::bytes_of(&level),
-        );
-    }
-
-    /// The forced level's effect on the draw skip: [`Lights::draw`] skips a
-    /// lamp whose *lamp state* reads zero, which during a bake would skip the
-    /// very lamp being photographed. This draws with the given levels instead
-    /// of asking the lamps.
-    pub fn draw_forced(
-        &self,
-        pass: &mut wgpu::RenderPass<'_>,
-        frame: &wgpu::BindGroup,
-        levels: &[f32],
-    ) {
-        self.draw_with_levels(pass, &self.pipeline, Which::Classic, frame, Some(levels));
-        self.draw_with_levels(pass, &self.texel, Which::Texel, frame, Some(levels));
-        self.draw_with_levels(pass, &self.bulb, Which::Bulb, frame, Some(levels));
-    }
-
-    /// [`Lights::draw_flat`] with forced levels, for the bake's transmitted-
-    /// light pass.
-    pub fn draw_flat_forced(
-        &self,
-        pass: &mut wgpu::RenderPass<'_>,
-        frame: &wgpu::BindGroup,
-        levels: &[f32],
-    ) {
-        self.draw_with_levels(pass, &self.flat, Which::Transmitted, frame, Some(levels));
     }
 
     /// The general illumination with exactly one lamp lit, at full power:
@@ -977,94 +1116,65 @@ impl Lights {
         self.lights.len()
     }
 
-    /// Emits the lights into the scene.
+    /// Emits the lights into the scene, from what [`Lights::prepare`] laid
+    /// out: the shared buffers once, then one `draw_indexed` per segment.
     ///
     /// `frame` is the table's full frame bind group, environment and all: the
     /// lit insert goes through the light loop, and the light loop reads the
     /// environment map.
-    ///
-    /// Three pipelines, chosen per light: a bulb blends into what is under it,
-    /// a classic one with a picture adds the lit picture, and one without adds
-    /// its halo flat on top. The original switches the same sets of render
-    /// states for the same reason (`light.cpp:810-817` and `:827`).
     pub fn draw(&self, pass: &mut wgpu::RenderPass<'_>, frame: &wgpu::BindGroup) {
-        self.draw_with(pass, &self.pipeline, Which::Classic, frame);
-        self.draw_with(pass, &self.texel, Which::Texel, frame);
-        self.draw_with(pass, &self.bulb, Which::Bulb, frame);
-    }
-
-    /// The same, into a pass with no depth buffer. `frame` is the reduced
-    /// frame bind group, the one without the transmitted-light texture.
-    pub fn draw_flat(&self, pass: &mut wgpu::RenderPass<'_>, frame: &wgpu::BindGroup) {
-        self.draw_with(pass, &self.flat, Which::Transmitted, frame);
-    }
-
-    fn draw_with(
-        &self,
-        pass: &mut wgpu::RenderPass<'_>,
-        pipeline: &wgpu::RenderPipeline,
-        which: Which,
-        frame: &wgpu::BindGroup,
-    ) {
-        self.draw_with_levels(pass, pipeline, which, frame, None);
-    }
-
-    /// The one draw loop. `levels` overrides what each lamp says it is
-    /// showing — the flat bake writes levels straight into the uniforms and
-    /// the lamps' own state no longer describes what the GPU will draw.
-    fn draw_with_levels(
-        &self,
-        pass: &mut wgpu::RenderPass<'_>,
-        pipeline: &wgpu::RenderPipeline,
-        which: Which,
-        frame: &wgpu::BindGroup,
-        levels: Option<&[f32]>,
-    ) {
-        if self.lights.is_empty() {
+        let (Some(vertices), Some(indices), Some(data)) =
+            (&self.vertices, &self.frame_indices, &self.data_bind)
+        else {
+            return;
+        };
+        if self.segments.is_empty() {
             return;
         }
-        pass.set_pipeline(pipeline);
+        pass.set_vertex_buffer(0, vertices.slice(..));
+        pass.set_index_buffer(indices.slice(..), wgpu::IndexFormat::Uint32);
         pass.set_bind_group(0, frame, &[]);
-        if which != Which::Texel {
-            pass.set_bind_group(1, &self.empty, &[]);
+        pass.set_bind_group(2, data, &[]);
+        for seg in &self.segments {
+            match seg.which {
+                Which::Classic => {
+                    pass.set_pipeline(&self.pipeline);
+                    pass.set_bind_group(1, &self.empty, &[]);
+                }
+                Which::Texel => {
+                    pass.set_pipeline(&self.texel);
+                    if let Some(t) = seg.texel {
+                        pass.set_bind_group(1, &self.texel_binds[t], &[]);
+                    }
+                }
+                Which::Bulb => {
+                    pass.set_pipeline(&self.bulb);
+                    pass.set_bind_group(1, &self.empty, &[]);
+                }
+            }
+            pass.draw_indexed(seg.start..seg.start + seg.count, 0, 0..1);
         }
-        for (i, l) in self.lights.iter().enumerate() {
-            let takes = match which {
-                Which::Classic => !l.bulb && l.texel.is_none(),
-                Which::Texel => l.texel.is_some(),
-                Which::Bulb => l.bulb,
-                // The transmitted-light buffer takes bulb lights and only bulb
-                // lights, and only those with something to transmit: the
-                // original leaves `Light::Render` before it draws anything at
-                // all otherwise (`light.cpp:600`). A classic insert is artwork
-                // lit from behind and it has no business shining *through* the
-                // plastics above it or onto the ball — put every light in here
-                // and the whole table glows from underneath.
-                Which::Transmitted => l.bulb && l.transmission > 0.0,
-            };
-            if !takes {
-                continue;
-            }
-            // A lamp that is off contributes nothing but still costs a draw
-            // call, and a table has hundreds of them with a handful lit — bar
-            // the insert with a picture of its own, which is drawn dark
-            // (`light.cpp:713-718`), and only in the scene: in the
-            // transmitted-light buffer dark is nothing.
-            let level = levels
-                .and_then(|v| v.get(i).copied())
-                .unwrap_or_else(|| l.lamp.level());
-            if level <= 0.0 && !(which == Which::Texel && l.drawn_when_off) {
-                continue;
-            }
-            if let Some(texel) = &l.texel
-                && which == Which::Texel
-            {
-                pass.set_bind_group(1, texel, &[]);
-            }
-            pass.set_bind_group(2, &l.bind_group, &[]);
-            pass.set_vertex_buffer(0, l.vertices.slice(..));
-            pass.set_index_buffer(l.indices.slice(..), wgpu::IndexFormat::Uint32);
-            pass.draw_indexed(0..l.index_count, 0, 0..1);
+    }
+
+    /// The transmitted-light slice of the same frame, into a pass with no
+    /// depth buffer. `frame` is the reduced frame bind group, the one without
+    /// the transmitted-light texture.
+    pub fn draw_flat(&self, pass: &mut wgpu::RenderPass<'_>, frame: &wgpu::BindGroup) {
+        let (Some(vertices), Some(indices), Some(data)) =
+            (&self.vertices, &self.frame_indices, &self.data_bind)
+        else {
+            return;
+        };
+        let (start, count) = self.transmitted_range;
+        if count == 0 {
+            return;
         }
+        pass.set_vertex_buffer(0, vertices.slice(..));
+        pass.set_index_buffer(indices.slice(..), wgpu::IndexFormat::Uint32);
+        pass.set_bind_group(0, frame, &[]);
+        pass.set_bind_group(1, &self.empty, &[]);
+        pass.set_bind_group(2, data, &[]);
+        pass.set_pipeline(&self.flat);
+        pass.draw_indexed(start..start + count, 0, 0..1);
     }
 }

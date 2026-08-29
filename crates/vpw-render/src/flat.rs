@@ -691,7 +691,6 @@ fn fs_keep_depth(in : VsOut) -> @location(0) vec4<f32> {
         pipeline: &TablePipeline,
         scene: &GpuScene,
         lights: &Lights,
-        levels: &[f32],
         head: bool,
         reflection: bool,
     ) {
@@ -710,7 +709,7 @@ fn fs_keep_depth(in : VsOut) -> @location(0) vec4<f32> {
                 })],
                 ..Default::default()
             });
-            lights.draw_flat_forced(&mut pass, &pipeline.light_frame_bind_group, levels);
+            lights.draw_flat(&mut pass, &pipeline.light_frame_bind_group);
         }
         post.blur_transmission(encoder);
 
@@ -768,7 +767,7 @@ fn fs_keep_depth(in : VsOut) -> @location(0) vec4<f32> {
                 b.transparent && !is_live(b) && (head || !b.backbox)
             });
         }
-        lights.draw_forced(&mut pass, &pipeline.frame_bind_group, levels);
+        lights.draw(&mut pass, &pipeline.frame_bind_group);
     }
 
     /// Advances the bake by up to `budget` lamp photographs. Returns whether
@@ -786,7 +785,7 @@ fn fs_keep_depth(in : VsOut) -> @location(0) vec4<f32> {
         pipeline: &TablePipeline,
         post: &Post,
         scene: &GpuScene,
-        lights: &Lights,
+        lights: &mut Lights,
         camera_vp: Mat4,
         eye: Vec3,
         lighting: &vpw_table::geometry::Lighting,
@@ -795,18 +794,7 @@ fn fs_keep_depth(in : VsOut) -> @location(0) vec4<f32> {
         budget: usize,
     ) -> bool {
         let format = post.format();
-        let saved = lights.save_levels();
-        let zeros = vec![0.0f32; saved.len()];
-        let all_off = |queue: &wgpu::Queue| {
-            for i in 0..saved.len() {
-                lights.force_level(queue, i, 0.0);
-            }
-        };
-        let restore = |queue: &wgpu::Queue| {
-            for (i, l) in saved.iter().enumerate() {
-                lights.force_level(queue, i, *l);
-            }
-        };
+        let zeros = vec![0.0f32; lights.len()];
         let dark_gi = Gi {
             rows: Vec::new(),
             bounce: [0.0; 3],
@@ -818,7 +806,7 @@ fn fs_keep_depth(in : VsOut) -> @location(0) vec4<f32> {
             let baked = self.baked.as_ref().expect("plan just built it");
 
             // The dark photograph, and the depth the live pass will restore.
-            all_off(queue);
+            lights.prepare(device, queue, Some(&zeros));
             pipeline.set_frame(
                 queue,
                 camera_vp,
@@ -837,7 +825,6 @@ fn fs_keep_depth(in : VsOut) -> @location(0) vec4<f32> {
                 pipeline,
                 scene,
                 lights,
-                &zeros,
                 head,
                 reflection,
             );
@@ -896,7 +883,6 @@ fn fs_keep_depth(in : VsOut) -> @location(0) vec4<f32> {
                 });
             }
             queue.submit(Some(encoder.finish()));
-            restore(queue);
             self.state = State::Baking { next: 0 };
             log::trace!(
                 "flat bake: base photographed, {} lamps to go",
@@ -915,8 +901,7 @@ fn fs_keep_depth(in : VsOut) -> @location(0) vec4<f32> {
             let mut levels = zeros.clone();
             levels[layer.light] = lights.full_level(layer.light);
 
-            all_off(queue);
-            lights.force_level(queue, layer.light, levels[layer.light]);
+            lights.prepare(device, queue, Some(&levels));
             pipeline.set_frame(
                 queue,
                 camera_vp,
@@ -954,7 +939,6 @@ fn fs_keep_depth(in : VsOut) -> @location(0) vec4<f32> {
                 pipeline,
                 scene,
                 lights,
-                &levels,
                 head,
                 reflection,
             );
@@ -993,7 +977,6 @@ fn fs_keep_depth(in : VsOut) -> @location(0) vec4<f32> {
             }
             queue.submit(Some(encoder.finish()));
         }
-        restore(queue);
 
         if end >= baked.layers.len() {
             self.state = State::Ready;

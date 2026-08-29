@@ -706,7 +706,7 @@ fn sync(table: &mut Game, renderer: &mut TableRenderer, dt_ms: f32) {
                 }
                 None => (1.0, 1.0),
             };
-            lights.animate(&queue, i, state, scale, dt_ms);
+            lights.animate(i, state, scale, dt_ms);
         }
     }
 

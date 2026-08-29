@@ -29,6 +29,19 @@ fn main() {
         }
     }
 
+    // VPW_LIT=1 turns every lamp on, which is the attract-mode worst case
+    // and the frame a slow report is usually about.
+    if std::env::var("VPW_LIT").is_ok() {
+        for light in &mut scene.lights {
+            light.state = 1.0;
+        }
+    }
+    eprintln!(
+        "{} lights in the file, {} lit",
+        scene.lights.len(),
+        scene.lights.iter().filter(|l| l.state > 0.0).count()
+    );
+
     let (w, h) = (720u32, 1280u32);
     let mut gpu = pollster::block_on(vpw_render::offscreen::Offscreen::new(w, h)).unwrap();
     eprintln!("adapter: {}", gpu.adapter);

@@ -210,8 +210,7 @@ fn a_lamp_switches_in_the_flat_world() {
 
     // References from the real renderer: lamp on, lamp off.
     let real_on = gpu.render(&uploaded, &camera);
-    let queue = gpu.queue.clone();
-    gpu.lights.set_state(&queue, 0, 0.0, 1.0);
+    gpu.lights.set_state(0, 0.0, 1.0);
     let real_off = gpu.render(&uploaded, &camera);
     assert!(
         mean_diff(&real_on, &real_off) > 0.5,
@@ -229,7 +228,7 @@ fn a_lamp_switches_in_the_flat_world() {
         "flat with the lamp off must match the dark render: {diff_off:.2}"
     );
 
-    gpu.lights.set_state(&queue, 0, 1.0, 1.0);
+    gpu.lights.set_state(0, 1.0, 1.0);
     let flat_on = gpu.render(&uploaded, &camera);
     let diff_on = mean_diff(&real_on, &flat_on);
     assert!(

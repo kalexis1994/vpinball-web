@@ -129,13 +129,12 @@ fn main() {
         if std::env::var("VPW_STATIC").is_err() {
             // The lamps, as the script has them.
             {
-                let queue = gpu.queue.clone();
                 for i in 0..gpu.lights.names.len() {
                     let level = game
                         .items()
                         .get(&gpu.lights.names[i])
                         .map_or(1.0, |item| item.light_level());
-                    gpu.lights.set_state(&queue, i, level, 1.0);
+                    gpu.lights.set_state(i, level, 1.0);
                 }
                 let lit = (0..gpu.lights.names.len())
                     .filter(|&i| {

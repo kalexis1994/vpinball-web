@@ -25,33 +25,51 @@
 // every intensity, for no reason a player could name. The light's own data is
 // at group 2 so that it never collides with the material's.
 
-struct LightData {
-    // xyz = center in VPU, w = 1 / range
-    center     : vec4<f32>,
-    // rgb = center color, a = intensity
-    color      : vec4<f32>,
-    // rgb = edge color, a = falloff exponent
-    color2     : vec4<f32>,
-    // x = how much the halo modulates rather than adds; see `fs_bulb`.
-    // y = transmission scale; see `fs_transmitted`.
-    // z = image mode: the artwork as it is, not lit; see `fs_texel`.
-    blend      : vec4<f32>,
-};
+// Every lamp's data, four texels per lamp in a row of its own:
+// x0 = center (xyz, w = 1/range), x1 = color (rgb, a = intensity),
+// x2 = edge color (rgb, a = falloff exponent), x3 = blend
+// (x = modulate-vs-add, y = transmission scale, z = image mode).
+//
+// A texture rather than four hundred uniform buffers, because that is the
+// difference between one draw call per *class* of light and one per lamp:
+// each vertex carries its lamp's id, the vertex stage fetches the lamp's
+// row, and a whole class of halos goes to the GPU in a single draw. F-14
+// carries 443 lamps — most of them the head's display segments — and the
+// per-lamp path was four hundred bind-and-draws through the browser's
+// command validation, every frame, twice.
+@group(2) @binding(0) var light_data : texture_2d<f32>;
 
-@group(2) @binding(0) var<uniform> light : LightData;
+struct LightVsOut {
+    @builtin(position) clip : vec4<f32>,
+    @location(0) world  : vec3<f32>,
+    @location(1) uv     : vec2<f32>,
+    // Flat: one lamp per triangle, the same values at every fragment.
+    @location(2) @interpolate(flat) l_center : vec4<f32>,
+    @location(3) @interpolate(flat) l_color  : vec4<f32>,
+    @location(4) @interpolate(flat) l_color2 : vec4<f32>,
+    @location(5) @interpolate(flat) l_blend  : vec4<f32>,
+};
 
 // `vs_light_main`, `ClassicLightShader.hlsl:33-50`. The mesh is already in
 // world space, and its normal is straight up — `light.cpp:546-548` writes
 // `(0, 0, 1)` into every vertex of the lightmap, insert and halo alike — so
-// there is nothing to carry per vertex but the place and the texture
-// coordinate.
+// what is carried per vertex is the place, the texture coordinate, and which
+// lamp this triangle belongs to.
 @vertex
-fn vs_light(@location(0) pos : vec3<f32>, @location(1) uv : vec2<f32>) -> VsOut {
-    var out : VsOut;
+fn vs_light(
+    @location(0) pos : vec3<f32>,
+    @location(1) uv : vec2<f32>,
+    @location(2) id : u32,
+) -> LightVsOut {
+    var out : LightVsOut;
     out.clip = frame.view_proj * vec4<f32>(pos, 1.0);
     out.world = pos;
-    out.normal = vec3<f32>(0.0, 0.0, 1.0);
     out.uv = uv;
+    let row = i32(id);
+    out.l_center = textureLoad(light_data, vec2<i32>(0, row), 0);
+    out.l_color  = textureLoad(light_data, vec2<i32>(1, row), 0);
+    out.l_color2 = textureLoad(light_data, vec2<i32>(2, row), 0);
+    out.l_blend  = textureLoad(light_data, vec2<i32>(3, row), 0);
     return out;
 }
 
@@ -61,11 +79,11 @@ fn vs_light(@location(0) pos : vec3<f32>, @location(1) uv : vec2<f32>) -> VsOut 
 /// attenuation times the lamp's intensity — the `atten*lightColor_intensity.w`
 /// that both of the original's light shaders build before they part ways over
 /// how to blend it.
-fn halo(world : vec3<f32>) -> vec4<f32> {
-    let len = length(light.center.xyz - world) * light.center.w;
-    let atten = pow(1.0 - saturate(len), light.color2.a);
-    let lcolor = mix(light.color2.rgb, light.color.rgb, sqrt(len));
-    return vec4<f32>(lcolor, atten * light.color.a);
+fn halo(world : vec3<f32>, center : vec4<f32>, color : vec4<f32>, color2 : vec4<f32>) -> vec4<f32> {
+    let len = length(center.xyz - world) * center.w;
+    let atten = pow(1.0 - saturate(len), color2.a);
+    let lcolor = mix(color2.rgb, color.rgb, sqrt(len));
+    return vec4<f32>(lcolor, atten * color.a);
 }
 
 /// The bulb halo, which meets what is under it in two ways at once.
@@ -91,20 +109,20 @@ fn halo(world : vec3<f32>) -> vec4<f32> {
 /// own colour over it. The original calls it "a very crude approximation of
 /// real lighting" and it is most of what makes a bulb light look lit.
 @fragment
-fn fs_bulb(in : VsOut) -> @location(0) vec4<f32> {
-    let len = length(light.center.xyz - in.world) * light.center.w;
+fn fs_bulb(in : LightVsOut) -> @location(0) vec4<f32> {
+    let len = length(in.l_center.xyz - in.world) * in.l_center.w;
     // `max` rather than `saturate`: the original keeps a sliver here because a
     // hard zero turns the blend off, and the blend is doing the work.
-    let atten = pow(max(1.0 - len, 0.0001), light.color2.a);
-    let lcolor = mix(light.color2.rgb, light.color.rgb, sqrt(len));
-    let m = light.blend.x;
+    let atten = pow(max(1.0 - len, 0.0001), in.l_color2.a);
+    let lcolor = mix(in.l_color2.rgb, in.l_color.rgb, sqrt(len));
+    let m = in.l_blend.x;
     // The amplification is capped. At `m` near one the blend multiplies what
     // is under the halo by `1 + C`, and the authors tuned `C` against the
     // original's darker field; over the field the GI departure lights, a
     // slingshot lamp at an intensity of eighty is a flash grenade. The soft
     // cap leaves a small halo exactly as tuned and walks the huge ones down
     // to at most ×9 — a bulb's worth of glare, not a detonation.
-    let c = atten * light.color.a;
+    let c = atten * in.l_color.a;
     let capped = c / (1.0 + c / 8.0);
     return vec4<f32>(lcolor * (-m * capped), 1.0 / m - 1.0);
 }
@@ -122,12 +140,12 @@ fn fs_bulb(in : VsOut) -> @location(0) vec4<f32> {
 /// the ball and through every translucent plastic above it, which is a table
 /// that glows from underneath everywhere at once.
 @fragment
-fn fs_transmitted(in : VsOut) -> @location(0) vec4<f32> {
-    let lit = halo(in.world);
+fn fs_transmitted(in : LightVsOut) -> @location(0) vec4<f32> {
+    let lit = halo(in.world, in.l_center, in.l_color, in.l_color2);
     // The same soft cap as `fs_bulb`, for the same reason: this buffer is
     // added onto every translucent plastic, and a two-hundred-strong flash
     // through it whites out the whole side of the table.
-    let c = lit.a * light.blend.y;
+    let c = lit.a * in.l_blend.y;
     let contribution = c / (1.0 + c / 8.0);
     return vec4<f32>(lit.rgb * contribution, saturate(contribution));
 }
@@ -137,8 +155,8 @@ fn fs_transmitted(in : VsOut) -> @location(0) vec4<f32> {
 /// underneath — that term is the surface's own material lit in the lamp's
 /// colour, and on a flat additive disc it is what the playfield already shows.
 @fragment
-fn fs_classic(in : VsOut) -> @location(0) vec4<f32> {
-    let lit = halo(in.world);
+fn fs_classic(in : LightVsOut) -> @location(0) vec4<f32> {
+    let lit = halo(in.world, in.l_center, in.l_color, in.l_color2);
     let lcolor = lit.rgb;
     let contribution = lit.a;
 
@@ -260,11 +278,11 @@ fn light_loop(
 /// is what an insert that is switched off looks like: `light.cpp:713-718` only
 /// leaves early when the picture *is* the surface's own.
 @fragment
-fn fs_texel(in : VsOut) -> @location(0) vec4<f32> {
+fn fs_texel(in : LightVsOut) -> @location(0) vec4<f32> {
     var pixel = textureSample(tex, samp, in.uv);
 
     var color : vec4<f32>;
-    let lighting_off = light.blend.z > 0.5;
+    let lighting_off = in.l_blend.z > 0.5;
     if (lighting_off) {
         color = pixel;
     } else {
@@ -284,15 +302,16 @@ fn fs_texel(in : VsOut) -> @location(0) vec4<f32> {
         // The clearcoat already carries its 0.08 from the Rust side (`:67`).
         let specular = material.clearcoat.rgb;
         let v = normalize(frame.eye.xyz - in.world);
+        // The insert's normal is straight up, as the vertex stage notes.
         color = vec4<f32>(
-            light_loop(in.world, normalize(in.normal), v, diffuse, glossy, specular, edge, is_metal),
+            light_loop(in.world, vec3<f32>(0.0, 0.0, 1.0), v, diffuse, glossy, specular, edge, is_metal),
             pixel.a
         );
     }
     color.a = color.a * material.base_color.a;
 
-    if (light.color.a != 0.0) {
-        let lit = halo(in.world);
+    if (in.l_color.a != 0.0) {
+        let lit = halo(in.world, in.l_center, in.l_color, in.l_color2);
         color = color + vec4<f32>(lit.rgb * lit.a, saturate(lit.a));
         color = overlay_hdr(pixel, color);
         color = screen_hdr(pixel, color);
