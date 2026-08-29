@@ -390,6 +390,7 @@ fn the_moving_pieces_leave_the_baked_scene() {
     // pose and once following the physics.
     let mut scene = vpw_table::geometry::Scene {
         view: vpw_table::geometry::AuthoredView::default(),
+        cabinet: vpw_table::geometry::AuthoredView::default(),
         built_head: true,
         meshes: vec![
             named_mesh("LeftFlipper"),

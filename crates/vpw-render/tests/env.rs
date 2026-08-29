@@ -62,6 +62,7 @@ fn floor_under(env_image: &str, images: Vec<Image>) -> Scene {
     };
     Scene {
         view: vpw_table::geometry::AuthoredView::default(),
+        cabinet: vpw_table::geometry::AuthoredView::default(),
         built_head: true,
         meshes: vec![Mesh {
             name: "Floor".into(),

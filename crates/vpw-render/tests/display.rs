@@ -82,6 +82,7 @@ fn scene() -> Scene {
 
     Scene {
         view: vpw_table::geometry::AuthoredView::default(),
+        cabinet: vpw_table::geometry::AuthoredView::default(),
         built_head: true,
         meshes: vec![floor, head.mesh(), head.display_mesh()],
         // (the head is rebuilt in `camera` from the same bounds)

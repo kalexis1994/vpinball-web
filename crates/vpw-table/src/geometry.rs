@@ -415,8 +415,19 @@ impl Default for AuthoredView {
 /// Everything drawable in a table.
 #[derive(Debug, Clone)]
 pub struct Scene {
-    /// The camera its author set up. See [`AuthoredView`].
+    /// The camera its author set up for a desktop. See [`AuthoredView`].
     pub view: AuthoredView,
+    /// And the one they set up for a cabinet: a long lens low down, looking
+    /// along the table from the player's end.
+    ///
+    /// Worth carrying separately because it is a different picture and not a
+    /// tweak of the same one — The Sopranos asks for a fifteen degree lens at
+    /// twenty-two degrees with sixty of layback, against forty-five and
+    /// fifty-two on the desktop — and because the tables that model a room or
+    /// a cabinet around themselves model it *for this camera*. Standing in the
+    /// desktop view, that scenery is in the way; standing here, you are inside
+    /// it, which is what its author built.
+    pub cabinet: AuthoredView,
     /// Whether the head standing behind the playfield is one we built.
     ///
     /// False when the table modelled its own — see `brings_its_own_head` — in
@@ -566,6 +577,30 @@ impl Scene {
     /// primitives, and a camera that never framed on primitives never has to
     /// find that out. The Sopranos' room reaches 1215 units over the whole
     /// playfield and the original has simply never looked at it.
+    /// The corners of everything the table actually contains, scenery and all.
+    ///
+    /// Not for framing — see [`Self::legacy_bounds`] for that, and for why a
+    /// primitive must never be framed on. This is for the other question: a
+    /// camera has to stand *outside* what exists, even the parts it does not
+    /// frame on, or it ends up inside a room looking at the back of a wall.
+    pub fn extent(&self) -> Vec<Vec3> {
+        let mut lo = Vec3::splat(f32::MAX);
+        let mut hi = Vec3::splat(f32::MIN);
+        let mut any = false;
+        for mesh in self.meshes.iter().filter(|m| m.visible) {
+            if let Some(b) = mesh.bounds() {
+                lo = lo.min(b.min);
+                hi = hi.max(b.max);
+                any = true;
+            }
+        }
+        if any {
+            crate::backbox::corners_of(lo, hi).to_vec()
+        } else {
+            Vec::new()
+        }
+    }
+
     pub fn legacy_bounds(&self) -> Vec<Vec3> {
         let pf = self.playfield;
         let mut out = Vec::new();
@@ -849,6 +884,16 @@ pub fn extract(vpx: &VPX) -> Scene {
                 g.bg_offset_x_desktop,
                 g.bg_offset_y_desktop,
                 g.bg_offset_z_desktop,
+            ),
+        },
+        cabinet: AuthoredView {
+            inclination: sane(g.bg_inclination_fullscreen, 1.0..=85.0, 22.0),
+            fov: sane(g.bg_fov_fullscreen, 5.0..=120.0, 20.0),
+            layback: sane(g.bg_layback_fullscreen, 0.0..=89.0, 0.0),
+            offset: Vec3::new(
+                g.bg_offset_x_fullscreen,
+                g.bg_offset_y_fullscreen,
+                g.bg_offset_z_fullscreen,
             ),
         },
         built_head: build_head,

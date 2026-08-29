@@ -1014,11 +1014,18 @@ pub fn camera_views() -> Vec<String> {
     VIEWS.iter().map(|v| view_name(*v).to_string()).collect()
 }
 
-const VIEWS: [View; 2] = [View::Front, View::Overhead];
+/// The order the camera key cycles through, which is also the order the
+/// settings screen lists.
+///
+/// Front, then cabinet, then overhead: the whole machine, then the machine
+/// from where you would stand at one, then the playfield on its own. It runs
+/// from "a photograph of it" to "the thing you are playing".
+const VIEWS: [View; 3] = [View::Front, View::Cabinet, View::Overhead];
 
 fn view_name(view: View) -> &'static str {
     match view {
         View::Front => "front",
+        View::Cabinet => "cabinet",
         View::Overhead => "overhead",
     }
 }

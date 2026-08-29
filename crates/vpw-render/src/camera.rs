@@ -60,6 +60,10 @@ pub struct Camera {
     pub azimuth: f32,
     /// How it projects. See [`Lens`].
     pub lens: Lens,
+    /// The backward skew the original applies before the camera, in degrees.
+    ///
+    /// See [`Self::layback_shear`]. Zero for everything but the cabinet view.
+    pub layback: f32,
     pub near: f32,
     pub far: f32,
 }
@@ -80,6 +84,19 @@ pub enum View {
     /// and nothing near the flippers is hidden behind a ramp — and what the head
     /// has no place in, so it is left out of the framing entirely.
     Overhead,
+    /// Standing at the machine, the way a cabinet stands you: low down, a long
+    /// lens, looking along the table rather than at it.
+    ///
+    /// The original's "fullscreen" view setup, which every table carries and
+    /// almost nobody sees, because it is the one a three-screen cabinet uses.
+    /// It matters here for a reason that has nothing to do with cabinets: the
+    /// tables that model a room or a whole machine around themselves model it
+    /// *for this camera*. From the desktop view that scenery hangs over the
+    /// playfield; from here you are inside it, which is what its author built.
+    ///
+    /// It is the one view with layback, and on these tables layback is not a
+    /// detail — sixty degrees of it, against zero on the desktop.
+    Cabinet,
 }
 
 impl View {
@@ -98,6 +115,10 @@ impl View {
             // ladder of angles and looking.
             View::Front => 34.0,
             View::Overhead => 90.0,
+            // Never reached in practice: the cabinet view is only offered on
+            // a table that carries its own numbers. This is the original's
+            // own default for the mode.
+            View::Cabinet => 22.0,
         }
     }
 
@@ -128,6 +149,7 @@ impl View {
             // A touch wider than the classic forty-five, to match the closer
             // stance the lower inclination takes.
             View::Front => Lens::Perspective { fov: 47.0 },
+            View::Cabinet => Lens::Perspective { fov: 20.0 },
             // The half-height is what the framing works out; this is only a
             // statement that the overhead view does not converge.
             View::Overhead => Lens::Orthographic { half_height: 1.0 },
@@ -145,12 +167,15 @@ impl View {
         match self {
             View::Front => 1.04,
             View::Overhead => 1.0,
+            // None: a cabinet has no polite distance to stand at. You are at
+            // the machine.
+            View::Cabinet => 1.0,
         }
     }
 
     /// Whether the machine's head is part of what this view has to fit.
     pub fn shows_backbox(self) -> bool {
-        matches!(self, View::Front)
+        matches!(self, View::Front | View::Cabinet)
     }
 }
 
@@ -184,6 +209,7 @@ impl Default for Camera {
             inclination: 50.0,
             azimuth: 0.0,
             lens: Lens::Perspective { fov: 45.0 },
+            layback: 0.0,
             near: 10.0,
             far: 20_000.0,
         }
@@ -261,7 +287,7 @@ impl Camera {
         occupied: &[Vec3],
         authored: Option<vpw_table::geometry::AuthoredView>,
     ) -> Self {
-        let authored = authored.filter(|_| matches!(view, View::Front));
+        let authored = authored.filter(|_| matches!(view, View::Front | View::Cabinet));
         let (mut min, mut max) = playfield;
         if view.shows_backbox() {
             // What must fit is the head *up to its display*, not its crown:
@@ -281,6 +307,14 @@ impl Camera {
             lens: match authored {
                 Some(a) => Lens::Perspective { fov: a.fov },
                 None => view.lens(),
+            },
+            // Only where the original applies it. Its desktop stack carries a
+            // layback too, but every table leaves that one at zero or a
+            // fraction of a degree, and shearing the world for a fraction of a
+            // degree is a cost with nothing on the other side of it.
+            layback: match (view, authored) {
+                (View::Cabinet, Some(a)) => a.layback,
+                _ => 0.0,
             },
             ..Default::default()
         };
@@ -558,8 +592,15 @@ impl Camera {
 
         let (mut max_u, mut min_u) = (f32::MIN, f32::MAX);
         let (mut max_r, mut min_r) = (f32::MIN, f32::MAX);
+        // How far the nearest corner reaches back towards the camera, so the
+        // eye can be kept outside what it is looking at.
+        let mut nearest = 0.0f32;
+        let shear = camera.layback_shear();
         for p in corners {
-            let v = *p - camera.target;
+            // Through the same shear the drawing goes through, or the fit
+            // frames a table nobody is looking at.
+            let leaned = shear.transform_point3(*p);
+            let v = leaned - camera.target;
             let (r, u, f) = (v.dot(right), v.dot(up), v.dot(forward));
             // Where the frustum's edge, extended back from this corner, cuts
             // the plane through the target: the corner is on screen from any
@@ -568,6 +609,7 @@ impl Camera {
             min_u = min_u.min(u + slope_up * f);
             max_r = max_r.max(r - slope_right * f);
             min_r = min_r.min(r + slope_right * f);
+            nearest = nearest.max(-f);
         }
         let up_dist = (max_u - min_u) / (slope_up * 2.0);
         let right_dist = (max_r - min_r) / (slope_right * 2.0);
@@ -575,7 +617,17 @@ impl Camera {
         // The centre of what was measured, so the table is in the middle of
         // the picture rather than merely inside it.
         camera.target += right * ((max_r + min_r) * 0.5) + up * ((max_u + min_u) * 0.5);
-        camera.distance = up_dist.max(right_dist).max(1.0);
+        // Never inside the machine. A long lens on a wide screen has width to
+        // spare and only the table's length to fit, and the fit answers that
+        // by walking forward until the length fills the height — which on a
+        // cabinet's fifteen degree lens is well past the front of the cabinet
+        // and out the other side of the apron. The original never meets this,
+        // because its cabinet mode is only ever on a screen turned upright;
+        // ours is on whatever the window happens to be.
+        //
+        // A tenth past the nearest corner, so there is a machine in front of
+        // you rather than around you.
+        camera.distance = up_dist.max(right_dist).max(nearest * 1.1).max(1.0);
         camera
     }
 
@@ -635,8 +687,39 @@ impl Camera {
     /// `MatrixLookAtLH` and `MatrixPerspectiveFovLH` (`math/matrix.h:541,582`).
     /// With a right-handed system the table comes out **mirrored** — you notice
     /// it immediately on the apron, where the game title reads backwards.
+    /// Leans the world back, before the camera looks at it.
+    ///
+    /// Layback is the oldest trick in this file's ancestry: it shears the
+    /// world so that everything standing on the playfield leans away from the
+    /// player, which lets a camera sit almost level with the table — where a
+    /// cabinet player's eyes are — and still see the far end. Without it a
+    /// fifteen degree lens at twenty-two degrees looks at the back of the
+    /// slingshots.
+    ///
+    /// `y += -tan(layback / 2) · z`, in table space, before the view — which
+    /// is where the original puts it (`ViewSetup.cpp:446`, and again inside
+    /// its camera fit at `:648`, because a fit that ignored the shear would
+    /// frame a table that is not the one being drawn).
+    ///
+    /// It is a shear, so it is not a rigid motion, and the original's own
+    /// comment says as much: it "slightly breaks lighting, reflection and
+    /// stereo". It does the same here and for the same reason — the lighting
+    /// runs on world positions and the eye, neither of which this touches, so
+    /// what shifts is where things land on screen and nothing else.
+    fn layback_shear(&self) -> Mat4 {
+        if self.layback.abs() < 1e-3 {
+            return Mat4::IDENTITY;
+        }
+        let k = -(0.5 * self.layback.to_radians()).tan();
+        let mut m = Mat4::IDENTITY;
+        // Column-major: the z column's y row, which is what adds z into y.
+        m.z_axis.y = k;
+        m
+    }
+
     pub fn view(&self) -> Mat4 {
         vpw_math::glam::camera::lh::view::look_at_mat4(self.eye(), self.target, self.up())
+            * self.layback_shear()
     }
 
     /// Which way is up on screen.

@@ -510,3 +510,77 @@ fn the_front_view_keeps_everything_above_the_glass() {
     let c = Camera::for_view(View::Front, playfield, backbox, aspect);
     assert!(on_screen(&c, Vec3::new(482.0, 0.0, 900.0), aspect));
 }
+
+#[test]
+fn the_cabinet_view_leans_the_table_back() {
+    // Layback is the trick that makes this view possible: it shears the world
+    // so everything standing on the playfield leans away from the player,
+    // which lets the camera sit almost level with the table — where a cabinet
+    // player's eyes are — and still see the far end. Without it a long lens
+    // low down looks at the back of the slingshots.
+    //
+    // The shear is `y += -tan(layback / 2) · z`, applied before the view, so
+    // what it moves is *height*: two points at the same place on the
+    // playfield, one on the wood and one above it, stop landing on the same
+    // vertical line.
+    use vpw_render::camera::View;
+    let (playfield, backbox) = machine();
+    let aspect = 0.5625;
+    let authored = vpw_table::geometry::AuthoredView {
+        inclination: 22.0,
+        fov: 15.0,
+        layback: 60.0,
+        offset: vpw_math::Vec3::ZERO,
+    };
+    let leaning = Camera::for_authored_view(
+        View::Cabinet,
+        playfield,
+        backbox,
+        aspect,
+        &[],
+        Some(authored),
+    );
+    let upright = Camera::for_authored_view(
+        View::Cabinet,
+        playfield,
+        backbox,
+        aspect,
+        &[],
+        Some(vpw_table::geometry::AuthoredView {
+            layback: 0.0,
+            ..authored
+        }),
+    );
+
+    let on_the_wood = Vec3::new(482.0, 1080.0, 0.0);
+    let above_it = Vec3::new(482.0, 1080.0, 300.0);
+    let screen_y = |c: &Camera, p: Vec3| {
+        let clip = c.view_projection(aspect) * p.extend(1.0);
+        clip.y / clip.w
+    };
+
+    // Upright, the two are a certain distance apart on screen; leaning back,
+    // the higher one has moved.
+    let plain = screen_y(&upright, above_it) - screen_y(&upright, on_the_wood);
+    let leaned = screen_y(&leaning, above_it) - screen_y(&leaning, on_the_wood);
+    assert!(
+        (leaned - plain).abs() > 0.02,
+        "layback did nothing: {plain:.4} against {leaned:.4}"
+    );
+
+    // And the table is still framed. The fit shears the corners through the
+    // same lean before measuring them, which is the whole reason it has to
+    // know about layback at all: fitting the upright table and drawing the
+    // leaning one puts the far end off the top of the screen.
+    for corner in [
+        Vec3::new(playfield.0.x, playfield.0.y, 0.0),
+        Vec3::new(playfield.1.x, playfield.0.y, 0.0),
+        Vec3::new(playfield.0.x, playfield.1.y, 0.0),
+        Vec3::new(playfield.1.x, playfield.1.y, 0.0),
+    ] {
+        assert!(
+            on_screen(&leaning, corner, aspect),
+            "the lean pushed {corner:?} out of frame"
+        );
+    }
+}

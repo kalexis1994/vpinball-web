@@ -110,6 +110,7 @@ fn one_bright_light(intensity: f32, alpha: f32) -> Scene {
 
     Scene {
         view: vpw_table::geometry::AuthoredView::default(),
+        cabinet: vpw_table::geometry::AuthoredView::default(),
         built_head: true,
         meshes: vec![floor],
         // Nothing here rolls a ball, so the numbers the table would give the

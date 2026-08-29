@@ -124,6 +124,7 @@ fn scene(image: &str, image_mode: bool, surface_image: &str, state: f32) -> Scen
 
     Scene {
         view: vpw_table::geometry::AuthoredView::default(),
+        cabinet: vpw_table::geometry::AuthoredView::default(),
         built_head: true,
         meshes: vec![floor],
         physics: TablePhysics {

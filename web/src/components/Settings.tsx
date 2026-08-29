@@ -435,11 +435,14 @@ const ROOM_HINTS: Record<Environment, string> = {
 
 const CAMERA_LABELS: Record<CameraView, string> = {
   front: 'In front',
+  cabinet: 'At the machine',
   overhead: 'Overhead',
 };
 
 const CAMERA_HINTS: Record<CameraView, string> = {
   front: 'The whole machine, backbox and all, the way it looks on the floor.',
+  cabinet:
+    "The table's own cabinet view: low down and a long lens, the way you see it standing at one. Tables that model a room or a machine around themselves are built for this one — from anywhere else that scenery is in the way.",
   overhead: 'Straight down on the playfield: nothing foreshortened, nothing hidden behind a ramp.',
 };
 

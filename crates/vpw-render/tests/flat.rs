@@ -98,6 +98,7 @@ fn floor_with_lamp() -> Scene {
 
     Scene {
         view: vpw_table::geometry::AuthoredView::default(),
+        cabinet: vpw_table::geometry::AuthoredView::default(),
         built_head: true,
         meshes: vec![floor],
         physics: vpw_table::geometry::TablePhysics {

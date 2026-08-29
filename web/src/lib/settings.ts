@@ -25,9 +25,9 @@ const KEY = 'vpw.settings';
 export const MAX_MIX_GAIN = 1.2;
 
 /** Where the player looks at the machine from. */
-export type CameraView = 'front' | 'overhead';
+export type CameraView = 'front' | 'cabinet' | 'overhead';
 
-export const CAMERA_VIEWS: readonly CameraView[] = ['front', 'overhead'];
+export const CAMERA_VIEWS: readonly CameraView[] = ['front', 'cabinet', 'overhead'];
 
 /** Which gutter the floating score panel stands in, seen from above. */
 export type ScoreSide = 'left' | 'right';

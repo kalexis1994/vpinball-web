@@ -354,6 +354,7 @@ fn main() {
         Some(name) => {
             let view = match name {
                 "overhead" | "cenital" => vpw_render::camera::View::Overhead,
+                "cabinet" | "gabinete" => vpw_render::camera::View::Cabinet,
                 _ => vpw_render::camera::View::Front,
             };
             let head = vpw_table::backbox::Backbox::for_playfield(scene.playfield).bounds();
@@ -385,10 +386,13 @@ fn main() {
                 // The same two sets the player uses: the original's for the
                 // view the original has, ours for the one it does not.
                 &match view {
-                    vpw_render::camera::View::Front => scene.legacy_bounds(),
                     vpw_render::camera::View::Overhead => scene.occupied(),
+                    _ => scene.legacy_bounds(),
                 },
-                Some(scene.view),
+                Some(match view {
+                    vpw_render::camera::View::Cabinet => scene.cabinet,
+                    _ => scene.view,
+                }),
             )
         }
         None => {

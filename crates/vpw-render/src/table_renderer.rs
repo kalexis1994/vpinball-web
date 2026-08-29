@@ -50,6 +50,8 @@ pub struct TableRenderer {
     /// What the original's own camera is fitted to. See
     /// [`vpw_table::geometry::Scene::legacy_bounds`].
     legacy: Vec<Vec3>,
+    /// And the one for a cabinet. See [`vpw_table::geometry::Scene::cabinet`].
+    cabinet: Option<vpw_table::geometry::AuthoredView>,
     /// Corners of what really stands on the playfield. See `Scene::occupied`.
     occupied: Vec<Vec3>,
     /// The player's day/night, when they have set one; the table's own
@@ -132,6 +134,7 @@ impl TableRenderer {
             built_head: true,
             authored: None,
             legacy: Vec::new(),
+            cabinet: None,
             flat: None,
             flat_on: false,
             render_scale: 1.0,
@@ -356,7 +359,7 @@ impl TableRenderer {
         // set: looking straight down, where the tall things *actually* are is
         // worth a couple of per cent of a phone screen.
         let corners = match view {
-            crate::camera::View::Front => &self.legacy,
+            crate::camera::View::Front | crate::camera::View::Cabinet => &self.legacy,
             crate::camera::View::Overhead => &self.occupied,
         };
         Some(Camera::for_authored_view(
@@ -365,7 +368,10 @@ impl TableRenderer {
             head,
             w as f32 / h as f32,
             corners,
-            self.authored,
+            match view {
+                crate::camera::View::Cabinet => self.cabinet,
+                _ => self.authored,
+            },
         ))
     }
 
@@ -459,6 +465,7 @@ impl TableRenderer {
         ));
         self.built_head = scene.built_head;
         self.authored = Some(scene.view);
+        self.cabinet = Some(scene.cabinet);
         self.occupied = scene.occupied();
         self.legacy = scene.legacy_bounds();
         self.reframe();
