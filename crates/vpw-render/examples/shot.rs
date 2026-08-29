@@ -357,21 +357,33 @@ fn main() {
                 _ => vpw_render::camera::View::Front,
             };
             let head = vpw_table::backbox::Backbox::for_playfield(scene.playfield).bounds();
+            // A head the table built for itself is not ours to frame, the same
+            // way the player treats it.
+            let head = if scene.built_head {
+                (head.min, head.max)
+            } else {
+                let pf = scene.playfield;
+                (
+                    vpw_math::Vec3::new(pf.min.x, pf.min.y, 0.0),
+                    vpw_math::Vec3::new(pf.max.x, pf.max.y, 0.0),
+                )
+            };
             // The same box the player frames on, not the bare rectangle: the
             // playfield in the file is a flat sheet and what has to fit is the
             // sheet plus whatever stands on it. Framing the sheet here and the
             // box there made this photograph flatter than the thing it was
             // supposed to be a photograph of.
             let pf = scene.playfield;
-            vpw_render::Camera::for_view_of(
+            vpw_render::Camera::for_authored_view(
                 view,
                 (
                     vpw_math::Vec3::new(pf.min.x, pf.min.y, 0.0),
                     vpw_math::Vec3::new(pf.max.x, pf.max.y, 0.0),
                 ),
-                (head.min, head.max),
+                head,
                 aspect,
                 &scene.occupied(),
+                Some(scene.view),
             )
         }
         None => {

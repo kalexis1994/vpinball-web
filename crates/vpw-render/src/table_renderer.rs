@@ -41,6 +41,12 @@ pub struct TableRenderer {
     /// size for it. Applied when the scene is next built.
     pending_display: Option<crate::segments::Raster>,
     framing: Option<(vpw_table::geometry::Bounds, vpw_table::backbox::Backbox)>,
+    /// Whether the head in `framing` is one we built and therefore one the
+    /// front view has to keep in shot. A table that models its own is framed
+    /// on its own parts, the way its author framed it.
+    built_head: bool,
+    /// The camera the table's author set up, for the views that have one.
+    authored: Option<vpw_table::geometry::AuthoredView>,
     /// Corners of what really stands on the playfield. See `Scene::occupied`.
     occupied: Vec<Vec3>,
     /// The player's day/night, when they have set one; the table's own
@@ -120,6 +126,8 @@ impl TableRenderer {
             view: crate::camera::View::Front,
             pending_display: None,
             framing: None,
+            built_head: true,
+            authored: None,
             flat: None,
             flat_on: false,
             render_scale: 1.0,
@@ -329,12 +337,23 @@ impl TableRenderer {
         let (table, head) = self.framing?;
         let head = head.bounds();
         let (w, h) = self.gpu.size();
-        Some(Camera::for_view_of(
+        // A head we did not build is not ours to frame. It is one of the
+        // table's own parts, already in `occupied` at its real extent, and
+        // handing it over again as a box would push the machine away to make
+        // room for a claim about its corners that is not true. Giving the
+        // playfield's own box in its place adds nothing, which is right.
+        let head = if self.built_head {
+            (head.min, head.max)
+        } else {
+            (table.min, table.max)
+        };
+        Some(Camera::for_authored_view(
             view,
             (table.min, table.max),
-            (head.min, head.max),
+            head,
             w as f32 / h as f32,
             &self.occupied,
+            self.authored,
         ))
     }
 
@@ -426,6 +445,8 @@ impl TableRenderer {
             },
             vpw_table::backbox::Backbox::for_playfield(pf),
         ));
+        self.built_head = scene.built_head;
+        self.authored = Some(scene.view);
         self.occupied = scene.occupied();
         self.reframe();
         self.lights

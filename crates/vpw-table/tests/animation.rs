@@ -389,6 +389,8 @@ fn the_moving_pieces_leave_the_baked_scene() {
     // If they stay in it, each one gets drawn twice: once frozen at its rest
     // pose and once following the physics.
     let mut scene = vpw_table::geometry::Scene {
+        view: vpw_table::geometry::AuthoredView::default(),
+        built_head: true,
         meshes: vec![
             named_mesh("LeftFlipper"),
             named_mesh("Wall1"),

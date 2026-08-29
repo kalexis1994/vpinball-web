@@ -119,6 +119,8 @@ fn scene_with(state: f32, name: &str, wall: bool) -> Scene {
     }
 
     Scene {
+        view: vpw_table::geometry::AuthoredView::default(),
+        built_head: true,
         meshes,
         physics: TablePhysics {
             slope_deg: 6.0,

@@ -76,6 +76,8 @@ fn floor_scene() -> Scene {
     };
 
     Scene {
+        view: vpw_table::geometry::AuthoredView::default(),
+        built_head: true,
         meshes: vec![floor],
         materials: Vec::new(),
         images: Vec::new(),

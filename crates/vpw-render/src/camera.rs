@@ -230,6 +230,38 @@ impl Camera {
         aspect: f32,
         occupied: &[Vec3],
     ) -> Self {
+        Self::for_authored_view(view, playfield, backbox, aspect, occupied, None)
+    }
+
+    /// The same, standing where the table's author put the camera.
+    ///
+    /// Every `.vpx` carries a view setup per mode and the desktop one is what
+    /// a player at a keyboard sees in Visual Pinball. Its author tuned those
+    /// numbers until the machine looked the way they wanted, so using them is
+    /// the difference between showing the table somebody made and showing our
+    /// idea of it — and on a table that models a room around itself it is the
+    /// difference between standing inside that room and standing outside it,
+    /// looking at the back of its lid.
+    ///
+    /// Only the two numbers that decide the *look* are taken: how high the eye
+    /// sits and how wide the lens is. Where to stand is still worked out here,
+    /// by the same fit as always, because our framing has to hold a head the
+    /// original never draws in this scene and a screen shape the original
+    /// never had. The author's layback and scene scale are read and not
+    /// applied; both are projection shears rather than camera moves, and
+    /// almost every table leaves them alone.
+    ///
+    /// The overhead view takes none of it. It is not a view the original has,
+    /// so there is nothing authored to honour.
+    pub fn for_authored_view(
+        view: View,
+        playfield: (Vec3, Vec3),
+        backbox: (Vec3, Vec3),
+        aspect: f32,
+        occupied: &[Vec3],
+        authored: Option<vpw_table::geometry::AuthoredView>,
+    ) -> Self {
+        let authored = authored.filter(|_| matches!(view, View::Front));
         let (mut min, mut max) = playfield;
         if view.shows_backbox() {
             // What must fit is the head *up to its display*, not its crown:
@@ -245,13 +277,35 @@ impl Camera {
         }
         let camera = Self {
             target: (min + max) * 0.5,
-            inclination: view.inclination(),
-            lens: view.lens(),
+            inclination: authored.map_or_else(|| view.inclination(), |a| a.inclination),
+            lens: match authored {
+                Some(a) => Lens::Perspective { fov: a.fov },
+                None => view.lens(),
+            },
             ..Default::default()
         };
         let mut corners = box_corners(min, max).to_vec();
         corners.extend_from_slice(occupied);
         let mut camera = Self::fit(camera, &corners, aspect, view.margin());
+        if let Some(a) = authored {
+            // The author's framing, by the original's own arithmetic. See
+            // [`Self::fit_legacy`].
+            camera = Self::fit_legacy(camera, &corners, aspect);
+            // The author's own nudge, applied to the distance the way the
+            // original applies it: `FitCameraToVertices` adds `mViewZ` to
+            // whatever the fit worked out (`ViewSetup.cpp:678`), so a negative
+            // one steps the camera closer than the fit alone would. That is
+            // how a table asks to be seen from inside its own scenery rather
+            // than from a polite distance outside it — The Sopranos asks for
+            // two hundred units closer, and two hundred units is the
+            // difference between looking down its playfield and looking at
+            // the underside of the room it is standing in.
+            //
+            // Never all the way to nothing: a table with a wild offset in it
+            // should be framed oddly, not turned inside out.
+            camera.distance = (camera.distance + a.offset.z).max(camera.distance * 0.25);
+            camera.bracket_depth(&corners);
+        }
         if matches!(view, View::Overhead) {
             camera.clip_above(playfield.0.z + GLASS_CEILING_VPU);
         }
@@ -464,6 +518,64 @@ impl Camera {
         // for the near plane. Nothing about the picture depends on this.
         camera.distance = (reach * 2.0).max(half_height) + 100.0;
         camera.bracket_depth(corners);
+        camera
+    }
+
+    /// Where the original's legacy camera stands, in our own frame.
+    ///
+    /// Port of `ViewSetup::FitCameraToVertices` (`ViewSetup.cpp:625`), which
+    /// is how every table written before 10.8 was framed and what the numbers
+    /// still stored in these files were tuned against. Rather than search for
+    /// a distance, it extends the frustum's slopes back from every corner and
+    /// takes where they meet: for a symmetric frustum that is exact, and it
+    /// is the distance at which the extremes touch the edges of the screen
+    /// with nothing to spare.
+    ///
+    /// Nothing to spare is the point. Our own fit stands back a little, the
+    /// way somebody photographing a machine does, and on a table that models a
+    /// room around itself that polite step backwards is a step out through the
+    /// room's own opening.
+    ///
+    /// The original works in its own axes and this works in ours — right, up
+    /// and forward from the camera — which is the same arithmetic without the
+    /// sign conventions of a coordinate system we do not use. Layback is left
+    /// out: it is a shear applied in the projection, not a place to stand.
+    fn fit_legacy(mut camera: Self, corners: &[Vec3], aspect: f32) -> Self {
+        let Lens::Perspective { fov } = camera.lens else {
+            return camera;
+        };
+        if corners.is_empty() {
+            return camera;
+        }
+        // Half the field of view, because the slope is from the middle of the
+        // screen to the edge and the field of view spans both.
+        let slope_up = (0.5 * fov.to_radians()).tan();
+        let slope_right = slope_up * aspect.max(0.01);
+
+        let forward = (camera.target - camera.eye()).normalize_or_zero();
+        let up = camera.up();
+        let right = forward.cross(up);
+
+        let (mut max_u, mut min_u) = (f32::MIN, f32::MAX);
+        let (mut max_r, mut min_r) = (f32::MIN, f32::MAX);
+        for p in corners {
+            let v = *p - camera.target;
+            let (r, u, f) = (v.dot(right), v.dot(up), v.dot(forward));
+            // Where the frustum's edge, extended back from this corner, cuts
+            // the plane through the target: the corner is on screen from any
+            // camera beyond that.
+            max_u = max_u.max(u - slope_up * f);
+            min_u = min_u.min(u + slope_up * f);
+            max_r = max_r.max(r - slope_right * f);
+            min_r = min_r.min(r + slope_right * f);
+        }
+        let up_dist = (max_u - min_u) / (slope_up * 2.0);
+        let right_dist = (max_r - min_r) / (slope_right * 2.0);
+
+        // The centre of what was measured, so the table is in the middle of
+        // the picture rather than merely inside it.
+        camera.target += right * ((max_r + min_r) * 0.5) + up * ((max_u + min_u) * 0.5);
+        camera.distance = up_dist.max(right_dist).max(1.0);
         camera
     }
 

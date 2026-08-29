@@ -375,9 +375,55 @@ pub struct Lighting {
     pub reflection_strength: f32,
 }
 
+/// The camera the table's author set up, as the file stores it.
+///
+/// Every `.vpx` carries one per view mode; this is the desktop one, which is
+/// the mode a player at a keyboard is in. Visual Pinball computes its camera
+/// from these numbers and a fit, and a table's author tunes them until the
+/// machine looks the way they want it to — so a port that invents its own
+/// framing is not showing the table its author made.
+///
+/// Angles are degrees, offsets are VPU.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AuthoredView {
+    /// How far above the playfield the eye sits. `BG_INCLINATION`.
+    pub inclination: f32,
+    /// Vertical field of view. `BG_FOV`.
+    pub fov: f32,
+    /// The backward skew legacy tables were authored with. `BG_LAYBACK`.
+    ///
+    /// Read and reported; not applied. It is a shear in the projection rather
+    /// than a camera move, and the tables that use more than a degree of it
+    /// are rare.
+    pub layback: f32,
+    /// Where the view is nudged to, from the fit. `BG_OFFSET_X/Y/Z`.
+    pub offset: Vec3,
+}
+
+impl Default for AuthoredView {
+    /// Visual Pinball's own defaults, for a file that stores none.
+    fn default() -> Self {
+        Self {
+            inclination: 45.0,
+            fov: 45.0,
+            layback: 0.0,
+            offset: Vec3::ZERO,
+        }
+    }
+}
+
 /// Everything drawable in a table.
 #[derive(Debug, Clone)]
 pub struct Scene {
+    /// The camera its author set up. See [`AuthoredView`].
+    pub view: AuthoredView,
+    /// Whether the head standing behind the playfield is one we built.
+    ///
+    /// False when the table modelled its own — see `brings_its_own_head` — in
+    /// which case there is no panel of ours for the score to sit on and the
+    /// camera has nothing extra to frame. Everything downstream that assumed
+    /// there is always a head of ours has to ask.
+    pub built_head: bool,
     pub meshes: Vec<Mesh>,
     pub materials: Vec<Material>,
     pub images: Vec<Image>,
@@ -499,6 +545,25 @@ impl Scene {
         let mut out = Vec::new();
         for mesh in &self.meshes {
             if !mesh.visible || matches!(mesh.kind, MeshKind::Backbox) {
+                continue;
+            }
+            // Primitives are left out, and that is Visual Pinball's own rule
+            // rather than a convenience. Its legacy camera fit — the one every
+            // table before 10.8 was authored against, and the one whose
+            // numbers are still in these files — is built from a partial
+            // bounding volume that *never* includes a primitive
+            // (`primitive.cpp:622`, which says so in as many words; the
+            // walls, ramps and rubbers fill the second list and primitives
+            // only ever fill the first).
+            //
+            // It is not a detail. A table that models its own cabinet or a
+            // room around itself does it with primitives, and The Sopranos'
+            // room reaches 1215 units up over the whole playfield: fitting a
+            // camera to that walks it backwards out through the room's own
+            // opening, and what you get is a photograph of the outside of a
+            // box with a pinball table somewhere inside it. Visual Pinball
+            // has never framed on those, and neither does this now.
+            if matches!(mesh.kind, MeshKind::Primitive) {
                 continue;
             }
             let Some(b) = mesh.bounds() else { continue };
@@ -660,13 +725,18 @@ pub fn extract(vpx: &VPX) -> Scene {
         }
     }
 
-    // The head of the machine, which the file does not describe: a `.vpx` stops
-    // at the playfield because Visual Pinball draws the backglass from somewhere
-    // else entirely. Built from the cabinet's proportions so a camera has
-    // something true to frame. See [`crate::backbox`].
+    // The head of the machine, which the file usually does not describe: a
+    // `.vpx` stops at the playfield because Visual Pinball draws the backglass
+    // from somewhere else entirely. Built from the cabinet's proportions so a
+    // camera has something true to frame. See [`crate::backbox`].
+    //
+    // Usually, and not always — which is the whole of the check below.
     let head = crate::backbox::Backbox::for_playfield(playfield);
-    meshes.push(head.mesh());
-    meshes.push(head.display_mesh());
+    let build_head = !brings_its_own_head(&meshes, &head);
+    if build_head {
+        meshes.push(head.mesh());
+        meshes.push(head.display_mesh());
+    }
 
     // And the surface its face is textured with. Empty to start, because what
     // goes on it is what the machine is saying and the machine has not been
@@ -708,6 +778,22 @@ pub fn extract(vpx: &VPX) -> Scene {
     });
 
     Scene {
+        view: AuthoredView {
+            // A file that never wrote a field leaves a zero there, and zero is
+            // not a camera: an inclination of zero looks along the playfield
+            // edge-on and a field of view of zero has no width at all. So a
+            // number that cannot be meant is replaced by the one Visual
+            // Pinball would have used.
+            inclination: sane(g.bg_inclination_desktop, 5.0..=85.0, 45.0),
+            fov: sane(g.bg_fov_desktop, 5.0..=120.0, 45.0),
+            layback: g.bg_layback_desktop,
+            offset: Vec3::new(
+                g.bg_offset_x_desktop,
+                g.bg_offset_y_desktop,
+                g.bg_offset_z_desktop,
+            ),
+        },
+        built_head: build_head,
         meshes,
         materials: materials(vpx),
         images,
@@ -998,6 +1084,37 @@ fn materials(vpx: &VPX) -> Vec<Material> {
             }
         })
         .collect()
+}
+
+/// A stored number, or the fallback when it is outside what it could mean.
+fn sane(value: f32, range: std::ops::RangeInclusive<f32>, fallback: f32) -> f32 {
+    if value.is_finite() && range.contains(&value) {
+        value
+    } else {
+        fallback
+    }
+}
+
+/// Whether the table already models a head of its own.
+///
+/// Nothing that belongs on a playfield stands as high as the bottom edge of a
+/// machine's head — the tallest ramp on a table is two or three hundred units
+/// and the head starts three times higher — so anything reaching up there is
+/// scenery: a cabinet, a backbox, a whole room modelled around the machine.
+/// The Sopranos has one, and standing our own head over it gave that machine
+/// two: the table's, dark and without artwork, and ours floating above it.
+///
+/// So the head is built for the tables that have none, which is nearly all of
+/// them, and the ones that brought their own keep it. The score display goes
+/// to the floating panel there — it has one, and it is the same panel the
+/// overhead view uses.
+fn brings_its_own_head(meshes: &[Mesh], head: &crate::backbox::Backbox) -> bool {
+    let floor = head.bounds().min.z;
+    meshes.iter().any(|m| {
+        m.visible
+            && m.bounds()
+                .is_some_and(|b| b.max.z > floor && b.max.z > b.min.z)
+    })
 }
 
 /// The colours of the machine, for the head's artwork.
