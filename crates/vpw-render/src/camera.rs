@@ -346,6 +346,36 @@ impl Camera {
         camera
     }
 
+    /// Puts the near plane at the front of what is being framed.
+    ///
+    /// The front view frames the table, and anything between the eye and the
+    /// table is not the table. Normally there is nothing there and the plane
+    /// costs nothing; on a machine that models a room around itself there is
+    /// the room, and its lid hangs over the playfield from every angle a front
+    /// view can take. The Sopranos' reaches 1215 units up over the whole
+    /// table — the far two thirds of its playfield are behind it.
+    ///
+    /// The corners handed over are the ones the original frames on (see
+    /// `Scene::legacy_bounds`), so the plane lands at the near edge of the
+    /// playfield at the height of its tallest wall or ramp. A machine's head
+    /// is at the *far* end and is never cut by this; what is cut is scenery
+    /// standing between you and the glass, which is the whole of what it is
+    /// for.
+    pub fn start_at(&mut self, corners: &[Vec3]) {
+        if corners.is_empty() {
+            return;
+        }
+        let eye = self.eye();
+        let forward = (self.target - eye).normalize_or_zero();
+        let nearest = corners
+            .iter()
+            .map(|p| (*p - eye).dot(forward))
+            .fold(f32::MAX, f32::min);
+        if nearest > 1.0 && nearest < self.far {
+            self.near = nearest;
+        }
+    }
+
     /// Puts the near plane at a height, for the view that looks straight down.
     ///
     /// Looking down from above, anything higher than the glass is between the

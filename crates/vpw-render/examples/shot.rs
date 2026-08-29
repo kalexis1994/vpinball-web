@@ -375,7 +375,7 @@ fn main() {
             // box there made this photograph flatter than the thing it was
             // supposed to be a photograph of.
             let pf = scene.playfield;
-            vpw_render::Camera::for_authored_view(
+            let mut camera = vpw_render::Camera::for_authored_view(
                 view,
                 (
                     vpw_math::Vec3::new(pf.min.x, pf.min.y, 0.0),
@@ -393,7 +393,13 @@ fn main() {
                     vpw_render::camera::View::Cabinet => scene.cabinet,
                     _ => scene.view,
                 }),
-            )
+            );
+            // The same start the player uses on a table that brought its own
+            // scenery.
+            if matches!(view, vpw_render::camera::View::Front) && !scene.built_head {
+                camera.start_at(&scene.legacy_bounds());
+            }
+            camera
         }
         None => {
             let (min, max) = gpu_scene.bounds;

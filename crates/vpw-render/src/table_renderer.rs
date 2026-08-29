@@ -362,7 +362,7 @@ impl TableRenderer {
             crate::camera::View::Front | crate::camera::View::Cabinet => &self.legacy,
             crate::camera::View::Overhead => &self.occupied,
         };
-        Some(Camera::for_authored_view(
+        let mut camera = Camera::for_authored_view(
             view,
             (table.min, table.max),
             head,
@@ -372,7 +372,15 @@ impl TableRenderer {
                 crate::camera::View::Cabinet => self.cabinet,
                 _ => self.authored,
             },
-        ))
+        );
+        // On a table that models its own room, the front view starts at the
+        // table: the room's lid is between the eye and the playfield from
+        // every angle this view can take. Tables that brought no scenery of
+        // their own have nothing up there and nothing changes for them.
+        if matches!(view, crate::camera::View::Front) && !self.built_head {
+            camera.start_at(&self.legacy);
+        }
+        Some(camera)
     }
 
     /// Draws one frame as a photograph of the whole machine, then puts
