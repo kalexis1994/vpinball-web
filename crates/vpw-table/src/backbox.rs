@@ -47,7 +47,15 @@ pub const DISPLAY_GRID: (usize, usize) = (2, 16);
 /// change, and a texture that changed size would need its bind group rebuilt
 /// with it. Generous enough that a digit is a few dozen pixels across, which is
 /// what keeps a thin stroke from disappearing when the head is small on screen.
-pub const DISPLAY_PIXELS: (u32, u32) = (1024, 256);
+///
+/// Sixteen columns across five hundred and twelve is thirty-two pixels a
+/// digit, which is what the floating panel is drawn at and reads crisply. It
+/// used to be twice that in each direction, and the four times the pixels
+/// were not free: this image is redrawn and re-uploaded on *every frame* a
+/// dot-matrix animation is running, and both the halo that is drawn into it
+/// and the megabyte that went up to the GPU were being paid sixty times a
+/// second for detail nobody could see.
+pub const DISPLAY_PIXELS: (u32, u32) = (512, 128);
 
 /// Where the display sits on the head, as fractions of the head's face:
 /// left, top, width, height.

@@ -644,6 +644,11 @@ fn dot_raster(
         }
     }
 
+    // The same phosphor halo the segment display gets: a dot matrix is the
+    // same gas behind the same glass, and the dots are round for the same
+    // reason. See `vpw_render::segments::bloom`.
+    vpw_render::segments::bloom(&mut rgba, size.0, size.1, 0.5, [255, 150, 30]);
+
     vpw_render::segments::Raster {
         width: size.0,
         height: size.1,

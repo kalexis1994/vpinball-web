@@ -41,6 +41,8 @@ pub enum Glyph {
     Numeric,
 }
 
+use std::cell::RefCell;
+
 /// A row of digits and what they are made of.
 #[derive(Debug, Clone)]
 pub struct Row<'a> {
@@ -67,6 +69,9 @@ pub struct Style {
     /// darker than the glass, and seeing them is most of what makes it read as
     /// a segment display rather than as text.
     pub unlit: [u8; 3],
+    /// How strongly a lit stroke bleeds into the glass around it, 0 for not
+    /// at all. See [`bloom`].
+    pub glow: f32,
 }
 
 impl Default for Style {
@@ -78,6 +83,9 @@ impl Default for Style {
             // Gas plasma, which is what these are. The colour is the gas.
             lit: [255, 176, 64],
             unlit: [34, 19, 6],
+            // Enough to be seen and not enough to be noticed, which is the
+            // amount a real one has.
+            glow: 0.55,
         }
     }
 }
@@ -184,11 +192,171 @@ pub fn draw(rows: &[Row<'_>], size: (u32, u32), style: Style) -> Raster {
             );
         }
     }
+    bloom(&mut rgba, width, height, style.glow, style.lit);
+
     Raster {
         width,
         height,
         rgba,
     }
+}
+
+/// Spreads the light of the lit strokes into the glass around them.
+///
+/// A plasma display does not end at the edge of a segment: the gas glows, the
+/// glass in front of it scatters, and what a photograph of one shows is a
+/// bright core with a halo the same colour.
+///
+/// # Why this is written the cheap way
+///
+/// It is not called "when the score changes". A dot-matrix animation changes
+/// the display on **every frame**, and the head's copy is drawn at a quarter
+/// of a million pixels, so this runs sixty times a second on a phone in the
+/// middle of the game loop. The first version of it cost three float
+/// channels, seven taps each, and two fresh megabyte buffers per call — and
+/// it was visible as the game slowing down the moment an animation started.
+///
+/// So: one intensity channel rather than three, because both displays this
+/// draws are a single colour behind glass and the halo can be that colour
+/// scaled; a sliding window over a prefix sum rather than a tap per pixel,
+/// which makes the blur cost the same whatever the radius; and buffers that
+/// live between calls, because the allocation was most of the rest.
+///
+/// Only what is brighter than an unlit stroke contributes, so the dark
+/// segments that give the display its grid stay dark instead of fogging the
+/// whole panel. The halo raises alpha as well as colour: the image is drawn
+/// on transparent glass, and a colour with no alpha is a colour nobody sees.
+pub fn bloom(rgba: &mut [u8], width: u32, height: u32, strength: f32, tint: [u8; 3]) {
+    if strength <= 0.0 {
+        return;
+    }
+    /// Below this a pixel is an unlit stroke, and unlit strokes do not glow.
+    const FLOOR: u16 = 96;
+    /// How much smaller the halo is worked out at. A glow is low-frequency
+    /// by nature — there is nothing in it a quarter of the resolution cannot
+    /// hold — and this is sixteen times less blurring for a difference
+    /// nobody can point at.
+    const SHRINK: usize = 4;
+
+    let (w, h) = (width as usize, height as usize);
+    if w < SHRINK || h < SHRINK || rgba.len() < w * h * 4 {
+        return;
+    }
+    let (sw, sh) = (w / SHRINK, h / SHRINK);
+    // The halo is a fraction of the display's width, so the same display
+    // drawn at 1024 for the head and at 512 for the floating panel wears the
+    // same glow rather than one twice as wide as the other.
+    let radius = (sw / 42).clamp(1, 4);
+
+    HALO.with(|cell| {
+        let mut buffers = cell.borrow_mut();
+        let (src, tmp, prefix) = &mut *buffers;
+        src.clear();
+        src.resize(sw * sh, 0);
+        tmp.clear();
+        tmp.resize(sw * sh, 0);
+        prefix.clear();
+        prefix.resize(sw.max(sh) + 1, 0);
+
+        // Down to a quarter, taking what is bright enough to shed light. The
+        // brightest of the block rather than its average: a stroke one pixel
+        // wide is still a lit stroke, and averaging it away would leave the
+        // thin parts of a digit with no halo at all.
+        for by in 0..sh {
+            for bx in 0..sw {
+                let mut most = 0u16;
+                for y in by * SHRINK..(by + 1) * SHRINK {
+                    let row = y * w;
+                    for x in bx * SHRINK..(bx + 1) * SHRINK {
+                        let at = (row + x) * 4;
+                        let lum = (u16::from(rgba[at]) * 3
+                            + u16::from(rgba[at + 1]) * 6
+                            + u16::from(rgba[at + 2]))
+                            / 10;
+                        most = most.max(lum);
+                    }
+                }
+                src[by * sw + bx] = if most > FLOOR { most } else { 0 };
+            }
+        }
+
+        // Two box passes over the small buffer. The window is a subtraction
+        // on a prefix sum, and the divisor is the *nominal* width so it is a
+        // constant the compiler turns into a multiply — a variable divisor
+        // here was a third of this function's cost, twice per pixel.
+        let taps = (radius * 2 + 1) as u32;
+        for y in 0..sh {
+            let row = y * sw;
+            for x in 0..sw {
+                prefix[x + 1] = prefix[x] + u32::from(src[row + x]);
+            }
+            for x in 0..sw {
+                let lo = x.saturating_sub(radius);
+                let hi = (x + radius).min(sw - 1);
+                tmp[row + x] = ((prefix[hi + 1] - prefix[lo]) / taps) as u16;
+            }
+        }
+        for x in 0..sw {
+            for y in 0..sh {
+                prefix[y + 1] = prefix[y] + u32::from(tmp[y * sw + x]);
+            }
+            for y in 0..sh {
+                let lo = y.saturating_sub(radius);
+                let hi = (y + radius).min(sh - 1);
+                src[y * sw + x] = ((prefix[hi + 1] - prefix[lo]) / taps) as u16;
+            }
+        }
+
+        // What a halo of each strength adds, worked out once instead of a
+        // quarter of a million times.
+        let mut add = [[0u8; 256]; 3];
+        let mut alpha = [0u8; 256];
+        for level in 0..256usize {
+            let lit = level as f32 * strength / 255.0;
+            for (c, &t) in tint.iter().enumerate() {
+                add[c][level] = (f32::from(t) * lit).min(255.0) as u8;
+            }
+            alpha[level] = (lit * 255.0 * 1.4).min(255.0) as u8;
+        }
+
+        // Back up to full size, bilinear, adding as it goes. Light falling on
+        // light is brighter, and the halo has to make the glass it lands on
+        // visible at all.
+        for y in 0..h {
+            // Where this row sits between two rows of the small buffer, in
+            // eighths — integer arithmetic all the way, no division per
+            // pixel.
+            let fy = (y * 8 + 4) / SHRINK;
+            let (y0, wy) = ((fy / 8).min(sh - 1), fy % 8);
+            let y1 = (y0 + 1).min(sh - 1);
+            for x in 0..w {
+                let fx = (x * 8 + 4) / SHRINK;
+                let (x0, wx) = ((fx / 8).min(sw - 1), fx % 8);
+                let x1 = (x0 + 1).min(sw - 1);
+                let top = u32::from(src[y0 * sw + x0]) * (8 - wx) as u32
+                    + u32::from(src[y0 * sw + x1]) * wx as u32;
+                let bottom = u32::from(src[y1 * sw + x0]) * (8 - wx) as u32
+                    + u32::from(src[y1 * sw + x1]) * wx as u32;
+                let halo = ((top * (8 - wy) as u32 + bottom * wy as u32) / 64) as usize;
+                if halo == 0 {
+                    continue;
+                }
+                let level = halo.min(255);
+                let at = (y * w + x) * 4;
+                for c in 0..3 {
+                    rgba[at + c] = rgba[at + c].saturating_add(add[c][level]);
+                }
+                rgba[at + 3] = rgba[at + 3].max(alpha[level]);
+            }
+        }
+    });
+}
+
+thread_local! {
+    /// [`bloom`]'s working buffers, kept between calls. See its note on why
+    /// this is not an allocation per frame.
+    static HALO: RefCell<(Vec<u16>, Vec<u16>, Vec<u32>)> =
+        const { RefCell::new((Vec::new(), Vec::new(), Vec::new())) };
 }
 
 /// One digit, at a pixel offset inside the image.
@@ -353,12 +521,20 @@ mod tests {
     /// Every stroke of a fourteen-segment digit, comma and dot included.
     const ALL: u16 = 0xFFFF;
 
+    /// Pixels at the core of a lit stroke.
+    ///
+    /// A threshold and not an equality: since the strokes glow (see
+    /// [`bloom`]) no pixel carries the lit colour exactly any more — a core
+    /// has the halo added on top of it and clamps, and the glass around it
+    /// picks up a fraction. The gap between the two is wide, so the green
+    /// channel reaching the lit colour's own is what separates "this is a
+    /// stroke" from "this is light falling near one".
     fn lit_pixels(r: &Raster, style: Style) -> usize {
         r.rgba
             .as_chunks::<4>()
             .0
             .iter()
-            .filter(|p| p[3] > 0 && p[0] == style.lit[0] && p[1] == style.lit[1])
+            .filter(|p| p[3] > 0 && p[1] >= style.lit[1])
             .count()
     }
 
