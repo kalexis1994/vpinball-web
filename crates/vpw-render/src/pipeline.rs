@@ -14,6 +14,9 @@ pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
 pub struct TablePipeline {
     pub opaque: wgpu::RenderPipeline,
+    /// The opaque pipeline with back faces culled, for the batches the
+    /// original culls. See `Batch::culled`.
+    pub opaque_culled: wgpu::RenderPipeline,
     pub blended: wgpu::RenderPipeline,
     /// The same two, for the pieces that carry a model matrix. They differ from
     /// the static ones only in the vertex stage and in having a third bind
@@ -211,7 +214,8 @@ impl TablePipeline {
                          module: &wgpu::ShaderModule,
                          pipeline_layout: &wgpu::PipelineLayout,
                          blend: Option<wgpu::BlendState>,
-                         depth_write: bool| {
+                         depth_write: bool,
+                         cull: Option<wgpu::Face>| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(name),
                 layout: Some(pipeline_layout),
@@ -239,11 +243,15 @@ impl TablePipeline {
                 }),
                 primitive: wgpu::PrimitiveState {
                     topology: wgpu::PrimitiveTopology::TriangleList,
-                    // Tables are full of single-sided meshes with their
-                    // winding the wrong way round; culling faces here erases
-                    // half the playfield. The original does not cull by default
-                    // either.
-                    cull_mode: None,
+                    // `None` for everything thin-walled — ramps, walls,
+                    // rubbers, whose inside is their far side — and `Back`
+                    // for the one batch class the original culls: opaque
+                    // primitives, under its scene-wide `CULL_CCW`
+                    // (`Renderer.cpp:927`, `primitive.cpp:1132`). D3D
+                    // measures winding with y down and WebGPU with y up, so
+                    // its CULL_CCW is our back-face cull with the default
+                    // front face.
+                    cull_mode: cull,
                     ..Default::default()
                 },
                 depth_stencil: Some(wgpu::DepthStencilState {
@@ -371,13 +379,22 @@ impl TablePipeline {
             env_height: envmap.height,
             envmap,
             clear: crate::pass::CLEAR,
-            opaque: make_with("vpw-opaque", &shader, &layout, None, true),
+            opaque: make_with("vpw-opaque", &shader, &layout, None, true, None),
+            opaque_culled: make_with(
+                "vpw-opaque-culled",
+                &shader,
+                &layout,
+                None,
+                true,
+                Some(wgpu::Face::Back),
+            ),
             blended: make_with(
                 "vpw-transparent",
                 &shader,
                 &layout,
                 Some(wgpu::BlendState::ALPHA_BLENDING),
                 false,
+                None,
             ),
             dynamic_opaque: make_with(
                 "vpw-dynamic-opaque",
@@ -385,6 +402,7 @@ impl TablePipeline {
                 &dynamic_layout,
                 None,
                 true,
+                None,
             ),
             dynamic_blended: make_with(
                 "vpw-dynamic-transparent",
@@ -392,6 +410,7 @@ impl TablePipeline {
                 &dynamic_layout,
                 Some(wgpu::BlendState::ALPHA_BLENDING),
                 false,
+                None,
             ),
             frame_layout,
             material_layout,

@@ -188,14 +188,23 @@ struct Player {
     adaptive: bool,
 }
 
-/// The rungs of the resolution ladder, as fractions of the canvas size.
+/// The rungs of the quality ladder, as fractions of the canvas size.
 ///
-/// Quadratic payoff: the bottom rung draws sixteen percent of the pixels the
-/// top one does, which is the difference between fourteen frames a second on
-/// an integrated GPU and sixty. The browser scales the smaller bitmap up to
-/// the element's CSS size, and a moving pinball hides the softness far better
-/// than it hides a slideshow.
-const SCALES: [f32; 5] = [1.0, 0.85, 0.7, 0.55, 0.4];
+/// The first step down costs no pixels at all: it turns the playfield's
+/// reflection probe off (see [`Player::apply_scale`]). The probe is a second
+/// pass over the whole table's geometry, and on a tile-based mobile GPU —
+/// which walks every triangle twice, once to bin and once to draw — it is
+/// the single most expensive thing on the ladder while being the least
+/// visible: a machine on a Snapdragon was geometry-bound, and shrinking the
+/// picture was costing sharpness without buying frames. Losing the mirror
+/// under the ball is the better first trade everywhere.
+///
+/// From there the payoff is quadratic: the bottom rung draws sixteen percent
+/// of the pixels the top one does, which is the difference between fourteen
+/// frames a second on an integrated GPU and sixty. The composite stretches
+/// the smaller picture over the canvas, and a moving pinball hides the
+/// softness far better than it hides a slideshow.
+const SCALES: [f32; 6] = [1.0, 1.0, 0.85, 0.7, 0.55, 0.4];
 
 impl Player {
     /// Whether there is anything to draw for, and the backbuffer size to draw
@@ -351,7 +360,10 @@ impl Player {
     /// it is a second pass over the whole scene, and its vertex work is the
     /// cost that fewer pixels cannot shrink.
     fn apply_scale(&mut self) {
-        self.renderer.set_reflection_enabled(self.scale_tier < 2);
+        // The probe goes first and comes back last: its vertex work is the
+        // cost fewer pixels cannot shrink, and its absence is the softest
+        // loss on the ladder. See [`SCALES`].
+        self.renderer.set_reflection_enabled(self.scale_tier == 0);
         self.renderer.set_render_scale(SCALES[self.scale_tier]);
     }
 
@@ -1478,7 +1490,10 @@ pub async fn start(canvas_id: String) -> Result<(), JsValue> {
         .dyn_into()
         .map_err(|_| JsValue::from_str(&format!("#{canvas_id} is not a <canvas>")))?;
 
-    let dpr = window.device_pixel_ratio();
+    // Capped at two for the same reason the worker path caps it: a phone's
+    // three-and-more device pixels per CSS pixel is more picture than the
+    // eye gets back, at more than double the fill cost.
+    let dpr = window.device_pixel_ratio().min(2.0);
     let width = (f64::from(canvas.client_width()) * dpr).round().max(1.0) as u32;
     let height = (f64::from(canvas.client_height()) * dpr).round().max(1.0) as u32;
     canvas.set_width(width);

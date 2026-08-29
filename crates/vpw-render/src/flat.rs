@@ -756,7 +756,11 @@ fn fs_keep_depth(in : VsOut) -> @location(0) vec4<f32> {
         pass.set_bind_group(0, &pipeline.frame_bind_group, &[]);
         pass.set_pipeline(&pipeline.opaque);
         scene.draw_filtered(&mut pass, |b| {
-            !b.transparent && !is_live(b) && (head || !b.backbox)
+            !b.transparent && !b.culled && !is_live(b) && (head || !b.backbox)
+        });
+        pass.set_pipeline(&pipeline.opaque_culled);
+        scene.draw_filtered(&mut pass, |b| {
+            b.culled && !is_live(b) && (head || !b.backbox)
         });
         if scene.batches.iter().any(|b| b.transparent) {
             pass.set_pipeline(&pipeline.blended);

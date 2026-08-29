@@ -216,6 +216,14 @@ pub struct Batch {
     pub textured: bool,
     /// Whether this is the machine's head rather than the table.
     pub backbox: bool,
+    /// Whether the batch draws with back faces culled.
+    ///
+    /// The original's scene default is `CULL_CCW` (`Renderer.cpp:927`) and a
+    /// primitive drawn opaque keeps it (`primitive.cpp:1132`); ramps, walls
+    /// and rubbers set `CULL_NONE` because they are thin-walled and their
+    /// inside *is* their far side. Primitives are most of a modern table's
+    /// triangles, so this is also most of a modern table's overdraw.
+    pub culled: bool,
 }
 
 /// Counts of what building the scene cost. They are there to measure, which is
@@ -267,6 +275,9 @@ struct BatchKey {
     /// a view that leaves it out has to be able to leave it out on its own.
     backbox: bool,
     playfield: bool,
+    /// See [`Batch::culled`]; culled and two-sided meshes cannot share a
+    /// draw call.
+    culled: bool,
 }
 
 impl GpuScene {
@@ -297,6 +308,10 @@ impl GpuScene {
                 transparent,
                 backbox: matches!(m.kind, vpw_table::geometry::MeshKind::Backbox),
                 playfield: matches!(m.kind, vpw_table::geometry::MeshKind::Playfield),
+                // Opaque primitives take the original's `CULL_CCW`; anything
+                // transparent draws without depth writes there and goes
+                // `CULL_NONE` with it (`primitive.cpp:1132`).
+                culled: !transparent && matches!(m.kind, vpw_table::geometry::MeshKind::Primitive),
             };
             groups.entry(key).or_default().push(m);
         }
@@ -384,6 +399,7 @@ impl GpuScene {
                 image: key.image.clone(),
                 textured: slot.textured,
                 backbox: key.backbox,
+                culled: key.culled,
             });
         }
 

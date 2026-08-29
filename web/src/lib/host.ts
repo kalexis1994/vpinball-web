@@ -167,7 +167,11 @@ function workerHost(rpc: Rpc): PlayerHost {
   let observer: ResizeObserver | null = null;
 
   const deviceSize = (canvas: HTMLCanvasElement): [number, number] => {
-    const dpr = window.devicePixelRatio || 1;
+    // Capped at two: a phone reports three or more, and rendering nine
+    // million HDR pixels for a hand-sized screen is where a flagship's GPU
+    // quietly drowns. At arm's length, two device pixels per CSS pixel is
+    // already past what the eye separates — with MSAA on top of it.
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
     return [
       Math.max(1, Math.round(canvas.clientWidth * dpr)),
       Math.max(1, Math.round(canvas.clientHeight * dpr)),

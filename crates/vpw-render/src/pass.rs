@@ -232,7 +232,11 @@ pub fn draw_full(
     pass.set_bind_group(0, &pipeline.frame_bind_group, &[]);
 
     pass.set_pipeline(&pipeline.opaque);
-    scene.draw_filtered(&mut pass, |b| !b.transparent && filter(b));
+    scene.draw_filtered(&mut pass, |b| !b.transparent && !b.culled && filter(b));
+    if scene.batches.iter().any(|b| b.culled && filter(b)) {
+        pass.set_pipeline(&pipeline.opaque_culled);
+        scene.draw_filtered(&mut pass, |b| b.culled && filter(b));
+    }
 
     if let Some(d) = dynamic.filter(|d| d.any(false)) {
         pass.set_pipeline(&pipeline.dynamic_opaque);
