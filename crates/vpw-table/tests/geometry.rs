@@ -160,6 +160,7 @@ fn test_playfield(b: Bounds) -> Mesh {
         image: String::new(),
         material: String::new(),
         visible: true,
+        clamp: false,
         kind: MeshKind::Playfield,
     }
 }

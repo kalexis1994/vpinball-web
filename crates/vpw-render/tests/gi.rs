@@ -54,6 +54,7 @@ fn scene_with(state: f32, name: &str, wall: bool) -> Scene {
         image: String::new(),
         material: "floor".into(),
         visible: true,
+        clamp: false,
         kind: MeshKind::Playfield,
     };
     let c = TABLE / 2.0;
@@ -114,6 +115,7 @@ fn scene_with(state: f32, name: &str, wall: bool) -> Scene {
             image: String::new(),
             material: "floor".into(),
             visible: true,
+            clamp: false,
             kind: MeshKind::Wall,
         });
     }
@@ -267,6 +269,7 @@ fn one_bounce_carries_light_into_the_shadow() {
             image: String::new(),
             material: "wall".into(),
             visible: true,
+            clamp: false,
             kind: MeshKind::Wall,
         }
     };
@@ -318,6 +321,7 @@ fn the_indirect_map_is_smooth_where_the_light_is() {
         image: String::new(),
         material: "wall".into(),
         visible: true,
+        clamp: false,
         kind: MeshKind::Wall,
     });
     let groups = gi_groups(&scene);
@@ -434,6 +438,7 @@ fn a_metal_wall_mirrors_the_baked_field() {
         image: String::new(),
         material: "steel".into(),
         visible: true,
+        clamp: false,
         kind: MeshKind::Wall,
     });
 

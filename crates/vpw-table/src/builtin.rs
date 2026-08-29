@@ -163,6 +163,7 @@ fn place(
         image,
         material,
         visible: true,
+        clamp: false,
         kind,
     })
 }

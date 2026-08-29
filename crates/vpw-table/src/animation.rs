@@ -447,6 +447,7 @@ fn bumper_rings(vpx: &VPX, shapes: &[Shape], out: &mut Vec<AnimatedPart>) {
             image: String::new(),
             material: b.ring_material.clone().unwrap_or_default(),
             visible: true,
+            clamp: false,
             kind: MeshKind::Builtin,
         }) else {
             continue;

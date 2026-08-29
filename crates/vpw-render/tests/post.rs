@@ -67,6 +67,7 @@ fn one_bright_light(intensity: f32, alpha: f32) -> Scene {
         image: String::new(),
         material: "floor".into(),
         visible: true,
+        clamp: false,
         kind: MeshKind::Playfield,
     };
     // Slightly above the floor, so it is not fighting it for depth.
@@ -385,6 +386,7 @@ fn scene_with_something_to_mirror(reflection: f32) -> Scene {
         image: String::new(),
         material: "slab".into(),
         visible: true,
+        clamp: false,
         kind: MeshKind::Primitive,
     });
     scene

@@ -126,6 +126,7 @@ pub fn build(t: &Trigger, base_z: f32) -> Option<Mesh> {
         image: String::new(),
         material: t.material.clone(),
         visible: true,
+        clamp: false,
         kind: MeshKind::Builtin,
     })
 }

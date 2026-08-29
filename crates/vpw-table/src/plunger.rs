@@ -152,6 +152,7 @@ pub fn head_mesh(name: &str, half_width: f32, material: String) -> Mesh {
         image: String::new(),
         material,
         visible: true,
+        clamp: false,
         kind: MeshKind::Builtin,
     }
 }
@@ -188,6 +189,7 @@ pub fn shaft_mesh(name: &str, half_width: f32, material: String) -> Mesh {
         image: String::new(),
         material,
         visible: true,
+        clamp: false,
         kind: MeshKind::Builtin,
     }
 }

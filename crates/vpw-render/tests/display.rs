@@ -72,6 +72,7 @@ fn scene() -> Scene {
         image: String::new(),
         material: "floor".into(),
         visible: true,
+        clamp: false,
         kind: MeshKind::Playfield,
     };
     let playfield = Bounds {

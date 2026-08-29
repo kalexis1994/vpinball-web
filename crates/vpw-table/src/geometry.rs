@@ -43,6 +43,17 @@ pub struct Mesh {
     /// Material name, if it has one. Resolved against `Scene::materials`.
     pub material: String,
     pub visible: bool,
+    /// Whether the texture stops at its edges instead of tiling.
+    ///
+    /// The original chooses this per part rather than once for the scene, and
+    /// on a ramp it reads the part's own image alignment to do it
+    /// (`ramp.cpp:895`): a ramp whose image is *wrapped along* it clamps, and
+    /// one whose image is tiled by world coordinates repeats. The difference
+    /// is a ramp's artwork spilling out past its own edges — The Sopranos'
+    /// apron is a two-triangle ramp with the apron printed on it, and
+    /// repeating it laid a second, mirrored apron across the cabinet beside
+    /// the real one.
+    pub clamp: bool,
     pub kind: MeshKind,
 }
 
@@ -1008,6 +1019,7 @@ fn playfield_quad(b: Bounds, image: &str, material: &str) -> Mesh {
         image: image.to_string(),
         material: material.to_string(),
         visible: true,
+        clamp: false,
         kind: MeshKind::Playfield,
     }
 }
@@ -1050,6 +1062,7 @@ fn primitive_mesh(p: &Primitive) -> Option<Mesh> {
         image: p.image.clone(),
         material: p.material.clone(),
         visible: p.is_visible,
+        clamp: false,
         kind: MeshKind::Primitive,
     })
 }

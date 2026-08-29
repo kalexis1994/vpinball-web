@@ -59,6 +59,7 @@ fn floor_with_lamp() -> Scene {
         image: String::new(),
         material: "floor".into(),
         visible: true,
+        clamp: false,
         kind: MeshKind::Playfield,
     };
 

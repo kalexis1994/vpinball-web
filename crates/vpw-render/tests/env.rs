@@ -77,6 +77,7 @@ fn floor_under(env_image: &str, images: Vec<Image>) -> Scene {
             image: String::new(),
             material: "floor".into(),
             visible: true,
+            clamp: false,
             kind: MeshKind::Playfield,
         }],
         materials: vec![Material {

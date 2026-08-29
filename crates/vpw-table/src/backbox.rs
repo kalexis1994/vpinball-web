@@ -226,6 +226,7 @@ impl Backbox {
             image: DISPLAY_IMAGE.into(),
             material: String::new(),
             visible: true,
+            clamp: false,
             kind: MeshKind::Backbox,
         }
     }
@@ -269,6 +270,7 @@ impl Backbox {
             image: crate::backglass::BACKGLASS_IMAGE.into(),
             material: String::new(),
             visible: true,
+            clamp: false,
             kind: MeshKind::Backbox,
         }
     }

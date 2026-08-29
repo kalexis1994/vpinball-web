@@ -308,6 +308,13 @@ fn strip(
         image: ramp.image.clone(),
         material: ramp.material.clone(),
         visible: true,
+        // The original picks the sampler from the ramp's own image alignment
+        // (`ramp.cpp:895`): an image wrapped *along* the ramp is clamped, and
+        // one tiled by world coordinates repeats. Getting it wrong is not
+        // subtle — The Sopranos' apron is a two-triangle ramp with the apron
+        // printed on it, and repeating that laid a second apron, mirrored,
+        // across the cabinet beside the real one.
+        clamp: !world_uv,
         kind: MeshKind::Ramp,
     }
 }
@@ -360,6 +367,7 @@ fn wires(ramp: &Ramp, c: &Outline) -> Vec<Mesh> {
                 image: ramp.image.clone(),
                 material: ramp.material.clone(),
                 visible: true,
+                clamp: false,
                 kind: MeshKind::Ramp,
             })
         })

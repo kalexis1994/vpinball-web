@@ -213,6 +213,7 @@ pub fn build(f: &vpin::vpx::gameitem::flipper::Flipper, base_z: f32) -> Option<M
         image: f.image.clone().unwrap_or_default(),
         material: f.material.clone(),
         visible: true,
+        clamp: false,
         kind: MeshKind::Builtin,
     })
 }
@@ -284,6 +285,7 @@ pub fn rubber(f: &vpin::vpx::gameitem::flipper::Flipper, base_z: f32) -> Option<
         image: f.image.clone().unwrap_or_default(),
         material: f.rubber_material.clone(),
         visible: true,
+        clamp: false,
         kind: MeshKind::Builtin,
     })
 }

@@ -38,6 +38,7 @@ pub fn mesh() -> Mesh {
         image: String::new(),
         material: String::new(),
         visible: true,
+        clamp: false,
         kind: MeshKind::Builtin,
     }
 }
@@ -88,6 +89,7 @@ pub fn shadow_mesh() -> Mesh {
         image: String::new(),
         material: String::new(),
         visible: true,
+        clamp: false,
         kind: MeshKind::Builtin,
     }
 }

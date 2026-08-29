@@ -278,6 +278,9 @@ struct BatchKey {
     /// See [`Batch::culled`]; culled and two-sided meshes cannot share a
     /// draw call.
     culled: bool,
+    /// Whether this batch's texture stops at its edges. See
+    /// [`clamped_sampler`]; two parts that disagree cannot share a draw.
+    clamp: bool,
 }
 
 impl GpuScene {
@@ -312,6 +315,10 @@ impl GpuScene {
                 // transparent draws without depth writes there and goes
                 // `CULL_NONE` with it (`primitive.cpp:1132`).
                 culled: !transparent && matches!(m.kind, vpw_table::geometry::MeshKind::Primitive),
+                // Two parts with the same material and texture still cannot
+                // share a draw if one of them wants its image to stop at the
+                // edge and the other wants it to tile.
+                clamp: m.clamp,
             };
             groups.entry(key).or_default().push(m);
         }
@@ -325,6 +332,7 @@ impl GpuScene {
         let (mut min, mut max) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
 
         let sampler = table_sampler(device);
+        let clamped = clamped_sampler(device);
         let white = white_texture(device, queue);
 
         // Stable order: the HashMap does not guarantee it and we want two loads
@@ -367,7 +375,7 @@ impl GpuScene {
                 device,
                 queue,
                 layout,
-                &sampler,
+                if key.clamp { &clamped } else { &sampler },
                 &white,
                 scene.material(&key.material),
                 scene.image(&key.image),
@@ -497,16 +505,33 @@ pub struct MaterialSlot {
     pub redrawn: Option<wgpu::Texture>,
 }
 
-/// The sampler the whole table shares.
+/// The sampler most of the table shares.
 ///
 /// Repeat on both axes because that is what table textures expect: a playfield
 /// image is authored to tile, and clamping it leaves a smeared border along
-/// every edge.
+/// every edge. The parts that want the other answer say so — see
+/// [`clamped_sampler`].
 pub fn table_sampler(device: &wgpu::Device) -> wgpu::Sampler {
+    sampler(device, wgpu::AddressMode::Repeat)
+}
+
+/// The sampler for a part whose image stops at its own edges.
+///
+/// The original chooses per part rather than once for the scene, and on a ramp
+/// it reads that part's image alignment to do it (`ramp.cpp:895`): an image
+/// wrapped *along* the ramp clamps, and one tiled by world coordinates
+/// repeats. It is not a nicety. The Sopranos' apron is a two-triangle ramp
+/// with the apron artwork printed on it; repeating that put a second apron,
+/// mirrored, across the cabinet beside the real one.
+pub fn clamped_sampler(device: &wgpu::Device) -> wgpu::Sampler {
+    sampler(device, wgpu::AddressMode::ClampToEdge)
+}
+
+fn sampler(device: &wgpu::Device, mode: wgpu::AddressMode) -> wgpu::Sampler {
     device.create_sampler(&wgpu::SamplerDescriptor {
         label: Some("vpw-sampler"),
-        address_mode_u: wgpu::AddressMode::Repeat,
-        address_mode_v: wgpu::AddressMode::Repeat,
+        address_mode_u: mode,
+        address_mode_v: mode,
         mag_filter: wgpu::FilterMode::Linear,
         min_filter: wgpu::FilterMode::Linear,
         mipmap_filter: wgpu::MipmapFilterMode::Linear,
