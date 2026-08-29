@@ -57,6 +57,87 @@ pub fn transform(pos: Vec3, radius: f32, orientation: Quat, captured: bool) -> M
         * Mat4::from_quat(orientation)
 }
 
+/// Where the ball's shadow lies, and how big it is.
+///
+/// Projected straight down onto the playfield, the way the original's cheap
+/// ball shadow is: a ball up on a ramp still darkens the field below it,
+/// which reads as height better than no shadow reads as anything. A little
+/// above the wood so the blended quad never fights the art for depth.
+pub fn shadow_transform(pos: Vec3, radius: f32) -> Mat4 {
+    Mat4::from_translation(Vec3::new(pos.x, pos.y, 2.0))
+        * Mat4::from_scale(Vec3::new(radius * 1.5, radius * 1.5, 1.0))
+}
+
+/// The shadow's quad: a unit disc's worth of soft darkness, facing up.
+pub fn shadow_mesh() -> Mesh {
+    let v = |x: f32, y: f32, u: f32, w: f32| crate::geometry::Vertex {
+        pos: [x, y, 0.0],
+        normal: [0.0, 0.0, 1.0],
+        uv: [u, w],
+    };
+    Mesh {
+        name: "BallShadow".into(),
+        vertices: vec![
+            v(-1.0, -1.0, 0.0, 0.0),
+            v(1.0, -1.0, 1.0, 0.0),
+            v(1.0, 1.0, 1.0, 1.0),
+            v(-1.0, 1.0, 0.0, 1.0),
+        ],
+        indices: vec![0, 1, 2, 0, 2, 3],
+        transform: Mat4::IDENTITY,
+        image: String::new(),
+        material: String::new(),
+        visible: true,
+        kind: MeshKind::Builtin,
+    }
+}
+
+/// Black, translucent, and nothing else: all the shadow's shape lives in its
+/// picture's alpha.
+pub fn shadow_material() -> Material {
+    Material {
+        name: "vpw-ball-shadow".into(),
+        base_color: [0.0, 0.0, 0.0],
+        glossy_color: [0.0; 3],
+        clearcoat_color: [0.0; 3],
+        is_metal: false,
+        roughness: 0.0,
+        wrap_lighting: 0.0,
+        glossy_image_lerp: 0.0,
+        edge: 1.0,
+        edge_alpha: 1.0,
+        thickness: 0.05,
+        opacity: 1.0,
+        opacity_active: true,
+    }
+}
+
+/// The soft disc itself: darkest in the middle, gone at the rim, smooth all
+/// the way — `(1 - r²)²` is the cheapest falloff that has no visible edge.
+pub fn shadow_image() -> crate::geometry::Image {
+    const S: usize = 64;
+    let mut px = vec![0u8; S * S * 4];
+    for y in 0..S {
+        for x in 0..S {
+            let dx = (x as f32 + 0.5) / S as f32 * 2.0 - 1.0;
+            let dy = (y as f32 + 0.5) / S as f32 * 2.0 - 1.0;
+            let r2 = (dx * dx + dy * dy).min(1.0);
+            let a = (1.0 - r2) * (1.0 - r2) * 0.45;
+            px[(y * S + x) * 4 + 3] = (a * 255.0) as u8;
+        }
+    }
+    crate::geometry::Image {
+        name: "vpw:ball-shadow".into(),
+        encoded: None,
+        rgba: Some(px),
+        width: S as u32,
+        height: S as u32,
+        has_alpha: true,
+        alpha_test: -1.0,
+        redrawn: false,
+    }
+}
+
 /// How a ball without a texture looks: polished steel.
 ///
 /// The original devotes a whole shader to it (`BallShader.hlsl`), with a

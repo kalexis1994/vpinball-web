@@ -1930,6 +1930,16 @@ pub fn set_adaptive(on: bool) {
 pub fn set_flat(on: bool) {
     with_player(|player| {
         player.renderer.set_flat(on);
+        // The photographs deserve every pixel: whatever rung the governor
+        // was on when the mode arrived, the flat frame is cheap enough for
+        // the top one, and a bake taken at 55% resolution stays soft for
+        // ever after.
+        if on && player.scale_tier != 0 {
+            player.scale_tier = 0;
+            player.calm = 0;
+            player.judging = None;
+            player.apply_scale();
+        }
     });
 }
 

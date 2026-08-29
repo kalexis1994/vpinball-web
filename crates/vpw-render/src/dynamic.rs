@@ -24,7 +24,7 @@
 
 use crate::pipeline::TablePipeline;
 use crate::scene::{GpuVertex, material_slot, table_sampler, white_texture};
-use vpw_math::Mat4;
+use vpw_math::{Mat4, Vec3};
 use vpw_table::animation::AnimatedPart;
 use vpw_table::geometry::{Material, Mesh, Scene};
 use wgpu::util::DeviceExt;
@@ -230,6 +230,26 @@ impl DynamicParts {
             ));
         }
 
+        // And a shadow slot behind every ball slot: a soft dark disc
+        // projected onto the playfield, which is most of what keeps a ball
+        // looking like it is *on* the table — above all in the flat mode,
+        // where the table under it is a photograph.
+        let shadow_mesh = vpw_table::ball::shadow_mesh();
+        let (shadow_first, shadow_count) = push_mesh(&shadow_mesh, &mut vertices, &mut indices);
+        let shadow_material = vpw_table::ball::shadow_material();
+        let shadow_image = vpw_table::ball::shadow_image();
+        for _ in 0..MAX_BALLS {
+            parts.push(make_part(
+                device,
+                shadow_first,
+                shadow_count,
+                Some(&shadow_material),
+                Some(&shadow_image),
+                Mat4::IDENTITY,
+                false,
+            ));
+        }
+
         Self {
             vertices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("vpw-dynamic-vertices"),
@@ -268,12 +288,21 @@ impl DynamicParts {
         }
     }
 
-    /// Moves ball `index`, or hides it with `None`.
+    /// Moves ball `index`, or hides it with `None`. Its shadow follows: the
+    /// ball's translation dropped to the playfield, its radius read back off
+    /// the matrix — the transform is `translation · scale · rotation`, so a
+    /// basis vector's length is the radius.
     pub fn set_ball_transform(&mut self, queue: &wgpu::Queue, index: usize, m: Option<Mat4>) {
         if index >= MAX_BALLS {
             return;
         }
         self.write(queue, self.first_ball + index, m);
+        let shadow = m.map(|m| {
+            let at = m.w_axis;
+            let radius = m.x_axis.truncate().length().max(1.0);
+            vpw_table::ball::shadow_transform(Vec3::new(at.x, at.y, 0.0), radius)
+        });
+        self.write(queue, self.first_ball + MAX_BALLS + index, shadow);
     }
 
     fn write(&mut self, queue: &wgpu::Queue, index: usize, m: Option<Mat4>) {

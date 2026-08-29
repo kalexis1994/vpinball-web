@@ -692,7 +692,11 @@ impl TableRenderer {
                 self.camera.eye(),
                 &lighting,
                 self.view.shows_backbox(),
-                self.reflection_enabled,
+                // Always with the playfield's mirror, whatever the governor
+                // decided for the live path: the probe's cost is per
+                // photograph here, not per frame, and the photographs are
+                // what the player will look at for the rest of the session.
+                true,
                 3,
             );
         }
