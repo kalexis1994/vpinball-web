@@ -559,6 +559,70 @@ body::after {
 /* --- Player ---------------------------------------------------------------- */
 
 .player { position: fixed; inset: 0; background: #000; }
+
+/* --- The docked score panel ---------------------------------------------
+ *
+ * On a phone there is no gutter beside the table, so the panel takes a strip
+ * of the window instead and the playfield gets what is left. It is a real
+ * layout and not an overlay: the canvas is a flex item, so it *resizes*, the
+ * renderer reframes into the new shape, and the table comes out smaller with
+ * its proportions intact — which is the whole point, since a panel laid over
+ * the playfield would be covering the one thing being looked at.
+ *
+ * The strip's height is a variable because three other things have to know
+ * it: the HUD, the touch controls and the panel itself.
+ */
+.player-docked {
+  --dock-h: min(25vw, 13vh);
+  display: flex;
+}
+/* The canvas comes first in the DOM, so `column-reverse` is what puts the
+   strip above it. */
+.player-dock-top { flex-direction: column-reverse; }
+.player-dock-bottom { flex-direction: column; }
+
+.player-docked .player-stage canvas {
+  flex: 1 1 auto;
+  height: auto;
+  min-height: 0;
+}
+
+/* No frame, no ground, no padding: every pixel this strip takes is a pixel
+   of playfield, so it is exactly the panel and nothing else, sitting flush
+   against the table. */
+.score-dock {
+  flex: 0 0 auto;
+  height: var(--dock-h);
+  display: grid;
+  place-items: center;
+}
+
+/* Both maxima and no fixed size: a replaced element given two ceilings and
+   no dimensions keeps its own ratio inside them, which is how the panel
+   stays 4:1 on a screen too narrow for its full height.
+   Two classes deep on purpose: the floating `.score` further down the sheet
+   pins itself to a corner, and a docked panel has to outrank it rather than
+   hope to be read later. */
+.score.score-docked {
+  position: static;
+  inset: auto;
+  transform: none;
+  /* Fills the strip and keeps its shape: `contain` letterboxes rather than
+     stretches, so the panel is centred whichever of the two runs out
+     first. */
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  background: transparent;
+}
+
+/* What the strip took, the furniture gives back. */
+.player-dock-top .player-hud { top: var(--dock-h); }
+.player-dock-top .touch { top: var(--dock-h); }
+.player-dock-bottom .touch { bottom: var(--dock-h); }
 /* The playfield's canvas alone — `.player canvas` would also catch the
    floating score panel's, and its 100% height beat the panel's own
    aspect-keeping `auto` on specificity: a 4:1 display stretched to the
@@ -1614,7 +1678,10 @@ body::after {
   height: auto;
   border: 1px solid rgba(34, 232, 255, 0.35);
   border-radius: 0.4rem;
-  box-shadow: 0 0 22px rgba(34, 232, 255, 0.14), inset 0 0 20px rgba(0, 0, 0, 0.6);
+  /* No glow around it: this panel sits over the playfield, and a halo on it
+     is light spilling onto the one thing being looked at. The inner shading
+     is the glass's own falloff and stays. */
+  box-shadow: inset 0 0 20px rgba(0, 0, 0, 0.6);
   background: #04040c;
   pointer-events: none;
   /* The strokes are thin and the image is drawn at a fixed size; letting the

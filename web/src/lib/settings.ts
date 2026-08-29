@@ -18,6 +18,21 @@ export type CameraView = 'front' | 'overhead';
 
 export const CAMERA_VIEWS: readonly CameraView[] = ['front', 'overhead'];
 
+/** Which gutter the floating score panel stands in, seen from above. */
+export type ScoreSide = 'left' | 'right';
+
+export const SCORE_SIDES: readonly ScoreSide[] = ['left', 'right'];
+
+/**
+ * Where that panel goes when there is no gutter to stand in — a phone held
+ * upright, which is the case the overhead view exists for. Docking it costs
+ * the table a strip of screen, and the table shrinks to keep its shape, so
+ * "hidden" stays on offer for a player who would rather have every pixel.
+ */
+export type ScoreDock = 'top' | 'bottom' | 'hidden';
+
+export const SCORE_DOCKS: readonly ScoreDock[] = ['top', 'bottom', 'hidden'];
+
 /** What room the machine stands in: the table's own light, or a real one. */
 export type Environment = 'table' | 'bar';
 
@@ -47,6 +62,10 @@ export interface Settings {
    * lamps — which is mostly seen reflected in the steel and the plastics.
    */
   environment: Environment;
+  /** Which side the overhead view's score panel floats on. */
+  scoreSide: ScoreSide;
+  /** Where it docks when the screen is too narrow for either gutter. */
+  scoreDock: ScoreDock;
 }
 
 const DEFAULTS: Settings = {
@@ -68,6 +87,13 @@ const DEFAULTS: Settings = {
   // better first impression than a void. The table's own light is one tap
   // away for whoever wants the authored look.
   environment: 'bar',
+  // The left, because a right-handed player's hand rests over the right of a
+  // phone and the flippers are what they are watching anyway.
+  scoreSide: 'left',
+  // Above the table: it is where a machine's head is, and the strip it takes
+  // comes off the top of the playfield, which is the end nothing is decided
+  // at.
+  scoreDock: 'top',
 };
 
 let current: Settings = load();
@@ -106,6 +132,12 @@ function clean(s: Partial<Settings>): Partial<Settings> {
   }
   if (typeof s.adaptive === 'boolean') {
     out.adaptive = s.adaptive;
+  }
+  if (SCORE_SIDES.includes(s.scoreSide as ScoreSide)) {
+    out.scoreSide = s.scoreSide as ScoreSide;
+  }
+  if (SCORE_DOCKS.includes(s.scoreDock as ScoreDock)) {
+    out.scoreDock = s.scoreDock as ScoreDock;
   }
   return out;
 }

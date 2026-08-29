@@ -397,13 +397,28 @@ impl Camera {
         let up = camera.up();
         let right = forward.cross(up);
 
-        let (mut half_w, mut half_h, mut reach) = (0.0f32, 0.0f32, 0.0f32);
+        // Both edges of the content, not the furthest one: taking the largest
+        // absolute offset makes a box that *contains* everything but is
+        // centred on the target, so a table whose parts reach further to one
+        // side than the other comes out with the slack all on the other —
+        // visibly off-centre on screen. Measuring each side and moving the
+        // target to the middle of them costs nothing and is exactly centred.
+        let (mut min_w, mut max_w) = (f32::MAX, f32::MIN);
+        let (mut min_h, mut max_h) = (f32::MAX, f32::MIN);
+        let mut reach = 0.0f32;
         for p in corners {
             let v = *p - camera.target;
-            half_w = half_w.max(v.dot(right).abs());
-            half_h = half_h.max(v.dot(up).abs());
+            let (x, y) = (v.dot(right), v.dot(up));
+            min_w = min_w.min(x);
+            max_w = max_w.max(x);
+            min_h = min_h.min(y);
+            max_h = max_h.max(y);
             reach = reach.max(v.dot(forward).abs());
         }
+        // Moving the target along the view's own axes moves the eye with it,
+        // so the direction — and with it `right` and `up` — does not change.
+        camera.target += right * ((min_w + max_w) * 0.5) + up * ((min_h + max_h) * 0.5);
+        let (half_w, half_h) = ((max_w - min_w) * 0.5, (max_h - min_h) * 0.5);
         // Whichever of the two the screen cannot hold is the one that decides.
         let half_height = half_h.max(half_w / aspect.max(0.01)).max(1e-3) * margin;
         camera.lens = Lens::Orthographic { half_height };

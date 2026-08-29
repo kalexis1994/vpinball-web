@@ -21,7 +21,7 @@ import {
   startPlayer,
   type Loop,
 } from '../lib/player';
-import { ScoreDisplay } from './ScoreDisplay';
+import { ScoreDisplay, dockedAt, useNarrow } from './ScoreDisplay';
 import { TouchControls } from './TouchControls';
 import { displayName, type RomInfo, type TableEntry } from '../lib/types';
 
@@ -76,6 +76,15 @@ export function Player({ table, title, source, rom, onExit }: Props) {
   const [update, setUpdate] = useState<(() => void) | null>(null);
   const [view, setView] = useState<CameraView>(() => settings().camera);
   const [intro, setIntro] = useState<Intro>('loading');
+  // Where the score panel wants to be. The player has to know as well as the
+  // panel does: a docked panel is a strip of the window the table no longer
+  // gets, and that is this component's layout to give.
+  const [score, setScore] = useState(() => ({
+    side: settings().scoreSide,
+    dock: settings().scoreDock,
+  }));
+  const narrow = useNarrow();
+  const docked = dockedAt(view, narrow, score.dock);
 
   // The curtain follows the phase: the moment the table is ready the lamps
   // fade, the black holds a beat, and then it lifts. A new load (a different
@@ -262,6 +271,7 @@ export function Player({ table, title, source, rom, onExit }: Props) {
         // seconds of play, then takes the frame; off is immediate.
         void setFlat(s.flat);
         void setAdaptive(s.adaptive);
+        setScore({ side: s.scoreSide, dock: s.scoreDock });
       }),
     [],
   );
@@ -269,12 +279,14 @@ export function Player({ table, title, source, rom, onExit }: Props) {
   const name = table ? displayName(table) : (title ?? 'Table');
 
   return (
-    <div className="player">
+    <div
+      className={`player${docked ? ` player-docked player-dock-${docked}` : ''}`}
+    >
       {/* The canvas lands here, appended by the effect above; the div itself
           generates no box, so the canvas lays out as a direct child. */}
       <div className="player-stage" ref={stageRef} />
 
-      {phase === 'ready' && <ScoreDisplay view={view} />}
+      {phase === 'ready' && <ScoreDisplay view={view} side={score.side} docked={docked} />}
       {phase === 'ready' && <TouchControls onNewBall={() => void newBall()} />}
 
       <div className="player-hud">

@@ -16,10 +16,14 @@ import { useEffect, useState } from 'react';
 import {
   CAMERA_VIEWS,
   ENVIRONMENTS,
+  SCORE_DOCKS,
+  SCORE_SIDES,
   settings,
   updateSettings,
   type CameraView,
   type Environment,
+  type ScoreDock,
+  type ScoreSide,
 } from '../lib/settings';
 import { ScreenHead } from './ScreenHead';
 
@@ -40,6 +44,8 @@ export function Settings({ onBack }: Props) {
   const [room, setRoom] = useState<Environment>(() => settings().environment);
   const [flat, setFlat] = useState(() => settings().flat);
   const [adaptive, setAdaptive] = useState(() => settings().adaptive);
+  const [scoreSide, setScoreSide] = useState<ScoreSide>(() => settings().scoreSide);
+  const [scoreDock, setScoreDock] = useState<ScoreDock>(() => settings().scoreDock);
   const [tab, setTab] = useState<Tab>('sound');
 
   // Keep the screen honest if something else changed them — the camera has a
@@ -51,6 +57,8 @@ export function Settings({ onBack }: Props) {
     setRoom(settings().environment);
     setFlat(settings().flat);
     setAdaptive(settings().adaptive);
+    setScoreSide(settings().scoreSide);
+    setScoreDock(settings().scoreDock);
   }, []);
 
   return (
@@ -225,6 +233,55 @@ export function Settings({ onBack }: Props) {
               </span>
             </div>
           </section>
+
+          <section className="section">
+            <div className="setting">
+              <span className="setting-label">Score panel</span>
+              <span className="setting-control setting-choice">
+                {SCORE_SIDES.map((v) => (
+                  <button
+                    key={v}
+                    type="button"
+                    className={`choice${v === scoreSide ? ' choice-on' : ''}`}
+                    aria-pressed={v === scoreSide}
+                    onClick={() => {
+                      setScoreSide(v);
+                      updateSettings({ scoreSide: v });
+                    }}
+                  >
+                    {SIDE_LABELS[v]}
+                  </button>
+                ))}
+              </span>
+              <span className="setting-hint">
+                Which side of the table the score floats on in the overhead
+                view, when the window is wide enough to have a side.
+              </span>
+            </div>
+          </section>
+
+          <section className="section">
+            <div className="setting">
+              <span className="setting-label">On a phone</span>
+              <span className="setting-control setting-choice">
+                {SCORE_DOCKS.map((v) => (
+                  <button
+                    key={v}
+                    type="button"
+                    className={`choice${v === scoreDock ? ' choice-on' : ''}`}
+                    aria-pressed={v === scoreDock}
+                    onClick={() => {
+                      setScoreDock(v);
+                      updateSettings({ scoreDock: v });
+                    }}
+                  >
+                    {DOCK_LABELS[v]}
+                  </button>
+                ))}
+              </span>
+              <span className="setting-hint">{DOCK_HINTS[scoreDock]}</span>
+            </div>
+          </section>
         </div>
       )}
     </main>
@@ -239,6 +296,23 @@ const ROOM_LABELS: Record<Environment, string> = {
 const ROOM_HINTS: Record<Environment, string> = {
   table: 'The environment the table was authored under.',
   bar: 'A real bar, in HDR: its lamps and windows show up reflected in the ball and the plastics.',
+};
+
+const SIDE_LABELS: Record<ScoreSide, string> = {
+  left: 'Left',
+  right: 'Right',
+};
+
+const DOCK_LABELS: Record<ScoreDock, string> = {
+  top: 'Above',
+  bottom: 'Below',
+  hidden: 'Hidden',
+};
+
+const DOCK_HINTS: Record<ScoreDock, string> = {
+  top: 'A strip above the playfield, where a machine keeps its head. The table shrinks to fit what is left, keeping its shape.',
+  bottom: 'A strip below the playfield, under the flippers. The table shrinks to fit what is left, keeping its shape.',
+  hidden: 'No panel: the whole screen is the glass over the playfield, and the score is only on the machine.',
 };
 
 const CAMERA_LABELS: Record<CameraView, string> = {

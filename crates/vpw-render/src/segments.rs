@@ -150,13 +150,33 @@ pub fn draw(rows: &[Row<'_>], size: (u32, u32), style: Style) -> Raster {
         height / rows.len() as u32
     };
 
+    // The block of cells that is actually used, centred in the image. The
+    // column count is a fact about the *display* and stays fixed — that is
+    // what keeps the image a constant size and lets a texture be written in
+    // place — but a machine with fewer characters than positions, or an
+    // image whose width does not divide by the columns, would otherwise sit
+    // hard against the left edge with the remainder as a gap on the right.
+    // A System 11 has fourteen characters against a sixteen-cell grid, and
+    // the two spare cells were visible as exactly that gap, on the head and
+    // on the floating panel alike.
+    //
+    // One offset for every row, taken from the widest: the rows of a real
+    // display share a left edge, and centring each on its own would slide
+    // them past each other whenever they held different counts.
+    let used = rows
+        .iter()
+        .map(|r| r.segments.len().min(columns as usize) as u32)
+        .max()
+        .unwrap_or(0);
+    let x0 = width.saturating_sub(used * cell) / 2;
+
     let mut rgba = vec![0u8; (width * height * 4) as usize];
     for (r, row) in rows.iter().enumerate() {
         for (c, &mask) in row.segments.iter().take(columns as usize).enumerate() {
             draw_digit(
                 &mut rgba,
                 (width, height),
-                (c as u32 * cell, r as u32 * row_h),
+                (x0 + c as u32 * cell, r as u32 * row_h),
                 (cell, row_h),
                 mask,
                 row.glyph,
