@@ -49,7 +49,6 @@ export function TouchControls({ onNewBall }: Props) {
     <div className="touch" aria-label="Touch controls">
       <CoinSlot />
       <StartButton />
-      <VolumeButtons />
       <Plunger onNewBall={onNewBall} />
       <FlipperButton side="left" code="KeyZ" />
       <FlipperButton side="right" code="KeyM" />
@@ -114,13 +113,21 @@ function FlipperButton({ side, code }: { side: 'left' | 'right'; code: string })
  *
  * The rod does not jump to the finger. It is pulled towards it by a spring, so
  * a ball resting against the tip gets pushed instead of passed through, and
- * yanking the rod back and slamming it forward is a shot. The picture is drawn
- * from where the rod actually is, so what the player sees is what the table is
- * about to do with it.
+ * yanking the rod back and slamming it forward is a shot.
+ *
+ * While a finger is on it the picture is drawn from the **finger** rather than
+ * from the rod, and once it is let go, from the rod again. That is not a lie
+ * about where the rod is — the spring closes the gap in a few milliseconds —
+ * it is the difference between a control that stretches as you drag it and one
+ * that appears not to have noticed you. A plunger you cannot see move is a
+ * plunger nobody believes they are pulling, and this one is pulled the way the
+ * real one is: from the top of its travel, downwards, and let go.
  */
 function Plunger({ onNewBall }: { onNewBall?: () => void }) {
   // 0 at rest, 1 fully drawn back. Read from the table every frame.
   const [pulled, setPulled] = useState(0);
+  /** Where the finger has it, or `null` when no finger is on it. */
+  const [held, setHeld] = useState<number | null>(null);
 
   useEffect(() => {
     let frame = 0;
@@ -144,24 +151,41 @@ function Plunger({ onNewBall }: { onNewBall?: () => void }) {
   }, []);
 
   const origin = useRef(0);
+  /** The same thing as `held`, for the handlers, which see it as it is now
+   *  rather than as it was when they were made. */
+  const holding = useRef(false);
 
   const down = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
-    e.currentTarget.setPointerCapture(e.pointerId);
+    // Nice to have and not to be relied on: it keeps the drag alive when the
+    // finger leaves the widget, and it throws on some pointers. Whether the
+    // plunger is being held is tracked here, not asked of the browser —
+    // asking is what made a drag that started slightly off the knob do
+    // nothing at all.
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch {
+      /* the drag still works, it just ends at the edge */
+    }
     e.preventDefault();
     origin.current = e.clientY;
+    holding.current = true;
+    setHeld(0);
     holdPlunger(0);
   }, []);
 
   const move = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
-    if (!e.currentTarget.hasPointerCapture(e.pointerId)) return;
+    if (!holding.current) return;
     // Downwards is backwards: the shooter is at the bottom right of the glass
     // and pulling it is pulling it towards you.
-    const dragged = (e.clientY - origin.current) / PLUNGER_TRAVEL;
-    holdPlunger(Math.max(0, Math.min(1, dragged)));
+    const dragged = Math.max(0, Math.min(1, (e.clientY - origin.current) / PLUNGER_TRAVEL));
+    setHeld(dragged);
+    holdPlunger(dragged);
   }, []);
 
   const up = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     e.preventDefault();
+    holding.current = false;
+    setHeld(null);
     releasePlunger();
   }, []);
 
@@ -178,10 +202,10 @@ function Plunger({ onNewBall }: { onNewBall?: () => void }) {
       // and what the keyboard spells `Enter`.
       onDoubleClick={() => onNewBall?.()}
     >
-      <PlungerIcon pulled={pulled} />
+      <PlungerIcon pulled={held ?? pulled} />
       <span
         className="touch-thumb"
-        style={{ transform: `translateY(${(pulled * PLUNGER_TRAVEL).toFixed(1)}px)` }}
+        style={{ transform: `translateY(${((held ?? pulled) * PLUNGER_TRAVEL).toFixed(1)}px)` }}
         aria-hidden="true"
       >
         <ThumbIcon />
@@ -225,48 +249,6 @@ function CoinSlot() {
     >
       <CoinIcon />
     </button>
-  );
-}
-
-/**
- * The machine's volume, which is the machine's and not the page's.
- *
- * These are the red and the green button on the inside of a Stern coin door:
- * the red one turns the volume down a step and the green one up, and the
- * level lives in the machine's own battery-backed memory, so it is saved with
- * the high scores and comes back next time. Nothing here scales the audio —
- * a machine that ships quiet is turned up the way an operator turns it up,
- * and the display says what it is set to as you press.
- *
- * Under the start button, out of the way: it is a setting, not a control.
- */
-function VolumeButtons() {
-  const tap = useCallback((code: string) => {
-    void (async () => {
-      await pressKey(code, true);
-      window.setTimeout(() => void pressKey(code, false), 100);
-    })();
-  }, []);
-
-  const button = (code: string, label: string, glyph: string) => (
-    <button
-      className="touch-volume-btn"
-      aria-label={label}
-      onPointerDown={(e) => {
-        e.preventDefault();
-        tap(code);
-      }}
-      onContextMenu={(e) => e.preventDefault()}
-    >
-      {glyph}
-    </button>
-  );
-
-  return (
-    <div className="touch-volume" aria-label="Machine volume">
-      {button('Digit9', 'Volume down', '−')}
-      {button('Digit8', 'Volume up', '+')}
-    </div>
   );
 }
 
