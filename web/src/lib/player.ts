@@ -507,6 +507,29 @@ export async function setAdaptive(on: boolean): Promise<void> {
   await (await host()).call('setAdaptive', [on]);
 }
 
+/**
+ * Holds the game still, or lets it go on. See the player's `setPaused`: the
+ * physics and the machine stop together and the last frame stays up.
+ */
+export async function setPaused(on: boolean): Promise<void> {
+  if (!started) return;
+  await (await host()).call('setPaused', [on]);
+}
+
+/**
+ * Ends the game: the machine, the ball and the scene are dropped.
+ *
+ * The memoised load goes with them, so the next visit reads the table again
+ * rather than handing back the one that was just quit — which is the
+ * difference between "quit" and "went to look at the menu".
+ */
+export async function stopTable(): Promise<void> {
+  if (!started) return;
+  await (await host()).call('stopTable');
+  forgetLoadedTable();
+  runningSet = null;
+}
+
 /** The next view round, for a key that cycles rather than choosing. */
 export function nextCameraView(from: CameraView): CameraView {
   const i = CAMERA_VIEWS.indexOf(from);

@@ -12,11 +12,14 @@ import {
   newBall,
   nextCameraView,
   playerCanvas,
+  releaseAllKeys,
   saveMachineState,
   setCameraView,
   setEnvironment,
   setAdaptive,
   setFlat,
+  setPaused,
+  stopTable,
   setTelemetry,
   startPlayer,
   type Loop,
@@ -83,6 +86,8 @@ export function Player({ table, title, source, rom, onExit }: Props) {
     side: settings().scoreSide,
     dock: settings().scoreDock,
   }));
+  /** Whether the pause menu is up, which is also whether the game is held. */
+  const [paused, setPaused_] = useState(false);
   const narrow = useNarrow();
   const docked = dockedAt(view, narrow, score.dock);
 
@@ -219,7 +224,10 @@ export function Player({ table, title, source, rom, onExit }: Props) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       void startAudio();
-      if (e.key === 'Escape') onExit();
+      // Escape is the way in and the way out of the pause menu, the way it
+      // is in every game: it never leaves the table on its own, because
+      // leaving is a decision with a ball in play behind it.
+      if (e.key === 'Escape') setPaused_((p) => !p);
       // `B` for the bug you just saw. The table does not use it — neither
       // `Action::from_key_code` nor `vp_key_code` maps it — so pressing it
       // marks the moment without also doing something on the playfield.
@@ -256,6 +264,15 @@ export function Player({ table, title, source, rom, onExit }: Props) {
     };
   }, [onExit]);
 
+  // The game is held while the menu is up. Letting go of the keys with it:
+  // a flipper held when the menu opened would otherwise still be held when
+  // it closes, since the `keyup` went to a page that was not listening.
+  useEffect(() => {
+    if (phase !== 'ready') return;
+    void setPaused(paused);
+    if (paused) void releaseAllKeys();
+  }, [paused, phase]);
+
   // One subscription for both ways in. The key writes the setting and the menu
   // writes the setting, so the camera only has to watch the setting — which
   // also means the two can never drift apart.
@@ -290,7 +307,11 @@ export function Player({ table, title, source, rom, onExit }: Props) {
       {phase === 'ready' && <TouchControls onNewBall={() => void newBall()} />}
 
       <div className="player-hud">
-        <button className="touch-exit" onClick={onExit} aria-label={`Leave ${name}`}>
+        <button
+          className="touch-exit"
+          onClick={() => setPaused_(true)}
+          aria-label={`Pause ${name}`}
+        >
           <ExitIcon />
         </button>
         {/* The numbers only appear when they are news: the table tilted, or the
@@ -320,6 +341,36 @@ export function Player({ table, title, source, rom, onExit }: Props) {
           </span>
         )}
       </div>
+
+      {paused && phase === 'ready' && (
+        <div className="pause" role="dialog" aria-modal="true" aria-label="Paused">
+          <div className="pause-panel">
+            <span className="pause-kicker">Paused</span>
+            <h2 className="pause-title">{name}</h2>
+            <div className="pause-actions">
+              <button className="btn btn-primary" onClick={() => setPaused_(false)} autoFocus>
+                Resume
+              </button>
+              <button
+                className="btn"
+                onClick={() => {
+                  // The order matters: the machine's memory is written while
+                  // there is still a machine to ask, and only then is the
+                  // game let go of.
+                  void (async () => {
+                    await saveMachineState();
+                    await stopTable();
+                    onExit();
+                  })();
+                }}
+              >
+                Quit
+              </button>
+            </div>
+            <p className="pause-hint">Escape resumes.</p>
+          </div>
+        </div>
+      )}
 
       {/* The curtain: the table's name up in lights while the machine gets
           ready, a fade to black, and the black lifting off the playfield. */}

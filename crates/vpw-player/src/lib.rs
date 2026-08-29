@@ -186,6 +186,8 @@ struct Player {
     /// rather have a slow sharp picture than a fast soft one, and that is
     /// their call to make.
     adaptive: bool,
+    /// Whether the game is held still. See [`set_paused`].
+    paused: bool,
 }
 
 /// The rungs of the quality ladder, as fractions of the canvas size.
@@ -368,6 +370,15 @@ impl Player {
     }
 
     fn frame(&mut self, now_ms: f64) {
+        // Paused: the clocks are held exactly as they are for a table nobody
+        // is looking at, and for the same reason. Nothing is drawn either,
+        // which is what leaves the last frame standing on the canvas — the
+        // pause menu wants the table behind it, stopped, not black.
+        if self.paused {
+            self.last_ms = now_ms;
+            self.finished_ms = clock_ms();
+            return;
+        }
         // The clocks are held still rather than left to run while nobody can
         // see the table, or the first frame back owes every millisecond spent
         // in the menu and the loop tries to pay it in one go.
@@ -1651,6 +1662,7 @@ fn install_and_run(renderer: TableRenderer, surface: Surface) {
         climbed_ago: u32::MAX,
         climb_lockout: 0,
         adaptive: true,
+        paused: false,
     }));
     PLAYER.with(|p| *p.borrow_mut() = Some(player.clone()));
 
@@ -1909,6 +1921,47 @@ pub fn set_environment(bytes: &[u8]) -> bool {
             .set_environment((!bytes.is_empty()).then_some(bytes))
     })
     .unwrap_or(false)
+}
+
+/// Holds the game still, or lets it go on.
+///
+/// A real pause and not a hidden one: the physics stops, the machine stops,
+/// nothing is drawn, and the clocks are held where they are so the first
+/// frame back does not owe the loop every millisecond spent in the menu. The
+/// last frame stays on the canvas, which is what the pause menu stands over.
+#[wasm_bindgen(js_name = setPaused)]
+pub fn set_paused(on: bool) {
+    with_player(|player| {
+        if player.paused == on {
+            return;
+        }
+        player.paused = on;
+        // Coming back, the clock starts from now: the time spent in the menu
+        // belongs to nobody.
+        if !on {
+            player.last_ms = clock_ms();
+            player.finished_ms = player.last_ms;
+        }
+    });
+}
+
+/// Ends the game and lets go of the table.
+///
+/// What "quit" means, and it has to mean this: the machine, the script, the
+/// ball in play and the uploaded scene are all dropped, so nothing is left
+/// running behind a menu and coming back starts the table fresh rather than
+/// resuming somebody else's ball. The player itself stays — one wasm
+/// instance, one canvas, for the life of the page — but it stays empty and
+/// paused, which costs a cleared frame and nothing else.
+#[wasm_bindgen(js_name = stopTable)]
+pub fn stop_table() {
+    with_player(|player| {
+        player.table = None;
+        player.renderer.unload();
+        player.display_segments.clear();
+        player.display_sent = None;
+        player.paused = true;
+    });
 }
 
 /// Switches the resolution governor. Off, the ladder snaps back to full

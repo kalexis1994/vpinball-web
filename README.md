@@ -1,21 +1,40 @@
 # vpinball-web
 
-A port of the [Visual Pinball][vpx] *player* to Rust + WebAssembly + WebGPU
-(`wgpu`), with the [PinMAME][pinmame] side of it — the machines' own firmware —
-ported alongside.
+### ▶ **[Play it now — kalexis1994.github.io/vpinball-web](https://kalexis1994.github.io/vpinball-web/)**
 
-**▶ [Play it](https://kalexis1994.github.io/vpinball-web/)**
+Real pinball tables, running in your browser. No install, no account, no
+server: the machine is emulated and the playfield is drawn in the tab you
+already have open.
 
-The goal is to run VPX tables in the browser with good performance on modest
-devices. The game only: no editor, no VR, no legacy backends.
+---
 
-See [docs/state-of-the-port.md](docs/state-of-the-port.md) for where the port
-stands — what is emulated, how it was verified, and what is missing — and
-[docs/porting-plan.md](docs/porting-plan.md) for the scope, the analysis of
-the original code and the order of work.
+## About
 
-[vpx]: https://github.com/vpinball/vpinball
-[pinmame]: https://github.com/vpinball/pinmame
+A pinball machine from the eighties is two things at once — a physical table
+with a steel ball loose on it, and a computer with the rules of the game
+burnt into a chip. This runs both. The physics of
+[Visual Pinball][vpx] and the firmware emulation of [PinMAME][pinmame] are
+ported to Rust and compiled to WebAssembly, drawn with WebGPU, so a table
+authored for a desktop simulator plays on a phone through a URL.
+
+**What you get**
+
+- **The whole machine.** Not a video game *about* pinball: the table's own
+  script runs, the game's original ROM runs on an emulated CPU, and the
+  score, the lamps, the sounds and the rules are the machine's own.
+- **Your tables.** Bring any `.vpx` file and its ROM. They stay in your
+  browser and nothing is ever uploaded.
+- **On a phone, properly.** Touch flippers, a plunger you drag, an overhead
+  view where the screen is the glass over the playfield, and a renderer that
+  trades quality for frames on its own when a device needs it.
+- **Offline.** Once opened, the player is cached; the tables already live in
+  your browser. It works on a plane.
+
+**What you need**
+
+A reasonably current browser — Chrome, Edge, Firefox or Safari — on a
+desktop, a tablet or a phone. WebGPU is used where it exists and WebGL2 where
+it does not.
 
 ## Bring your own table
 
@@ -26,10 +45,59 @@ copyrighted firmware. What is deployed is the machine that runs them.
 Open the page, go to **Content**, and add a `.vpx` by button or by dropping it
 in. It is parsed in a worker and kept in your browser's IndexedDB, so it is
 there next time. If the table needs a ROM the menu says which one — `f14_l1.zip`
-for F-14 Tomcat — and you add the zip the same way.
+for F-14 Tomcat — and you add the zip the same way. A zip with several tables
+and their ROMs in it can be dropped whole; you are shown what was found before
+anything is kept.
 
 Nothing is uploaded anywhere. There is no server: the table is parsed, the
 machine is emulated and the playfield is drawn in the tab.
+
+## Playing it
+
+| key | what it does |
+|-----|--------------|
+| `Z` / `M` | left and right flipper |
+| space | hold to pull the plunger, let go to shoot |
+| ← ↑ → | nudge the cabinet — too hard and it tilts |
+| `C` | switch between the front view and the overhead one |
+| `Esc` | pause, with resume and quit |
+
+On a phone the same controls are on screen: the flippers are the two buttons
+at the bottom corners, the plunger is dragged down and released, and the coin
+and start buttons are where a cabinet keeps them.
+
+**Settings** has two tabs. *Sound* is the volume. *Graphics* is where a slow
+machine is made fast:
+
+- **Renderer** — *Full 3D* is the real thing, lit and reflected. *Flat (2D)*
+  photographs the table once and plays the photographs, keeping only the ball
+  and the moving parts in 3D; it looks close and costs a fraction, which is
+  what makes an older phone play at full speed.
+- **Adaptive resolution** — on, the picture softens when the device falls
+  behind and sharpens when it catches up. Off, it stays sharp whatever the
+  frame rate does.
+- **Room** — the light the table stands in: its own, or a real bar in HDR
+  whose lamps show up reflected in the ball and the plastics.
+- **Camera** and **score panel** — where you look from, and where the
+  machine's score display sits when its head is not in shot.
+
+## For developers
+
+A port of the Visual Pinball *player* to Rust + WebAssembly + WebGPU
+(`wgpu`), with the PinMAME side of it — the machines' own firmware — ported
+alongside. The goal is to run VPX tables in the browser with good performance
+on modest devices. The game only: no editor, no VR, no legacy backends.
+
+Nearly every file cites the one it was ported from, by name and line, because
+"it behaves the same" is a claim and a citation is evidence.
+
+See [docs/state-of-the-port.md](docs/state-of-the-port.md) for where the port
+stands — what is emulated, how it was verified, and what is missing — and
+[docs/porting-plan.md](docs/porting-plan.md) for the scope, the analysis of
+the original code and the order of work.
+
+[vpx]: https://github.com/vpinball/vpinball
+[pinmame]: https://github.com/vpinball/pinmame
 
 ## Layout
 
@@ -177,23 +245,21 @@ console names the door that was opened either way.
 
 On entering a table the console prints fps and physics ticks per second.
 
-## Playing
+## The keys in full
+
+The player's own keys are in [Playing it](#playing-it); these are the rest,
+which exist for working on it rather than for playing.
 
 | key | what it does |
 |---|---|
-| `Z` | left flipper |
-| `M` | right flipper |
-| space | **held**, pulls the plunger; on release, it shoots |
-| `←` `↑` `→` | nudge the cabinet |
 | `Enter` | new ball, and clears the tilt |
-| `C` | switch the camera: in front of the machine, or straight down |
 | `B` | mark: saves the last 30 s of telemetry |
-| `Esc` | back to the menu |
 
 The physics runs at a fixed 1000 Hz, decoupled from the frame rate, exactly as
-in the original. The HUD shows both numbers: a physics rate below 1000 means the
-simulation is falling behind and the table is running in slow motion, which
-looks like lag but is not.
+in the original. The HUD shows both numbers when either is worth reading: a
+physics rate below 1000 means the simulation is falling behind and the table is
+running in slow motion, which looks like lag but is not, and a `Q` beside them
+is the rung the quality ladder has dropped to.
 
 ## Where the player runs
 

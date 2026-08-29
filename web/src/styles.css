@@ -560,6 +560,75 @@ body::after {
 
 .player { position: fixed; inset: 0; background: #000; }
 
+/* --- The pause menu ------------------------------------------------------
+ *
+ * Over a table that is genuinely stopped — the physics, the machine and the
+ * drawing all held — so what is behind the glass is the last frame and not a
+ * game carrying on without its player.
+ */
+.pause {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: grid;
+  place-items: center;
+  padding: 1.5rem;
+  background: rgba(4, 2, 12, 0.72);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  animation: rise-in 180ms ease backwards;
+}
+
+.pause-panel {
+  width: min(24rem, 100%);
+  padding: 1.6rem 1.5rem 1.2rem;
+  text-align: center;
+  border: 1px solid rgba(255, 46, 136, 0.35);
+  border-radius: 16px;
+  background: linear-gradient(180deg, rgba(40, 21, 78, 0.96), rgba(12, 7, 26, 0.97) 40%);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6), 0 0 36px var(--glow-soft);
+}
+
+.pause-kicker {
+  display: block;
+  font-family: var(--display);
+  color: var(--cyan);
+  font-size: 0.68rem;
+  font-weight: 500;
+  letter-spacing: 0.4em;
+  text-transform: uppercase;
+  text-shadow: 0 0 16px var(--glow-cyan);
+}
+
+.pause-title {
+  margin: 0.7rem 0 1.4rem;
+  font-family: var(--display);
+  font-size: clamp(1.05rem, 4.5vw, 1.4rem);
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  line-height: 1.25;
+  text-transform: uppercase;
+  overflow-wrap: anywhere;
+  background: linear-gradient(180deg, #ffffff 0%, #cfe0ff 30%, #7f8fd8 50%, #ffffff 55%, #6a79c6 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  filter: drop-shadow(0 2px 0 #7b2ff7) drop-shadow(0 0 18px var(--glow-cyan));
+}
+
+.pause-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+.pause-actions .btn { padding: 0.75rem 1rem; font-size: 0.9rem; }
+
+.pause-hint {
+  margin: 1rem 0 0;
+  color: var(--text-dim);
+  font-size: 0.78rem;
+}
+
 /* --- The docked score panel ---------------------------------------------
  *
  * On a phone there is no gutter beside the table, so the panel takes a strip
