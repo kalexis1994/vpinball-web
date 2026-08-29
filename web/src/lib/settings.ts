@@ -11,7 +11,18 @@
 // means moving the volume slider does not drag in three megabytes of wasm to
 // find out nobody is listening yet.
 
+import { cleanKeys, cleanPad, type KeyMap, type PadMap } from './controls';
+
 const KEY = 'vpw.settings';
+
+/**
+ * How far above "as recorded" either half of the mix can be pushed.
+ *
+ * The same ceiling the player clamps to. It exists because plenty of ROMs
+ * were mastered quietly, and a table cannot be balanced against one of those
+ * by turning the table down — that only makes the whole machine quiet.
+ */
+export const MAX_MIX_GAIN = 1.2;
 
 /** Where the player looks at the machine from. */
 export type CameraView = 'front' | 'overhead';
@@ -62,6 +73,18 @@ export interface Settings {
    * lamps — which is mostly seen reflected in the steel and the plastics.
    */
   environment: Environment;
+  /**
+   * The balance between the two halves of a machine's noise, each 0 to 1 and
+   * both under {@link Settings.volume}: what the game *says* — its board's
+   * music, speech and effects — against what the table *does* when it is hit.
+   */
+  volumeMachine: number;
+  volumeTable: number;
+  /** The ceiling on both, matching the player's own. Above one is a boost. */
+  /** What each key on the keyboard does. See `lib/controls`. */
+  keys: KeyMap;
+  /** And each button on a gamepad, kept apart from the keyboard's. */
+  pad: PadMap;
   /** Which side the overhead view's score panel floats on. */
   scoreSide: ScoreSide;
   /** Where it docks when the screen is too narrow for either gutter. */
@@ -87,6 +110,15 @@ const DEFAULTS: Settings = {
   // better first impression than a void. The table's own light is one tap
   // away for whoever wants the authored look.
   environment: 'bar',
+  // Both halves at full: the balance the tables and the ROMs were authored
+  // against, and the place to start from when changing it.
+  volumeMachine: 1,
+  volumeTable: 1,
+  // The machine's own labelling, and a pad laid out the way a console
+  // player expects. Both live in `lib/controls`, which is also what knows
+  // how to read one back that an older version of this page wrote.
+  keys: cleanKeys(null),
+  pad: cleanPad(null),
   // The left, because a right-handed player's hand rests over the right of a
   // phone and the flippers are what they are watching anyway.
   scoreSide: 'left',
@@ -132,6 +164,21 @@ function clean(s: Partial<Settings>): Partial<Settings> {
   }
   if (typeof s.adaptive === 'boolean') {
     out.adaptive = s.adaptive;
+  }
+  for (const k of ['volumeMachine', 'volumeTable'] as const) {
+    const v = s[k];
+    if (typeof v === 'number' && Number.isFinite(v)) {
+      out[k] = Math.min(MAX_MIX_GAIN, Math.max(0, v));
+    }
+  }
+  // Always rebuilt rather than trusted: a binding map is the one setting
+  // that can leave the player unable to flip, and a key this build does not
+  // know sitting in a slot is exactly how that happens.
+  if (s.keys !== undefined) {
+    out.keys = cleanKeys(s.keys);
+  }
+  if (s.pad !== undefined) {
+    out.pad = cleanPad(s.pad);
   }
   if (SCORE_SIDES.includes(s.scoreSide as ScoreSide)) {
     out.scoreSide = s.scoreSide as ScoreSide;

@@ -171,6 +171,12 @@ impl Sounds {
         // table author assumed it did.
         let gain = volume.sqrt();
         let pan = pan_curve(stored_pan + request.pan);
+        if *PAN_DEBUG {
+            eprintln!(
+                "PAN {name}: stored {stored_pan:+.3} request {:+.3} -> {pan:+.3}",
+                request.pan
+            );
+        }
         let speed = self.speed(rate, request);
 
         // `AudioPlayer.cpp:486`. Three cases, and the middle one matters most:
@@ -247,20 +253,46 @@ impl Sounds {
     }
 }
 
-/// The pan curve, `SoundPlayer.cpp:387`.
+/// `VPW_PAN=1` prints every sound's pan as it is played. Read once: this is
+/// on the path of every `PlaySound`, and a table under multiball makes a lot
+/// of them.
+static PAN_DEBUG: std::sync::LazyLock<bool> =
+    std::sync::LazyLock::new(|| std::env::var("VPW_PAN").is_ok());
+
+/// How far off centre a sound is ever placed.
+///
+/// The curve below is the original's and is kept, but what it hands back is
+/// brutal: `core.vbs` works its pan out linearly from where the object stands
+/// across the table — `CoreAudioPan`, `(x*2/width)-1` — and the tenth root
+/// turns six per cent off centre into seventy-five. Measured on F-14, a ball
+/// rolling a little right of the middle came out at +0.76, which is most of
+/// the way to one speaker with nothing in the other, and a ball crossing the
+/// table swung from one ear to the other.
+///
+/// A pinball table is a metre wide and stands in front of you. Nothing on it
+/// is *hard* left or right; the ball is a few degrees off centre at the
+/// extremes, and what the ear wants is that much — a direction, not a
+/// destination. So the placed pan is scaled, once, at the end: the curve's
+/// full swing becomes half of one, which keeps both speakers in play at every
+/// point on the playfield and still says which side the sound came from.
+const STEREO_WIDTH: f32 = 0.5;
+
+/// The pan curve, `SoundPlayer.cpp:387`, narrowed to [`STEREO_WIDTH`].
 ///
 /// Tables were written against a version that raised the pan to the tenth
 /// power, so they pass values chosen to survive that. The original now takes
 /// the tenth root to undo it, which means a table's `0.5` really is near hard
-/// over rather than half way. Skipping this leaves everything sounding like it
-/// came from the middle.
+/// over rather than half way. Skipping it leaves everything sounding like it
+/// came from the middle; keeping it unnarrowed leaves everything sounding
+/// like it came from one wall.
 fn pan_curve(pan: f32) -> f32 {
     let p = pan.clamp(-1.0, 1.0);
-    if p < 0.0 {
+    let curved = if p < 0.0 {
         -(-p).powf(0.1)
     } else {
         p.powf(0.1)
-    }
+    };
+    curved * STEREO_WIDTH
 }
 
 #[cfg(test)]
@@ -447,12 +479,15 @@ mod tests {
                 .step_by(2)
                 .fold(0.0f32, |a, x| a.max(x.abs()))
         };
+        // Decisively right, and — since the width is limited on purpose, see
+        // `STEREO_WIDTH` — still present on the left.
         assert!(
-            side(1) > side(0) * 5.0,
-            "left {} right {}",
+            side(1) > side(0) * 2.0,
+            "it should have moved right: left {} right {}",
             side(0),
             side(1)
         );
+        assert!(side(0) > 0.05, "and not abandoned the left: {}", side(0));
     }
 
     #[test]
@@ -479,16 +514,26 @@ mod tests {
     }
 
     #[test]
-    fn the_pan_curve_pushes_a_middling_value_to_the_side() {
-        // Tables pass values chosen to survive being raised to the tenth power,
-        // so 0.5 really does mean nearly hard over. Without the curve
-        // everything sounds like it is in the middle.
-        assert!(pan_curve(0.5) > 0.9, "{}", pan_curve(0.5));
-        assert!(pan_curve(-0.5) < -0.9);
+    fn a_sound_off_centre_leans_but_never_leaves_the_other_side() {
+        // Two things at once, and the second is why this test changed. The
+        // curve is the original's, so a middling value really does mean "well
+        // over to that side" rather than "slightly": without it everything
+        // sounds like it came from the middle.
+        assert!(pan_curve(0.5) > 0.4, "{}", pan_curve(0.5));
+        assert!(pan_curve(-0.5) < -0.4);
         assert_eq!(pan_curve(0.0), 0.0);
-        assert_eq!(pan_curve(1.0), 1.0);
+
+        // But the swing is bounded. A table is a metre wide and stands in
+        // front of you; nothing on it belongs hard against one speaker, and
+        // the measured case — a ball six per cent right of the middle, which
+        // used to come out at +0.76 — has to stay a lean.
+        assert!(pan_curve(1.0) <= STEREO_WIDTH + 1e-6);
+        assert!(pan_curve(0.063) < 0.45, "{}", pan_curve(0.063));
+        for p in [-4.0, -1.0, 0.06, 0.5, 1.0, 4.0] {
+            assert!(pan_curve(p).abs() <= STEREO_WIDTH + 1e-6, "pan {p}");
+        }
         // And it stays inside the range whatever a table adds up to.
-        assert_eq!(pan_curve(4.0), 1.0);
+        assert_eq!(pan_curve(4.0), STEREO_WIDTH);
     }
 
     #[test]

@@ -1038,6 +1038,28 @@ pub fn release_all_keys() {
     });
 }
 
+/// How loud the machine's sound board is: its music, its speech and the
+/// game's own effects, against the table's mechanical noise. 0 to 1, and it
+/// sits under the master rather than beside it.
+#[wasm_bindgen(js_name = setMachineVolume)]
+pub fn set_machine_volume(volume: f32) {
+    with_player(|player| {
+        if let Some(table) = player.table.as_mut() {
+            table.set_machine_volume(volume);
+        }
+    });
+}
+
+/// And the table's own: the bumpers, the flippers, the ball on the wood.
+#[wasm_bindgen(js_name = setTableVolume)]
+pub fn set_table_volume(volume: f32) {
+    with_player(|player| {
+        if let Some(table) = player.table.as_mut() {
+            table.set_table_volume(volume);
+        }
+    });
+}
+
 /// Master volume, 0 to 1.
 #[wasm_bindgen(js_name = setVolume)]
 pub fn set_volume(volume: f32) {

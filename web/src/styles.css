@@ -1378,7 +1378,7 @@ body::after {
 /* The tab bar: a row of pills, the chosen one lit like a cabinet button. */
 .tabs {
   display: flex;
-  gap: 0.5rem;
+  gap: 0.35rem;
   margin: 1.25rem 0 0.25rem;
   padding: 0.3rem;
   border: 1px solid var(--line);
@@ -1387,10 +1387,31 @@ body::after {
   backdrop-filter: blur(6px);
   -webkit-backdrop-filter: blur(6px);
   width: fit-content;
+  /* Four of these do not fit across a phone. On anything with room the bar
+     stays a pill and scrolls if it has to; on a narrow screen it becomes a
+     block of four instead, because a tab cut off at the edge is a tab
+     nobody knows is there. */
+  max-width: 100%;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.tabs::-webkit-scrollbar { display: none; }
+
+@media (max-width: 30rem) {
+  .tabs {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.3rem;
+    width: 100%;
+    border-radius: 16px;
+    overflow: visible;
+  }
+  .tab { padding: 0.5rem 0.4rem; text-align: center; }
 }
 
 .tab {
-  padding: 0.45rem 1.35rem;
+  flex: 0 0 auto;
+  padding: 0.45rem clamp(0.7rem, 3.4vw, 1.35rem);
   border: 1px solid transparent;
   border-radius: 999px;
   background: transparent;
@@ -1434,6 +1455,8 @@ body::after {
   box-shadow: 0 0 18px rgba(0, 0, 0, 0.35), 0 0 16px rgba(34, 232, 255, 0.12);
 }
 
+.setting + .setting { margin-top: 0.7rem; }
+
 .setting-label {
   display: flex;
   align-items: baseline;
@@ -1450,6 +1473,13 @@ body::after {
   color: var(--cyan);
   font-weight: 400;
   text-shadow: 0 0 12px var(--glow-cyan);
+}
+
+/* Past what was recorded: the number says so, in the colour the rest of the
+   page uses for "this is turned up". */
+.setting-boosted {
+  color: var(--yellow);
+  text-shadow: 0 0 12px rgba(255, 214, 10, 0.45);
 }
 
 .setting-control {
@@ -1527,6 +1557,112 @@ body::after {
   border-radius: 50%;
   background: radial-gradient(circle at 32% 28%, var(--accent-hi), var(--accent) 65%);
   box-shadow: 0 0 10px var(--glow);
+}
+
+/* --- Bindings -------------------------------------------------------------
+ *
+ * A row per action: what it does on the left, what presses it on the right.
+ * The right-hand side is a button because that is what it is — pressing it
+ * arms the row, and the next key or pad button lands in it.
+ */
+
+.binding-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  background: var(--line);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.binding {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.6rem 0.85rem;
+  background: var(--surface);
+}
+
+.binding-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.92rem;
+}
+
+.binding-hint {
+  display: block;
+  margin-top: 0.1rem;
+  color: var(--text-dim);
+  font-size: 0.78rem;
+}
+
+/* The keycap. Monospaced digits and a fixed minimum so a row does not jump
+   about as the binding changes width. */
+.binding-key {
+  flex: 0 0 auto;
+  min-width: 7.5rem;
+  padding: 0.45rem 0.8rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(16, 9, 34, 0.8);
+  color: var(--text);
+  font: inherit;
+  font-family: var(--display);
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color 140ms, box-shadow 180ms, color 140ms;
+}
+.binding-key:hover {
+  border-color: var(--cyan);
+  box-shadow: 0 0 14px rgba(34, 232, 255, 0.14);
+}
+
+/* Armed: it is waiting for the next thing pressed, and it says so by
+   breathing rather than by shouting. */
+.binding-listening {
+  border-color: var(--accent);
+  color: var(--accent-hi);
+  box-shadow: 0 0 18px var(--glow-soft);
+  animation: binding-wait 1.1s ease-in-out infinite;
+}
+
+@keyframes binding-wait {
+  50% { box-shadow: 0 0 26px var(--glow); border-color: var(--accent-hi); }
+}
+
+.bindings-foot {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin-top: 0.7rem;
+}
+.bindings-foot .setting-hint { flex: 1; min-width: 12rem; margin-top: 0; }
+
+.bindings-note {
+  margin: 0 0 0.6rem;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid rgba(255, 214, 10, 0.3);
+  border-radius: 10px;
+  background: rgba(255, 214, 10, 0.08);
+  color: var(--text-dim);
+  font-size: 0.85rem;
+}
+
+@media (max-width: 26rem) {
+  .binding { flex-wrap: wrap; }
+  .binding-key { min-width: 6rem; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .binding-listening { animation: none; }
 }
 
 /* --- The import review ------------------------------------------------------

@@ -306,6 +306,7 @@ export function loadTable(
  * does not trace twice. */
 const baking = new Set<string>();
 
+
 /**
  * Sees to it that the table's GI lightmaps are installed: from IndexedDB if a
  * past visit traced them, from the bake worker if not — in which case they are
@@ -505,6 +506,18 @@ export async function setFlat(on: boolean): Promise<void> {
 export async function setAdaptive(on: boolean): Promise<void> {
   if (!started) return;
   await (await host()).call('setAdaptive', [on]);
+}
+
+/**
+ * The balance between the machine's sound board and the table's mechanics,
+ * each 0 to 1 and both under the master volume. Applied inside the game,
+ * where the two are mixed — the page's own gain node knows only the master.
+ */
+export async function setMix(machine: number, table: number): Promise<void> {
+  if (!started) return;
+  const h = await host();
+  await h.call('setMachineVolume', [machine]);
+  await h.call('setTableVolume', [table]);
 }
 
 /**

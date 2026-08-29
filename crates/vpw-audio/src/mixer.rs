@@ -98,7 +98,17 @@ pub struct Mixer {
     pub master: f32,
     /// Gain for the board's stream on its own, so the machine can be balanced
     /// against the mechanical sounds without touching either.
+    ///
+    /// The two halves of a pinball machine's noise do not come from the same
+    /// place and a player does not always want them at the same level: the
+    /// board is the game *talking* — its music, its speech, its effects — and
+    /// the voices below are the table being *hit*. Somebody who wants the
+    /// callouts over the bumpers, or the bumpers without the callouts, is
+    /// asking for these two and not for the master.
     pub board_gain: f32,
+    /// Gain for everything the table itself plays: the bumpers, the flippers,
+    /// the ball on the wood. See [`Mixer::board_gain`].
+    pub voice_gain: f32,
     /// How many voices can sound at once.
     ///
     /// A table under multiball with the flippers going asks for a handful; the
@@ -125,6 +135,7 @@ impl Mixer {
             stream_at: 0,
             master: 1.0,
             board_gain: 1.0,
+            voice_gain: 1.0,
             max_voices: 24,
         }
     }
@@ -238,8 +249,8 @@ impl Mixer {
             let (frames, _) = out.as_chunks_mut::<2>();
             for frame in frames {
                 let (l, r) = voice.sample();
-                frame[0] += l * voice.left;
-                frame[1] += r * voice.right;
+                frame[0] += l * voice.left * self.voice_gain;
+                frame[1] += r * voice.right * self.voice_gain;
 
                 voice.at += voice.step;
                 if voice.at >= voice.frames() as f64 {
@@ -522,6 +533,36 @@ mod tests {
         m.render(&mut out);
         assert!(peak(&out, 0) > 0.5);
         assert!(peak(&out, 1) < 0.01);
+    }
+
+    /// The point of having two faders is that each one moves its own half and
+    /// leaves the other where it was. A mix where turning the machine down
+    /// also quietened the bumpers would be a master volume with extra steps.
+    #[test]
+    fn each_fader_moves_its_own_half_only() {
+        let loudest = |board: f32, voice: f32| {
+            let mut m = Mixer::new(1000);
+            m.board_gain = board;
+            m.voice_gain = voice;
+            m.push_board(&[0.5; 100]);
+            m.play(play(mono(&[0.5; 100]), 1000));
+            let mut out = vec![0.0; 2 * 50];
+            m.render(&mut out);
+            peak(&out, 0)
+        };
+
+        let both = loudest(1.0, 1.0);
+        let no_board = loudest(0.0, 1.0);
+        let no_voices = loudest(1.0, 0.0);
+
+        // With one side silenced the other is still there, and quieter than
+        // the two of them together.
+        assert!(no_board > 0.1, "the table's own sounds survive: {no_board}");
+        assert!(no_voices > 0.1, "the board survives: {no_voices}");
+        assert!(both > no_board && both > no_voices);
+        // And silencing both is silence, which is what says the two gains
+        // between them account for everything the mixer emits.
+        assert!(loudest(0.0, 0.0) < 0.001);
     }
 
     #[test]

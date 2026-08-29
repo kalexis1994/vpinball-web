@@ -1157,9 +1157,32 @@ impl Game {
         &mut self.script
     }
 
+    /// The ceiling on each half of the mix.
+    ///
+    /// Above one is a boost, and it is offered because it is needed: a table
+    /// whose ROM was mastered quietly cannot be balanced against its own
+    /// bumpers by turning the bumpers down — that just makes the whole
+    /// machine quiet. The mixer clamps its output, so the worst a boost can
+    /// do is flatten the loudest moments rather than wrap them into noise.
+    pub const MAX_MIX_GAIN: f32 = 1.2;
+
     /// Master volume, 0 to 1.
     pub fn set_volume(&mut self, volume: f32) {
         self.state.audio.borrow_mut().mixer.master = volume.clamp(0.0, 1.0);
+    }
+
+    /// How loud the machine's own sound board is against the table's
+    /// mechanics. See [`vpw_audio::mixer::Mixer::board_gain`].
+    ///
+    /// Up to [`MAX_MIX_GAIN`] rather than to one: plenty of ROMs were mastered
+    /// quietly and a fader that stops at "as recorded" cannot rescue them.
+    pub fn set_machine_volume(&mut self, volume: f32) {
+        self.state.audio.borrow_mut().mixer.board_gain = volume.clamp(0.0, Self::MAX_MIX_GAIN);
+    }
+
+    /// And the other half: the bumpers, the flippers and the ball.
+    pub fn set_table_volume(&mut self, volume: f32) {
+        self.state.audio.borrow_mut().mixer.voice_gain = volume.clamp(0.0, Self::MAX_MIX_GAIN);
     }
 
     /// The sounds the script asked for since the last time this was called.

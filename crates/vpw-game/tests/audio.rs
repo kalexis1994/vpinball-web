@@ -168,8 +168,15 @@ fn the_pan_puts_a_sound_where_it_was_asked_for() {
     let (l, r) = (peak(&out, 0), peak(&out, 1));
     assert!(l > 0.05, "there should be a sound at all: {l}");
     assert!(
-        l > r * 5.0,
-        "hard left should be on the left: left {l}, right {r}"
+        l > r * 2.0,
+        "asking for the left should lean left: left {l}, right {r}"
+    );
+    // And stay in both speakers. The width is limited on purpose — see
+    // `STEREO_WIDTH` in `vpw_game::sound` — because a table is a metre wide
+    // and stands in front of you: nothing on it is hard against one ear.
+    assert!(
+        r > l * 0.2,
+        "and not abandon the right: left {l}, right {r}"
     );
 }
 
