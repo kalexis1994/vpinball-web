@@ -314,18 +314,59 @@ impl TableRenderer {
     fn reframe(&mut self) {
         // A camera that moved makes every photograph a lie.
         self.invalidate_flat();
-        let Some((table, head)) = self.framing else {
-            return;
-        };
+        if let Some(camera) = self.camera_for(self.view) {
+            self.camera = camera;
+        }
+    }
+
+    /// Where a given view's camera goes, without moving to it.
+    ///
+    /// Separate from [`Self::reframe`] because one caller wants the camera and
+    /// not the consequences: a photograph for the library looks at the machine
+    /// from the front for a single frame, and it must not disturb the view the
+    /// player is using or throw away a flat bake that took seconds to make.
+    fn camera_for(&self, view: crate::camera::View) -> Option<Camera> {
+        let (table, head) = self.framing?;
         let head = head.bounds();
         let (w, h) = self.gpu.size();
-        self.camera = Camera::for_view_of(
-            self.view,
+        Some(Camera::for_view_of(
+            view,
             (table.min, table.max),
             (head.min, head.max),
             w as f32 / h as f32,
             &self.occupied,
-        );
+        ))
+    }
+
+    /// Draws one frame as a photograph of the whole machine, then puts
+    /// everything back.
+    ///
+    /// For the library's card. From the front, because a pinball machine seen
+    /// from straight above is a rectangle of artwork and seen from the front
+    /// is a *machine* — the head standing over the playfield with its own
+    /// backglass lit, which is how anybody would recognise which one it is.
+    /// With the full renderer even when the flat engine is on, because a
+    /// photograph is worth one frame of the real thing and the flat world
+    /// has no camera to move.
+    ///
+    /// The frame lands on the surface like any other and is gone on the next
+    /// one, so whoever asks for this has to take the canvas straight after —
+    /// which is exactly what the page does, with the loop held.
+    pub fn shoot(&mut self) -> Result<(), FrameError> {
+        let Some(camera) = self.camera_for(crate::camera::View::Front) else {
+            return Ok(());
+        };
+        let (was_view, was_camera, was_flat) = (self.view, self.camera, self.flat_on);
+        self.view = crate::camera::View::Front;
+        self.camera = camera;
+        self.flat_on = false;
+
+        let out = self.render();
+
+        self.view = was_view;
+        self.camera = was_camera;
+        self.flat_on = was_flat;
+        out
     }
 
     /// Uploads a table and frames the camera on it.

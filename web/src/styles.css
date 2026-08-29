@@ -542,11 +542,97 @@ body::after {
   }
 }
 
-.intro-phase {
-  margin: 1.1rem 0 0;
-  min-height: 1.4em;
-  color: var(--text-dim);
+/* What is being built, ticked off as it is.
+ *
+ * The curtain used to carry one line that changed under you, which says how
+ * long you have been waiting only if you were reading it at the time. A list
+ * with its marks says how far along the whole thing is at a glance — and it
+ * has somewhere to put the light bake, which is the one step that is still
+ * going when the curtain lifts. */
+.intro-steps {
+  margin: 1.3rem 0 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 0.5rem;
+  justify-items: start;
+  text-align: left;
+}
+
+.intro-step {
+  display: grid;
+  grid-template-columns: 1.1rem 1fr;
+  align-items: center;
+  gap: 0.6rem;
   font-size: 0.82rem;
+  letter-spacing: 0.03em;
+  color: var(--text-dim);
+  transition: color 300ms ease, opacity 300ms ease;
+}
+
+.intro-mark {
+  display: grid;
+  place-items: center;
+  width: 1.1rem;
+  height: 1.1rem;
+}
+
+/* Waiting: a lamp that has not been switched on yet. */
+.intro-step-waiting {
+  opacity: 0.45;
+}
+.intro-step-waiting .intro-mark::before {
+  content: '';
+  width: 0.4rem;
+  height: 0.4rem;
+  border-radius: 50%;
+  background: #3a2a5e;
+}
+
+.intro-step-running {
+  color: var(--text);
+}
+
+/* Done: a tick, drawn rather than typed so it is the same on every platform
+   and can take the room's colour. */
+.intro-step-done .intro-mark::before {
+  content: '';
+  width: 0.62rem;
+  height: 0.34rem;
+  border-left: 2px solid var(--cyan);
+  border-bottom: 2px solid var(--cyan);
+  transform: translateY(-0.1rem) rotate(-45deg);
+  filter: drop-shadow(0 0 6px var(--glow-cyan));
+}
+
+/* One spinner, wherever something is turning. */
+.spinner {
+  display: block;
+  width: 0.85rem;
+  height: 0.85rem;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.16);
+  border-top-color: var(--magenta);
+  border-right-color: var(--magenta);
+  animation: spin 720ms linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* And the same bake, still going, over a table that is already being played. */
+.player-bake {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0.7rem;
+  border-radius: 999px;
+  background: rgba(12, 6, 26, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  backdrop-filter: blur(6px);
+  color: var(--text-dim);
+  font-size: 0.72rem;
   letter-spacing: 0.04em;
 }
 
@@ -554,6 +640,8 @@ body::after {
   .intro, .intro::before, .intro-body { transition-duration: 1ms; }
   .intro-kicker, .intro-title, .intro-lamps { animation: none; }
   .intro-lamps i { animation: none; background: var(--lamp, var(--accent)); }
+  /* Still visible as "this one is the live one", still not moving. */
+  .spinner { animation: none; border-top-color: var(--magenta); }
 }
 
 /* --- Player ---------------------------------------------------------------- */

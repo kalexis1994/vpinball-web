@@ -20,7 +20,7 @@
 // the page cannot tell which home replied.
 
 import GameWorker from './game.worker?worker';
-import { loopStats, sceneStats } from './hostShared';
+import { cardImage, loopStats, sceneStats } from './hostShared';
 
 export interface PlayerHost {
   readonly kind: 'worker' | 'main';
@@ -247,6 +247,8 @@ async function mainHost(): Promise<PlayerHost> {
   // the instance is built.
   if (forceWebGl()) (globalThis as { VPW_FORCE_WEBGL?: boolean }).VPW_FORCE_WEBGL = true;
   const wasm = await initWasm();
+  /** The canvas the player draws on, kept so a photograph can be taken. */
+  let surface: HTMLCanvasElement | null = null;
   return {
     kind: 'main',
 
@@ -264,12 +266,21 @@ async function mainHost(): Promise<PlayerHost> {
         const l = wasm.loopStats();
         return (l ? loopStats(l) : null) as T;
       }
+      // The same photograph the worker takes; see the `shoot` op there for
+      // why the copy has to happen without awaiting anything first.
+      if (op === 'shoot') {
+        if (!surface || !wasm.shoot()) return null as T;
+        return (await cardImage(surface)) as T;
+      }
       const fn = (wasm as unknown as Record<string, unknown>)[op];
       if (typeof fn !== 'function') throw new Error(`the player has no export named '${op}'`);
       return (fn as (...a: unknown[]) => T)(...args);
     },
 
-    start: (canvas: HTMLCanvasElement) => wasm.start(canvas.id),
+    start(canvas: HTMLCanvasElement) {
+      surface = canvas;
+      return wasm.start(canvas.id);
+    },
 
     // The main-thread player watches its own canvas: a detached element is
     // how it knows nobody is looking.

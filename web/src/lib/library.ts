@@ -218,6 +218,29 @@ export async function readTableFile(id: string): Promise<Uint8Array> {
   return new Uint8Array(await blob.arrayBuffer());
 }
 
+/**
+ * Keeps a picture of a table as its card.
+ *
+ * Written next to the one a `.vpx` may have shipped and in the same place, so
+ * the shelf never has to know where a picture came from. The entry is updated
+ * in the same transaction as the blob: `thumbMime` is what says there *is*
+ * one, and a picture stored without it is a picture nothing will ever look
+ * for.
+ */
+export async function putThumbnail(id: string, bytes: Uint8Array, mime: string): Promise<void> {
+  const blob = new Blob([bytes as BlobPart], { type: mime });
+  await transact([STORE_TABLES, STORE_THUMBS], 'readwrite', async (tx) => {
+    const entry = await promisify(
+      tx.objectStore(STORE_TABLES).get(id) as IDBRequest<TableEntry | undefined>,
+    );
+    // Gone from the shelf while the picture was being taken: nothing to
+    // attach it to, and a thumbnail for a table nobody has is litter.
+    if (!entry) return;
+    tx.objectStore(STORE_TABLES).put({ ...entry, thumbMime: mime });
+    tx.objectStore(STORE_THUMBS).put(blob, id);
+  });
+}
+
 /** Object URL for the thumbnail, or null if the table ships no screenshot. */
 export async function thumbnailUrl(entry: TableEntry): Promise<string | null> {
   if (!entry.thumbMime) return null;

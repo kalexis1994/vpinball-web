@@ -1967,6 +1967,21 @@ pub fn set_paused(on: bool) {
     });
 }
 
+/// Draws one frame of the whole machine, seen from the front.
+///
+/// For the library's card: the picture a table shows before anybody has
+/// played it. Plenty of `.vpx` files carry a screenshot of their own and
+/// those are used as they are, but plenty carry none, and a shelf of blank
+/// cards is a shelf you cannot read.
+///
+/// It lands on the canvas like any other frame and the next frame replaces
+/// it, so the caller has to be holding the loop still and take the canvas
+/// immediately — see the `shoot` op in the worker, which does both.
+#[wasm_bindgen(js_name = shoot)]
+pub fn shoot() -> bool {
+    with_player(|player| player.renderer.shoot().is_ok()).unwrap_or(false)
+}
+
 /// Ends the game and lets go of the table.
 ///
 /// What "quit" means, and it has to mean this: the machine, the script, the

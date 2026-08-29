@@ -21,7 +21,7 @@
 
 import init, * as wasm from '../wasm/vpw_player.js';
 import wasmUrl from '../wasm/vpw_player_bg.wasm?url';
-import { loopStats, sceneStats } from './hostShared';
+import { cardImage, loopStats, sceneStats } from './hostShared';
 
 interface Request {
   id: number;
@@ -53,6 +53,8 @@ let queued = 0;
 
 /** Last plunger position pushed to the page, so it is only sent on change. */
 let lastPlunger: number | null | undefined;
+/** The canvas the player draws on, kept so a photograph can be taken of it. */
+let surface: OffscreenCanvas | null = null;
 let looping = false;
 
 function tick() {
@@ -123,6 +125,7 @@ async function dispatch(op: string, args: unknown[]): Promise<unknown> {
       // The renderer reads the flag off this scope's global when the
       // instance is built.
       if (a.forceGl) (globalThis as { VPW_FORCE_WEBGL?: boolean }).VPW_FORCE_WEBGL = true;
+      surface = a.canvas;
       await wasm.startOffscreen(a.canvas, a.width, a.height);
       if (!looping) {
         looping = true;
@@ -145,6 +148,17 @@ async function dispatch(op: string, args: unknown[]): Promise<unknown> {
     case 'loadTable': {
       const s = wasm.loadTable(args[0] as Uint8Array);
       return sceneStats(s);
+    }
+    // A photograph of the machine, for the library's card.
+    //
+    // Two steps that must not be interrupted: the player draws one frame from
+    // the front, and the canvas is copied *in the same task*. `drawImage`
+    // takes its snapshot synchronously, so the animation frame that would
+    // otherwise overwrite the picture cannot get in between — which is why
+    // there is no pausing here and no promise until the copy is already made.
+    case 'shoot': {
+      if (!surface || !wasm.shoot()) return null;
+      return cardImage(surface);
     }
     case 'loopStats': {
       const l = wasm.loopStats();

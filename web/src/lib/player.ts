@@ -74,6 +74,21 @@ export function holdPlunger(travel: number): void {
   live?.holdPlunger(travel);
 }
 
+/**
+ * Photographs the machine for the library's card, as JPEG bytes.
+ *
+ * One frame, drawn from the front with the full renderer whatever the player
+ * happens to be looking at, and scaled down to a card. `null` when there is
+ * no player or the canvas would not give its picture up.
+ *
+ * Cheap enough to do on every load and pointless to: see the caller, which
+ * only asks for tables that brought no screenshot of their own.
+ */
+export async function shoot(): Promise<Uint8Array | null> {
+  const h = await host();
+  return h.call<Uint8Array | null>('shoot', []);
+}
+
 /** Lets go of a rod that was being held. The shot comes from where it is. */
 export function releasePlunger(): void {
   live?.releasePlunger();
@@ -290,6 +305,10 @@ export function loadTable(
     // playing either way; the light arrives when it arrives.
     void ensureGiBake(key, fetchBytes, rom).catch((e) => {
       console.warn('[bake] the GI bake failed:', e);
+      // The screen is told it is over either way: a bake that failed is not
+      // still running, and an indicator that never stops is a worse lie than
+      // one that never appeared.
+      setBakeStep('done');
     });
     return { ...s, bytes: size, fetchMs };
   })();
@@ -306,6 +325,38 @@ export function loadTable(
  * does not trace twice. */
 const baking = new Set<string>();
 
+/**
+ * What the light bake is doing.
+ *
+ * `reading` is fetching the table a second time for the baker, `tracing` is
+ * the worker at work, `applying` is handing the lightmaps to the player.
+ */
+export type BakeStep = 'idle' | 'reading' | 'tracing' | 'applying' | 'done';
+
+let bakeStep: BakeStep = 'idle';
+const bakeWatchers = new Set<(step: BakeStep) => void>();
+
+function setBakeStep(step: BakeStep) {
+  bakeStep = step;
+  for (const watch of bakeWatchers) watch(step);
+}
+
+/**
+ * Says what the light bake is doing, now and whenever it changes.
+ *
+ * This work outlives the loading curtain on purpose — the table is playable
+ * long before its light is traced, and holding the machine shut until it is
+ * would be minutes of black screen for something that arrives on its own. So
+ * the screen needs a way to keep saying that something is still happening,
+ * which is what this is for. Returns the way to stop listening.
+ */
+export function onBake(watch: (step: BakeStep) => void): () => void {
+  bakeWatchers.add(watch);
+  watch(bakeStep);
+  return () => {
+    bakeWatchers.delete(watch);
+  };
+}
 
 /**
  * Sees to it that the table's GI lightmaps are installed: from IndexedDB if a
@@ -320,6 +371,7 @@ async function ensureGiBake(
   if (baking.has(key)) return;
   baking.add(key);
   const h = await host();
+  setBakeStep('reading');
 
   const apply = (bake: GiBake) =>
     bake.layers > 0
@@ -336,7 +388,9 @@ async function ensureGiBake(
 
   const cached = await readBake(key);
   if (cached) {
+    setBakeStep('applying');
     await apply(cached);
+    setBakeStep('done');
     return;
   }
 
@@ -345,6 +399,7 @@ async function ensureGiBake(
   // it switches together instead of guessing from names.
   const bytes = await fetchBytes();
   const zip = rom?.name ? ((await readRom(rom.name)) ?? (await devRom(rom.name))) : null;
+  setBakeStep('tracing');
   const result = await new Promise<BakeResponse>((resolve, reject) => {
     // A worker per bake, and gone straight after: it holds a wasm instance
     // and the whole table, which is not a thing to keep around idle.
@@ -369,8 +424,10 @@ async function ensureGiBake(
   if (!result.ok) {
     console.warn('[bake] the trace failed:', result.error);
     baking.delete(key);
+    setBakeStep('done');
     return;
   }
+  setBakeStep('applying');
 
   const bake: GiBake = {
     version: BAKE_VERSION,
@@ -384,6 +441,7 @@ async function ensureGiBake(
   // is not re-parsed on every visit to find that out again.
   await writeBake(key, bake);
   await apply(bake);
+  setBakeStep('done');
 }
 
 export type { Loop };

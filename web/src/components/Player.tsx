@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { startAudio, stopAudio } from '../lib/audio';
-import { readTableFile } from '../lib/library';
+import { putThumbnail, readTableFile } from '../lib/library';
 import { onSettingsChange, settings, updateSettings, type CameraView } from '../lib/settings';
 import {
   TELEMETRY_WINDOW_S,
@@ -13,8 +13,10 @@ import {
   nextCameraView,
   playerCanvas,
   releaseAllKeys,
+  onBake,
   saveMachineState,
   setCameraView,
+  shoot,
   setEnvironment,
   setAdaptive,
   setFlat,
@@ -23,6 +25,7 @@ import {
   stopTable,
   setTelemetry,
   startPlayer,
+  type BakeStep,
   type Loop,
 } from '../lib/player';
 import { ScoreDisplay, dockedAt, useNarrow } from './ScoreDisplay';
@@ -41,18 +44,39 @@ interface Props {
   onExit: () => void;
 }
 
-type Phase = 'starting' | 'fetching' | 'loading' | 'ready';
+type Phase = 'starting' | 'loading' | 'shooting' | 'ready';
 
-const PHASES: Record<Phase, string> = {
-  starting: 'Initialising WebGPUâ€¦',
-  fetching: 'Reading the fileâ€¦',
-  loading: 'Parsing the table and uploading it to the GPUâ€¦',
-  ready: '',
+/**
+ * What the curtain says is happening, in the order it happens.
+ *
+ * A list rather than a line, because these are not moods, they are work: a
+ * table is read, then built — and building it means painting the head's
+ * artwork from the table's own colours, which is a real bake with a real cost
+ * (`vpw_table::backglass`). Naming the steps and ticking them off is the
+ * difference between a wait somebody sits through and a wait somebody
+ * wonders about.
+ */
+const PHASES: readonly { id: Phase; label: string }[] = [
+  { id: 'starting', label: 'Waking the graphics card' },
+  { id: 'loading', label: 'Building the machine and painting its head' },
+  { id: 'shooting', label: 'Photographing it for the shelf' },
+];
+
+/** Where a step is up to. */
+type StepState = 'done' | 'running' | 'waiting';
+
+/** What the light bake is called while it is doing each of its parts. */
+const BAKE_LABELS: Record<BakeStep, string> = {
+  idle: 'Baking the light',
+  reading: 'Baking the light',
+  tracing: 'Tracing the light',
+  applying: 'Hanging the light',
+  done: 'The light is baked',
 };
 
 /**
  * The curtain's states. `loading` shows the marquee and the chase lamps over
- * black; when the table is ready the lamps go out first (`blackout` â€” a fade
+ * black; when the table is ready the lamps go out first (`blackout` — a fade
  * to plain black, the moment a real machine's attract mode goes dark), then
  * the black itself lifts off the table (`reveal`), then the curtain leaves
  * the DOM (`done`).
@@ -80,6 +104,8 @@ export function Player({ table, title, source, rom, onExit }: Props) {
   const [update, setUpdate] = useState<(() => void) | null>(null);
   const [view, setView] = useState<CameraView>(() => settings().camera);
   const [intro, setIntro] = useState<Intro>('loading');
+  /** What the light bake is doing, which outlives the curtain. */
+  const [bake, setBake] = useState<BakeStep>('idle');
   // Where the score panel wants to be. The player has to know as well as the
   // panel does: a docked panel is a strip of the window the table no longer
   // gets, and that is this component's layout to give.
@@ -91,6 +117,9 @@ export function Player({ table, title, source, rom, onExit }: Props) {
   const [paused, setPaused_] = useState(false);
   const narrow = useNarrow();
   const docked = dockedAt(view, narrow, score.dock);
+
+  // The bakes, for as long as they run.
+  useEffect(() => onBake(setBake), []);
 
   // The curtain follows the phase: the moment the table is ready the lamps
   // fade, the black holds a beat, and then it lifts. A new load (a different
@@ -134,8 +163,8 @@ export function Player({ table, title, source, rom, onExit }: Props) {
         await startPlayer(canvas);
         if (!alive) return;
 
-        // The listeners live on the page for both of the player's homes â€” a
-        // worker has no DOM to listen on â€” and die with this view.
+        // The listeners live on the page for both of the player's homes — a
+        // worker has no DOM to listen on — and die with this view.
         disconnectInput = connectInput(canvas);
 
         setPhase('loading');
@@ -167,6 +196,15 @@ export function Player({ table, title, source, rom, onExit }: Props) {
         void setFlat(forced || settings().flat);
         void setAdaptive(settings().adaptive);
         void setMix(settings().volumeMachine, settings().volumeTable);
+
+        // The card for the shelf, taken while the curtain is still down over
+        // it: one frame from the front, which is the only view in which a
+        // pinball machine looks like a pinball machine rather than like a
+        // rectangle of artwork.
+        setPhase('shooting');
+        await photograph(table);
+        if (!alive) return;
+
         setPhase('ready');
 
         timer = window.setInterval(() => {
@@ -192,7 +230,7 @@ export function Player({ table, title, source, rom, onExit }: Props) {
         // can spend the whole allowance.
         setError(
           message.includes('create the surface')
-            ? `${message} â€” the browser refused a graphics context. Closing other tabs of this page, or restarting the browser, usually gives it back.`
+            ? `${message} — the browser refused a graphics context. Closing other tabs of this page, or restarting the browser, usually gives it back.`
             : message,
         );
       }
@@ -221,7 +259,7 @@ export function Player({ table, title, source, rom, onExit }: Props) {
 
   // The sound cannot start on its own: a browser only lets an `AudioContext`
   // run from inside a real input event. Which event does not matter, and by the
-  // time somebody has pressed a flipper they have provided one â€” so every path
+  // time somebody has pressed a flipper they have provided one — so every path
   // into the game is also the path that turns the sound on.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -230,17 +268,17 @@ export function Player({ table, title, source, rom, onExit }: Props) {
       // is in every game: it never leaves the table on its own, because
       // leaving is a decision with a ball in play behind it.
       if (e.key === 'Escape') setPaused_((p) => !p);
-      // `B` for the bug you just saw. The table does not use it â€” neither
-      // `Action::from_key_code` nor `vp_key_code` maps it â€” so pressing it
+      // `B` for the bug you just saw. The table does not use it — neither
+      // `Action::from_key_code` nor `vp_key_code` maps it — so pressing it
       // marks the moment without also doing something on the playfield.
-      // `C` for the camera. Like `B`, a key the table itself does not use â€”
-      // neither `Action::from_key_code` nor `vp_key_code` maps it â€” so cycling
+      // `C` for the camera. Like `B`, a key the table itself does not use —
+      // neither `Action::from_key_code` nor `vp_key_code` maps it — so cycling
       // the view does not also do something on the playfield.
       if (e.code === 'KeyC' && !e.repeat) {
         if (settings().flat) {
           // The flat renderer holds the camera, and a key that silently does
           // nothing reads as a bug. Say why, where the tilt notice lives.
-          setNotice('The flat renderer holds the camera â€” switch to Full 3D in Settings to move it.');
+          setNotice('The flat renderer holds the camera — switch to Full 3D in Settings to move it.');
           return;
         }
         const next = nextCameraView(settings().camera);
@@ -276,7 +314,7 @@ export function Player({ table, title, source, rom, onExit }: Props) {
   }, [paused, phase]);
 
   // One subscription for both ways in. The key writes the setting and the menu
-  // writes the setting, so the camera only has to watch the setting â€” which
+  // writes the setting, so the camera only has to watch the setting — which
   // also means the two can never drift apart.
   useEffect(
     () =>
@@ -335,12 +373,20 @@ export function Player({ table, title, source, rom, onExit }: Props) {
               update();
             }}
           >
-            New version ready Â· tap to load it
+            New version ready · tap to load it
           </button>
+        )}
+        {/* The bake that outlives the curtain. It says so quietly and goes
+            away on its own — the table is already being played over it. */}
+        {phase === 'ready' && bake !== 'idle' && bake !== 'done' && (
+          <span className="player-bake" role="status">
+            <i className="spinner" aria-hidden="true" />
+            {BAKE_LABELS[bake]}…
+          </span>
         )}
         {marked && (
           <span className="player-fps">
-            saved {TELEMETRY_WINDOW_S}s Â· {marked}
+            saved {TELEMETRY_WINDOW_S}s · {marked}
           </span>
         )}
       </div>
@@ -385,9 +431,29 @@ export function Player({ table, title, source, rom, onExit }: Props) {
             <span className="intro-lamps" aria-hidden="true">
               <i /><i /><i /><i /><i />
             </span>
-            <p className="intro-phase" aria-live="polite">
-              {PHASES[phase]}
-            </p>
+            <ol className="intro-steps" aria-live="polite">
+              {PHASES.map((step, i) => (
+                <IntroStep
+                  key={step.id}
+                  label={step.label}
+                  state={
+                    phase === 'ready' || i < PHASES.findIndex((p) => p.id === phase)
+                      ? 'done'
+                      : step.id === phase
+                        ? 'running'
+                        : 'waiting'
+                  }
+                />
+              ))}
+              {/* The light, which is a bake of its own and the one that does
+                  not finish here: the table is playable long before it is
+                  traced, so the curtain names it, lifts, and the badge on the
+                  playfield carries on saying it is happening. */}
+              <IntroStep
+                label={BAKE_LABELS[bake]}
+                state={bake === 'done' ? 'done' : bake === 'idle' ? 'waiting' : 'running'}
+              />
+            </ol>
           </div>
         </div>
       )}
@@ -400,6 +466,45 @@ export function Player({ table, title, source, rom, onExit }: Props) {
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * Puts a picture on the table's card, for tables that have none.
+ *
+ * Only for those: a `.vpx` that ships its own screenshot ships the artwork
+ * its author chose, and replacing that with a photograph of our renderer
+ * would be taking something away. What this is for is the other kind — the
+ * blank cards, which is most of a shelf.
+ *
+ * Never worth failing a load over. A table with no picture is a table you can
+ * still play.
+ */
+async function photograph(table: TableEntry | null): Promise<void> {
+  if (!table || table.thumbMime) return;
+  try {
+    const bytes = await shoot();
+    if (bytes && bytes.length > 0) await putThumbnail(table.id, bytes, 'image/jpeg');
+  } catch (e) {
+    console.warn('[player] the photograph for the shelf failed:', e);
+  }
+}
+
+/**
+ * One line of the curtain's list: a mark, and what it is doing.
+ *
+ * The mark carries the whole state — a spinner while it runs, a tick when it
+ * is done, a dim dot before it starts — so the words never have to change to
+ * say the same thing twice.
+ */
+function IntroStep({ label, state }: { label: string; state: StepState }) {
+  return (
+    <li className={`intro-step intro-step-${state}`}>
+      <span className="intro-mark" aria-hidden="true">
+        {state === 'running' && <i className="spinner" />}
+      </span>
+      <span>{label}</span>
+    </li>
   );
 }
 
@@ -433,13 +538,13 @@ function ExitIcon() {
  * Physics ticks per second is worth as much as the frame rate here: the physics
  * runs at a fixed 1000 Hz, decoupled from the frame rate, so a number below
  * that means the simulation is falling behind and the table is running in slow
- * motion â€” which looks like lag but is not.
+ * motion — which looks like lag but is not.
  */
 /**
  * Says that the table is running without its machine.
  *
- * A table with no ROM â€” or with a ROM for hardware this emulator does not have
- * â€” loads, renders, and rolls a ball around perfectly. It also takes a coin and
+ * A table with no ROM — or with a ROM for hardware this emulator does not have
+ * — loads, renders, and rolls a ball around perfectly. It also takes a coin and
  * starts nothing, because the rules of the game live on a board that is not
  * there. From the player's seat that is indistinguishable from a bug, and there
  * was nothing anywhere on the screen to tell the two apart: somebody put a coin
@@ -455,7 +560,7 @@ function NoMachine({ wanted }: { wanted: string | null }) {
       </span>
       {wanted ? (
         <span>
-          It asks for <code>{wanted}.zip</code>. Import it from Content â€” or it
+          It asks for <code>{wanted}.zip</code>. Import it from Content — or it
           may be a machine this emulator cannot run yet.
         </span>
       ) : (
@@ -468,19 +573,19 @@ function NoMachine({ wanted }: { wanted: string | null }) {
 function LoopBadge({ loop }: { loop: Loop }) {
   return (
     <span className="player-fps">
-      {loop.fps.toFixed(0)} fps Â· {loop.tps.toFixed(0)} Hz physics
-      {loop.qualityTier > 0 && <span> Â· Q{loop.qualityTier}</span>}
+      {loop.fps.toFixed(0)} fps · {loop.tps.toFixed(0)} Hz physics
+      {loop.qualityTier > 0 && <span> · Q{loop.qualityTier}</span>}
       {/* Why a machine is quiet, which is otherwise invisible: no board at all
           is a missing image in the zip, a board at zero is firmware that has
           not got going, and a board at its full rate with nothing coming out
           of the speakers is a machine in attract mode with nothing to say. */}
       {loop.romRunning && !loop.soundBoard && (
-        <strong className="player-quiet"> Â· no sound board</strong>
+        <strong className="player-quiet"> · no sound board</strong>
       )}
       {loop.romRunning && loop.soundBoard && (
-        <span> Â· {(loop.soundRate / 1000).toFixed(1)}k sound</span>
+        <span> · {(loop.soundRate / 1000).toFixed(1)}k sound</span>
       )}
-      {loop.tilt && <strong className="player-tilt"> Â· TILT</strong>}
+      {loop.tilt && <strong className="player-tilt"> · TILT</strong>}
     </span>
   );
 }
