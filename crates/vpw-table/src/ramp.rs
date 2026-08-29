@@ -221,12 +221,26 @@ fn flat(ramp: &Ramp, c: &Outline, playfield: Bounds) -> Vec<Mesh> {
     let inv_width = 1.0 / (playfield.max.x - playfield.min.x).max(1e-6);
     let inv_length = 1.0 / (playfield.max.y - playfield.min.y).max(1e-6);
 
-    // Floor: one strip between the two edges.
+    // Floor: one strip between the two edges, and the **right** edge first.
+    //
+    // That order is the texture's, not the geometry's. `strip` gives its first
+    // edge `u = 1` and its second `u = 0`, which is the original's own
+    // assignment (`ramp.cpp:2165`) — and the original hands it
+    // `rgvLocal[i]`, the `+vnormal` side, which is the one we call `right`
+    // (`ramp.cpp:2148`, and see the note in `outline`). Passing `left` first
+    // put `u = 1` on the wrong edge and printed every ramp's artwork
+    // backwards.
+    //
+    // Invisible on the ramps most tables have, whose textures are a plain
+    // surface or symmetric enough not to say. Not invisible on The Sopranos,
+    // whose apron is a two-triangle ramp with the whole apron printed on it:
+    // it came out mirrored, and beside the flasher carrying the same artwork
+    // the right way round it read as a second, backwards apron.
     let mut meshes = vec![strip(
         format!("{} (floor)", ramp.name),
         c,
-        |i| (c.left[i], c.height[i]),
         |i| (c.right[i], c.height[i]),
+        |i| (c.left[i], c.height[i]),
         world_uv,
         (inv_width, inv_length),
         ramp,

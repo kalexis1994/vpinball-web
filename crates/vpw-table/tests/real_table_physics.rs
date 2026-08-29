@@ -841,6 +841,72 @@ fn a_ramps_right_edge_is_the_one_the_original_calls_right() {
 }
 
 #[test]
+fn a_ramps_floor_is_printed_the_way_round_the_original_prints_it() {
+    // The original gives its first edge `u = 1` and its second `u = 0`
+    // (`ramp.cpp:2165`), and the edge it hands over first is `rgvLocal[i]` —
+    // the `+vnormal` side, the one the test above establishes as the right
+    // (`ramp.cpp:2148`). So `u = 1` belongs on the right edge, and putting it
+    // on the left prints the ramp's artwork backwards.
+    //
+    // Invisible on the ramps most tables have, whose textures are a plain
+    // surface or symmetric enough not to say. Not invisible on The Sopranos,
+    // whose apron is a two-triangle ramp with the whole apron printed on it: it
+    // came out mirrored, and next to the flasher carrying the same artwork the
+    // right way round it read as a second, backwards apron.
+    let Some(vpx) = table() else { return };
+    let scene = vpw_table::geometry::extract(&vpx);
+
+    let mut checked = 0;
+    for item in &vpx.gameitems {
+        let GameItemEnum::Ramp(r) = item else {
+            continue;
+        };
+        // Only the ramps that carry a picture: on the rest there is nothing
+        // to be backwards.
+        if r.image.is_empty() {
+            continue;
+        }
+        let Some(c) = vpw_table::ramp::path(r, vpw_table::dragpoint::collision_accuracy()) else {
+            continue;
+        };
+        let floor = format!("{} (floor)", r.name);
+        let Some(mesh) = scene.meshes.iter().find(|m| m.name == floor) else {
+            continue;
+        };
+        // World-mapped ramps put the table's own coordinates in the UVs and
+        // have no left or right to get wrong.
+        if mesh
+            .vertices
+            .iter()
+            .all(|v| v.uv[0] != 0.0 && v.uv[0] != 1.0)
+        {
+            continue;
+        }
+        // The vertex carrying `u = 1` has to be the one on the right edge.
+        let one = mesh
+            .vertices
+            .iter()
+            .find(|v| v.uv[0] == 1.0)
+            .expect("a wrapped ramp has an edge at u = 1");
+        let at = vpw_math::Vec2::new(one.pos[0], one.pos[1]);
+        let (near_right, near_left) = c
+            .right
+            .iter()
+            .zip(&c.left)
+            .fold((f32::MAX, f32::MAX), |(a, b), (right, left)| {
+                (a.min((*right - at).length()), b.min((*left - at).length()))
+            });
+        assert!(
+            near_right < near_left,
+            "{}: u = 1 landed {near_right:.1} from the right edge and {near_left:.1} from the              left, so its picture is printed backwards",
+            r.name
+        );
+        checked += 1;
+    }
+    assert!(checked > 0, "no ramp on the table carried a picture");
+}
+
+#[test]
 fn a_ramp_is_as_high_as_wherever_you_ask_it() {
     // A wall has one height and the answer does not depend on where you ask.
     // A ramp **climbs**, so "how high is the ramp" only has an answer at a

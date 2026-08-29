@@ -45,6 +45,32 @@ fn main() {
         g.bg_offset_z_fullscreen
     );
 
+    // And the meshes that part became, with the numbers that decide where its
+    // texture lands: a UV outside 0..1 is a texture asked to tile, and a UV
+    // that runs backwards is a picture asked to mirror.
+    let scene = vpw_table::geometry::extract(&vpx);
+    for m in scene
+        .meshes
+        .iter()
+        .filter(|m| m.name.to_lowercase().contains(&wanted))
+    {
+        println!(
+            "=== mesh {:?} — {} vertices, {} triangles, image {:?}, clamp {}",
+            m.name,
+            m.vertices.len(),
+            m.triangles(),
+            m.image,
+            m.clamp
+        );
+        for (i, v) in m.vertices.iter().enumerate().take(24) {
+            println!(
+                "  {i:3}  pos ({:8.2}, {:8.2}, {:7.2})  uv ({:7.4}, {:7.4})",
+                v.pos[0], v.pos[1], v.pos[2], v.uv[0], v.uv[1]
+            );
+        }
+        println!("  indices {:?}", &m.indices[..m.indices.len().min(36)]);
+    }
+
     for item in &vpx.gameitems {
         let GameItemEnum::Primitive(p) = item else {
             continue;
