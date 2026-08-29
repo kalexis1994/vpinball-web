@@ -43,6 +43,8 @@ export interface Loop {
   soundBoard: boolean;
   /** Samples a second it is making. A working one is a shade over 24000. */
   soundRate: number;
+  /** The governor's rung: 0 is full quality, higher is softer. */
+  qualityTier: number;
   /** What the machine last said about itself, mostly why a ROM would not load. */
   notice: string;
 }
@@ -78,6 +80,7 @@ export function loopStats(l: Wasm.LoopStats): Loop {
     romName: l.romName,
     soundBoard: l.soundBoard,
     soundRate: l.soundRate,
+    qualityTier: l.qualityTier,
     notice: l.notice,
   };
   l.free();

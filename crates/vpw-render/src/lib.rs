@@ -11,6 +11,7 @@ pub mod env;
 pub mod flashers;
 pub mod flat;
 pub mod lights;
+pub mod meshopt;
 pub mod pass;
 pub mod pipeline;
 pub mod post;

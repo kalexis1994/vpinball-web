@@ -245,6 +245,19 @@ impl Plunger {
             // computed on release.
             self.speed = self.fire_speed;
             self.fire_timer -= 1;
+            if self.fire_timer == 0 {
+                // The shot is over, and the leftovers must go with it. The
+                // idle branch below touches neither speed nor position, so a
+                // rod that keeps the last bounce tick's velocity — a few
+                // hundredths after the 0.4-per-bounce decay — creeps to the
+                // back stop over the next minute, in plain view, compressing
+                // itself with nobody's hand on it. The bounces have decayed
+                // to nearly nothing by the two hundredth step; parking the
+                // rod is tidying, not teleporting.
+                self.speed = 0.0;
+                self.fire_bounce = 0.0;
+                self.pos = self.frame_end + self.rest_pos * self.frame_len;
+            }
         } else if self.pull_force != 0.0 {
             // The pull force is in units where the time step is worth one, so
             // no `dt` shows up here.
@@ -564,4 +577,61 @@ pub struct PlungerParams {
     pub momentum_xfer: f32,
     pub auto_plunger: bool,
     pub material: Material,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn plunger() -> Plunger {
+        Plunger::new(PlungerParams {
+            x: 0.0,
+            x2: 25.0,
+            y: 2000.0,
+            z_low: 0.0,
+            frame_end: 1920.0,
+            frame_start: 2000.0,
+            rest_pos: 0.17,
+            speed_pull: 0.5,
+            speed_fire: 80.0,
+            mech_strength: 85.0,
+            scatter_velocity: 0.0,
+            momentum_xfer: 1.0,
+            auto_plunger: false,
+            material: Material::default(),
+        })
+    }
+
+    /// The bug this guards against was visible from the player's seat: after
+    /// a shot the rod kept the last bounce tick's speed, and with nothing in
+    /// the idle branch to stop it, it crept to the back stop on its own.
+    #[test]
+    fn a_fired_plunger_comes_to_rest_and_stays_there() {
+        let mut p = plunger();
+        p.pull();
+        for _ in 0..500 {
+            p.update_velocities();
+            p.update_displacements(0.001);
+        }
+        p.release();
+        // Through the shot and well past it.
+        for _ in 0..FIRE_STEPS + 100 {
+            p.update_velocities();
+            p.update_displacements(0.001);
+        }
+        assert_eq!(p.speed, 0.0, "the shot must leave no residual speed");
+        let rest = p.travel();
+        assert!(rest < 0.01, "the rod parks: travel {rest}");
+        // And it stays parked: another minute of table time moves nothing.
+        for _ in 0..60_000 {
+            p.update_velocities();
+            p.update_displacements(0.001);
+        }
+        assert!(
+            (p.travel() - rest).abs() < 1e-4,
+            "an untouched rod must not move: {} then {}",
+            rest,
+            p.travel()
+        );
+    }
 }

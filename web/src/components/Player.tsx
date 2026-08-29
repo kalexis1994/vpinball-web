@@ -284,7 +284,7 @@ export function Player({ table, title, source, rom, onExit }: Props) {
         {/* The numbers only appear when they are news: the table tilted, or the
             physics is falling behind and the game is running in slow motion.
             The rest of the time a playfield is better with nothing on it. */}
-        {loop && (loop.tilt || loop.tps < 900) && <LoopBadge loop={loop} />}
+        {loop && (loop.tilt || loop.tps < 900 || loop.fps < 50) && <LoopBadge loop={loop} />}
         {loop && !loop.romRunning && <NoMachine wanted={table?.rom.name ?? rom?.name ?? null} />}
         {notice && <p className="player-notice">{notice}</p>}
         {/* Worth the space it takes: without it a player stays on an old build
@@ -403,6 +403,7 @@ function LoopBadge({ loop }: { loop: Loop }) {
   return (
     <span className="player-fps">
       {loop.fps.toFixed(0)} fps · {loop.tps.toFixed(0)} Hz physics
+      {loop.qualityTier > 0 && <span> · Q{loop.qualityTier}</span>}
       {/* Why a machine is quiet, which is otherwise invisible: no board at all
           is a missing image in the zip, a board at zero is firmware that has
           not got going, and a board at its full rate with nothing coming out

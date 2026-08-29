@@ -412,6 +412,18 @@ impl GpuScene {
             (true, true) => a.depth.total_cmp(&b.depth),
         });
 
+        // Order the triangles for the GPU's caches — see `crate::meshopt`.
+        // Opaque batches only: in a transparent batch the triangle order is
+        // the blending order and belongs to the picture. The vertex remap
+        // then follows the final order of everything.
+        for b in &batches {
+            if !b.transparent {
+                let range = b.first_index as usize..(b.first_index + b.index_count) as usize;
+                crate::meshopt::optimize_order(&mut indices[range]);
+            }
+        }
+        crate::meshopt::remap_by_first_use(&mut vertices, &mut indices);
+
         let stats = SceneStats {
             meshes: visible.len(),
             vertices: vertices.len(),

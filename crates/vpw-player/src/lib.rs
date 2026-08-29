@@ -1244,6 +1244,12 @@ pub struct LoopStats {
     pub sound_board: bool,
     #[wasm_bindgen(js_name = soundRate, readonly)]
     pub sound_rate: f64,
+    /// Which rung of the quality ladder the governor is standing on: 0 is
+    /// everything on at full resolution. On screen it is the difference
+    /// between "the machine is slow" and "the machine is slow *with the
+    /// ladder already at the bottom*", which are different bug reports.
+    #[wasm_bindgen(js_name = qualityTier, readonly)]
+    pub quality_tier: usize,
     /// The set that is running, or empty. Answers "which machine is this".
     rom_name: String,
     /// What the machine or the script last said about itself: why a ROM would
@@ -1317,6 +1323,7 @@ pub fn loop_stats() -> Option<LoopStats> {
                 // As `f64` because JS has no `u64`, and `wasm-bindgen` would
                 // hand it over as a `BigInt`, which the UI then cannot format.
                 handler_calls: hud.map_or(0.0, |h| h.handlers as f64),
+                quality_tier: player.scale_tier,
                 rom_running: player
                     .table
                     .as_ref()
