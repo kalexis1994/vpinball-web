@@ -408,3 +408,8 @@ and the tests that check against them expect a checkout next door.
 
 GPL-3.0-or-later, inherited from Visual Pinball. The parts ported from PinMAME
 are BSD-3-Clause, which that permits.
+
+The one third-party asset is the display typeface the menus are set in:
+**Orbitron** by The League of Moveable Type, SIL Open Font License 1.1, bundled
+as a 12 KB variable font at `web/src/fonts/` with its licence beside it. It is
+carried rather than fetched so the page keeps working with no signal.

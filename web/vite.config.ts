@@ -191,8 +191,8 @@ function pwa(): Plugin {
             // upright. Turning it sideways does not show more table, it shows
             // less.
             orientation: 'portrait',
-            background_color: '#0b1020',
-            theme_color: '#0b1020',
+            background_color: '#06040f',
+            theme_color: '#06040f',
             categories: ['games'],
             icons: [
               { src: `${base}icon-192.png`, sizes: '192x192', type: 'image/png' },
