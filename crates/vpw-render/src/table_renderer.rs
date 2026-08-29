@@ -58,6 +58,9 @@ pub struct TableRenderer {
     /// See [`crate::flat`].
     flat: Option<crate::flat::Flat>,
     flat_on: bool,
+    /// The fraction of the surface the scene is drawn at, as last set. See
+    /// [`Self::set_render_scale`] for why this is remembered.
+    render_scale: f32,
 }
 
 impl TableRenderer {
@@ -119,6 +122,7 @@ impl TableRenderer {
             framing: None,
             flat: None,
             flat_on: false,
+            render_scale: 1.0,
         })
     }
 
@@ -623,6 +627,16 @@ impl TableRenderer {
     /// Renders the scene at a fraction of the surface, the composite
     /// stretching it back. See `Post::set_scale` for why this never blinks.
     pub fn set_render_scale(&mut self, scale: f32) {
+        // Only when it really changes. The governor calls this on every rung
+        // it steps to, including the first one — which is the reflection
+        // probe going off at the *same* resolution — and throwing the flat
+        // bake away on a scale that did not move meant a slow bake made the
+        // governor step, the step restarted the bake, and the bake never
+        // finished.
+        if (self.render_scale - scale).abs() < 1e-3 {
+            return;
+        }
+        self.render_scale = scale;
         self.invalidate_flat();
         self.post
             .set_scale(&self.gpu.device, &self.gpu.queue, scale);

@@ -424,6 +424,7 @@ fn fs_keep_depth(in : VsOut) -> @location(0) vec4<f32> {
         );
         let mut min = [f32::MAX; 2];
         let mut max = [f32::MIN; 2];
+        let mut ahead = 0;
         for i in 0..8 {
             let corner = Vec3::new(
                 if i & 1 == 0 { bmin.x } else { bmax.x },
@@ -431,17 +432,27 @@ fn fs_keep_depth(in : VsOut) -> @location(0) vec4<f32> {
                 if i & 4 == 0 { bmin.z } else { bmax.z },
             );
             let clip = vp * corner.extend(1.0);
+            // A corner behind the eye has no screen position — dividing by a
+            // negative `w` gives a confident wrong one — so it is left out of
+            // the box rather than allowed to define it. A lamp with *every*
+            // corner behind the eye is not in this picture at all, and
+            // saying so is what keeps the head's four hundred display
+            // segments out of an overhead bake: they used to fall back to
+            // "the whole screen", which is the most expensive possible
+            // answer for a lamp that cannot be seen.
             if clip.w <= 0.0 {
-                // A corner behind the eye has no screen position; give the
-                // lamp the whole screen rather than a wrong crop.
-                return None;
+                continue;
             }
+            ahead += 1;
             let x = clip.x / clip.w;
             let y = clip.y / clip.w;
             min[0] = min[0].min(x);
             min[1] = min[1].min(y);
             max[0] = max[0].max(x);
             max[1] = max[1].max(y);
+        }
+        if ahead == 0 {
+            return None;
         }
         // A quarter more on every side: transmitted glow on the plastics
         // above the lamp lands near it on screen but not inside it.
@@ -459,6 +470,16 @@ fn fs_keep_depth(in : VsOut) -> @location(0) vec4<f32> {
     /// whose light spans the field — the baked-lightmap ones above all — are
     /// photographed at reduced resolution, because a floodlight is
     /// low-frequency by nature.
+    /// The smallest surface worth photographing.
+    ///
+    /// The player starts on a one-by-one canvas and is resized once the page
+    /// has measured itself, so the first frames of a session can arrive with
+    /// a surface that is not yet a picture. Baking one is worthless — and it
+    /// used to be worse than worthless: the shelf packer subtracts its
+    /// padding from the width, and one minus two is where this engine
+    /// panicked, taking the whole player down with it.
+    const SMALLEST: u32 = 32;
+
     fn plan(
         &mut self,
         device: &wgpu::Device,
@@ -485,12 +506,16 @@ fn fs_keep_depth(in : VsOut) -> @location(0) vec4<f32> {
                 continue;
             }
             let rect = if foot.baked {
-                // Its share of the lightmap reaches the whole field.
-                None
+                // Its share of the lightmap reaches the whole field, so it
+                // gets the whole screen and no projection is asked for.
+                [-1.0, -1.0, 1.0, 1.0]
             } else {
-                Self::screen_rect(vp, &foot)
+                match Self::screen_rect(vp, &foot) {
+                    Some(rect) => rect,
+                    // Behind the camera: nothing of it is in the photograph.
+                    None => continue,
+                }
             };
-            let rect = rect.unwrap_or([-1.0, -1.0, 1.0, 1.0]);
             let px_w = (rect[2] - rect[0]) * 0.5 * wf;
             let px_h = (rect[3] - rect[1]) * 0.5 * hf;
             if px_w < 1.0 || px_h < 1.0 {
@@ -522,7 +547,10 @@ fn fs_keep_depth(in : VsOut) -> @location(0) vec4<f32> {
         let mut layers: Vec<Layer> = Vec::new();
         let (mut page, mut x, mut y, mut shelf) = (0u32, 0u32, 0u32, 0u32);
         for p in &planned {
-            let (sw, sh) = (p.size.0.min(w - PAD), p.size.1.min(h - PAD));
+            let (sw, sh) = (
+                p.size.0.min(w.saturating_sub(PAD)).max(1),
+                p.size.1.min(h.saturating_sub(PAD)).max(1),
+            );
             if x + sw + PAD > w {
                 x = 0;
                 y += shelf + PAD;
@@ -802,6 +830,13 @@ fn fs_keep_depth(in : VsOut) -> @location(0) vec4<f32> {
         };
 
         if matches!(self.state, State::Invalid) {
+            let (w, h) = post.scene_size();
+            if w < Self::SMALLEST || h < Self::SMALLEST {
+                // Nothing to photograph yet. Staying invalid means the next
+                // frame tries again, which is what happens as soon as the
+                // page reports the size it actually laid out.
+                return false;
+            }
             self.plan(device, post, lights, camera_vp, format);
             let baked = self.baked.as_ref().expect("plan just built it");
 
@@ -1094,5 +1129,51 @@ fn fs_keep_depth(in : VsOut) -> @location(0) vec4<f32> {
         if let Some(f) = flashers {
             f.draw(&mut pass, &pipeline.light_frame_bind_group);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::lights::Footprint;
+
+    fn footprint(at: Vec3) -> Footprint {
+        Footprint {
+            center: at,
+            radius: 20.0,
+            bounds: (at - Vec3::splat(20.0), at + Vec3::splat(20.0)),
+            baked: false,
+        }
+    }
+
+    /// A lamp the camera cannot see is not photographed.
+    ///
+    /// This is what keeps a machine's head out of an overhead bake. F-14
+    /// carries four hundred and forty-three lamps and most of them are the
+    /// display's own segments, standing behind the camera in that view; when
+    /// a failed projection fell back to "the whole screen" they each asked
+    /// for a full-screen sprite, which is the most expensive possible answer
+    /// for something nobody can see.
+    #[test]
+    fn a_lamp_behind_the_camera_is_not_in_the_picture() {
+        let eye = Vec3::new(0.0, -500.0, 200.0);
+        let view = vpw_math::glam::camera::lh::view::look_at_mat4(eye, Vec3::ZERO, Vec3::Z);
+        let proj = vpw_math::glam::camera::lh::proj::directx::perspective(
+            45f32.to_radians(),
+            1.0,
+            10.0,
+            5000.0,
+        );
+        let vp = proj * view;
+
+        // In front of the eye, on the table: it has a rectangle.
+        let ahead = Flat::screen_rect(vp, &footprint(Vec3::new(0.0, 0.0, 0.0)));
+        assert!(ahead.is_some(), "a lamp on the table is in shot");
+        let rect = ahead.expect("just checked");
+        assert!(rect[0] < rect[2] && rect[1] < rect[3], "a real rectangle");
+
+        // Well behind it: nothing at all, rather than everything.
+        let behind = Flat::screen_rect(vp, &footprint(Vec3::new(0.0, -2000.0, 200.0)));
+        assert!(behind.is_none(), "a lamp behind the eye is not in shot");
     }
 }
