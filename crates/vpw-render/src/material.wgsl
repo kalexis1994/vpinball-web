@@ -349,6 +349,14 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
         return vec4<f32>(texel.rgb * 2.0, texel.a);
     }
 
+    // The head's artwork: also its own light — a sheet with tubes behind it —
+    // but a printed one rather than a panel of plasma, so it is barely lifted
+    // instead of doubled. The lighting that belongs on it is already painted
+    // into the texture, which is the whole of what the bake is for.
+    if (material.extra.w > 2.5 && material.extra.w < 3.5) {
+        return vec4<f32>(texel.rgb * 1.25, texel.a);
+    }
+
     // The alpha test. `BasicShader.hlsl:366`:
     //
     //     clip(pixel.a <= alphaTestValue ? -1 : 1);

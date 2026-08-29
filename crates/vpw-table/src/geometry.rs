@@ -672,6 +672,25 @@ pub fn extract(vpx: &VPX) -> Scene {
     // goes on it is what the machine is saying and the machine has not been
     // switched on yet; the renderer redraws it as the segments change.
     let mut images = images(vpx);
+
+    // The artwork the head wears, painted rather than loaded: a `.vpx` has no
+    // backglass in it, so the alternative is the blank white panel this port
+    // used to stand behind every machine. See [`crate::backglass`] for what is
+    // painted, and why it is painted from the table's own colours.
+    let palette = palette_of(&images, &g.image);
+    images.push(Image {
+        name: crate::backglass::BACKGLASS_IMAGE.into(),
+        encoded: None,
+        rgba: Some(crate::backglass::paint(&palette)),
+        width: crate::backglass::BACKGLASS_PIXELS.0,
+        height: crate::backglass::BACKGLASS_PIXELS.1,
+        // Opaque artwork on an opaque sheet: nothing to test, nothing to see
+        // through.
+        alpha_test: -1.0,
+        has_alpha: false,
+        redrawn: false,
+    });
+
     images.push(Image {
         name: crate::backbox::DISPLAY_IMAGE.into(),
         encoded: None,
@@ -979,6 +998,70 @@ fn materials(vpx: &VPX) -> Vec<Material> {
             }
         })
         .collect()
+}
+
+/// The colours of the machine, for the head's artwork.
+///
+/// The playfield texture first, because it is the one image a table always
+/// has and the one its designer picked the whole machine's look from. If it
+/// has nothing to say — and plenty of images in a table do not, being masks
+/// and cut-outs — the biggest pictures the file carries are asked in turn, on
+/// the reasoning that the largest thing an author bothered to store is the
+/// thing they meant to be looked at.
+///
+/// A few tried at most: each one that is not already pixels has to be
+/// decoded, and a table's textures run to four thousand pixels square. This
+/// is the expensive half of painting the head, and it is paid once.
+fn palette_of(images: &[Image], playfield_image: &str) -> crate::backglass::Palette {
+    /// How many pictures are asked before the house colours are used.
+    const TRIES: usize = 4;
+
+    let mut candidates: Vec<&Image> = Vec::with_capacity(TRIES);
+    // Names in a `.vpx` are matched without regard to case everywhere else in
+    // the file, and they have to be here too: F-14 asks for "playfield" and
+    // stores "Playfield". Comparing them exactly is why every machine came
+    // out wearing the house colours the first time.
+    if let Some(pf) = images
+        .iter()
+        .find(|i| i.name.eq_ignore_ascii_case(playfield_image))
+    {
+        candidates.push(pf);
+    }
+    let mut rest: Vec<&Image> = images
+        .iter()
+        .filter(|i| !candidates.iter().any(|c| std::ptr::eq(*c, *i)))
+        .collect();
+    rest.sort_by_key(|i| std::cmp::Reverse(u64::from(i.width) * u64::from(i.height)));
+    candidates.extend(rest);
+
+    for art in candidates.into_iter().take(TRIES) {
+        let palette = match (&art.rgba, &art.encoded) {
+            // A raw BMP: already pixels.
+            (Some(rgba), _) => crate::backglass::Palette::from_art(rgba, art.width, art.height),
+            (None, Some(bytes)) => match image::load_from_memory(bytes) {
+                Ok(decoded) => {
+                    let rgba = decoded.to_rgba8();
+                    let (w, h) = (rgba.width(), rgba.height());
+                    crate::backglass::Palette::from_art(&rgba, w, h)
+                }
+                Err(e) => {
+                    log::warn!("the image \"{}\" would not decode: {e}", art.name);
+                    None
+                }
+            },
+            _ => None,
+        };
+        if let Some(palette) = palette {
+            log::debug!(
+                "the head is painted from \"{}\": {:?}",
+                art.name,
+                palette.colours
+            );
+            return palette;
+        }
+    }
+    log::debug!("nothing in this table says what colour it is; the head keeps the house colours");
+    crate::backglass::Palette::fallback()
 }
 
 fn images(vpx: &VPX) -> Vec<Image> {

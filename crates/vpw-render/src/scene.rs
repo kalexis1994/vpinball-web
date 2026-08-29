@@ -567,6 +567,15 @@ pub fn material_slot(
     if image.is_some_and(|i| i.name == vpw_table::backbox::DISPLAY_IMAGE) {
         data.extra[3] = 1.0;
     }
+    // And the artwork around it is a light too, for the same reason and to a
+    // gentler degree: a backglass is a translucent sheet with tubes behind it
+    // (see `vpw_table::backglass`), so it glows in a dark room instead of
+    // going out with it. 3.0 rather than 1.0 because the display is a plasma
+    // panel and this is a lit picture — the same branch at half the gain
+    // would make the head brighter than the score on it.
+    if image.is_some_and(|i| i.name == vpw_table::backglass::BACKGLASS_IMAGE) {
+        data.extra[3] = 3.0;
+    }
     // The playfield receives the baked GI: its UVs span the field, which is
     // the lightmap's space. 2.0 in the emissive slot, because the two flags
     // are mutually exclusive and the uniform has no room left over.

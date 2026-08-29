@@ -10,6 +10,6 @@ vpin = "0.27.0"
 log = "0.4"
 vpw-math = { version = "0.1.0", path = "../vpw-math" }
 vpw-physics = { version = "0.1.0", path = "../vpw-physics" }
-
-[dev-dependencies]
+# For the palette the head's artwork is painted from: a table's colours are in
+# its playfield texture, and reading them means decoding it once.
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }

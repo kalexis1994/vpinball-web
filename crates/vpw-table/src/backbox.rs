@@ -247,7 +247,10 @@ impl Backbox {
             vertices,
             indices: vec![0, 1, 2, 0, 2, 3],
             transform: Mat4::IDENTITY,
-            image: String::new(),
+            // The artwork, painted from the table's own colours rather than
+            // loaded: see [`crate::backglass`]. It used to be bare, which is
+            // the flat white panel this port stood behind every machine.
+            image: crate::backglass::BACKGLASS_IMAGE.into(),
             material: String::new(),
             visible: true,
             kind: MeshKind::Backbox,
