@@ -23,10 +23,17 @@ authored for a desktop simulator plays on a phone through a URL.
   script runs, the game's original ROM runs on an emulated CPU, and the
   score, the lamps, the sounds and the rules are the machine's own.
 - **Your tables.** Bring any `.vpx` file and its ROM. They stay in your
-  browser and nothing is ever uploaded.
+  browser and nothing is ever uploaded. A table that ships no picture of
+  itself gets photographed the first time you play it, so the shelf stays
+  readable.
 - **On a phone, properly.** Touch flippers, a plunger you drag, an overhead
   view where the screen is the glass over the playfield, and a renderer that
   trades quality for frames on its own when a device needs it.
+- **A head that looks like one.** A `.vpx` stops at the playfield — Visual
+  Pinball draws the backglass from a separate file, or on a second monitor —
+  so the head is painted here, from the colours of the table's own artwork.
+  F-14 comes out red and blue and South Park blue and yellow, and neither is
+  named anywhere.
 - **Offline.** Once opened, the player is cached; the tables already live in
   your browser. It works on a plane.
 
@@ -59,15 +66,29 @@ machine is emulated and the playfield is drawn in the tab.
 | `Z` / `M` | left and right flipper |
 | space | hold to pull the plunger, let go to shoot |
 | ← ↑ → | nudge the cabinet — too hard and it tilts |
+| `5`, then `1` | drop a coin in, then start the game |
+| `Enter` | serve a new ball, and clear the tilt |
 | `C` | switch between the front view and the overhead one |
 | `Esc` | pause, with resume and quit |
+
+Every one of those can be moved, and a **gamepad** works too — the shoulders
+are the flippers, because that is where a cabinet keeps them.
 
 On a phone the same controls are on screen: the flippers are the two buttons
 at the bottom corners, the plunger is dragged down and released, and the coin
 and start buttons are where a cabinet keeps them.
 
-**Settings** has two tabs. *Sound* is the volume. *Graphics* is where a slow
-machine is made fast:
+## Settings
+
+Four tabs, so that looking for the flipper keys does not mean scrolling past
+the room lighting.
+
+**Controls** — the keyboard and the gamepad, in rooms of their own. Each has
+its own bindings and its own defaults, because they are different instruments
+and moving the left flipper on the pad says nothing about where it is on the
+keyboard. Press a row, then press the key or the button you want on it.
+
+**Graphics** — where a slow machine is made fast:
 
 - **Renderer** — *Full 3D* is the real thing, lit and reflected. *Flat (2D)*
   photographs the table once and plays the photographs, keeping only the ball
@@ -78,8 +99,18 @@ machine is made fast:
   frame rate does.
 - **Room** — the light the table stands in: its own, or a real bar in HDR
   whose lamps show up reflected in the ball and the plastics.
-- **Camera** and **score panel** — where you look from, and where the
-  machine's score display sits when its head is not in shot.
+- **Camera** — where you look from.
+
+**Score panel** — where the machine's display sits when its head is not in
+shot: which gutter it stands in on a wide screen, and whether it docks above
+or below the table on a phone, or stays out of the way.
+
+**Audio** — the master volume, and under it the balance between the two
+halves of a machine's noise: what the game *says* — its sound board, the
+music and the speech and the effects — against what the table *does* when it
+is hit, the bumpers and the flippers and the ball on the wood. Both go past
+100%, because plenty of ROMs were mastered quietly and a table cannot be
+balanced against one of those by turning the table down.
 
 ## For developers
 
@@ -215,6 +246,59 @@ their average colour, because direct light ends at each bulb's falloff and a
 real machine keeps no black patches. `gi_diffuse` in `material.wgsl` is the
 whole of it, and `crates/vpw-render/tests/gi.rs` is the proof.
 
+### The flat engine
+
+A phone that cannot afford the scene pass can afford a photograph of it. With
+*Flat (2D)* on, the table is rendered once into a set of images and then
+played as images, with only the ball and the dozen moving parts still drawn in
+3D on top.
+
+The trick is that light is additive, so the photographs can be relit: one base
+picture with every lamp off, plus one difference picture per lamp, and the
+frame is `base + Σ level × layer`. A lamp at 40% contributes 40% of its own
+picture, exactly as it would have, and the script can do whatever it likes to
+the lamps without a single triangle being drawn again. The per-lamp pictures
+are cropped to where that lamp actually reaches and packed into an atlas,
+because a bulb over the left slingshot changes nothing on the right.
+
+The bake is spread over a few frames rather than blocking, so the table is
+playable while it is being taken. The camera is fixed while it is on: the
+photographs were taken from one place, and there is no second place to move
+to.
+
+`crates/vpw-render/src/flat.rs`.
+
+### The head, which is not in the file
+
+A `.vpx` stops at the playfield. Visual Pinball draws the backglass from a
+separate `.directb2s`, or on a second monitor, and neither is part of the
+table — so the head is **built** here from the cabinet's proportions
+(`crates/vpw-table/src/backbox.rs`), and the artwork on it is **painted**
+(`crates/vpw-table/src/backglass.rs`).
+
+The palette comes from the table itself, out of the playfield texture, with
+each pixel weighted by `saturation² × value`. That weighting is the whole
+trick: the commonest colour in a playfield photograph is a muddy mid-grey —
+wood, shadow, the average of everything — so a palette built by count comes
+back as four greys, and what a machine is remembered by is its vivid colours
+however little of it they cover.
+
+Then domain-warped value noise for the cloud, with the colour tied to the
+cloud's own density along a single ramp rather than chosen by a field of its
+own: when hue and brightness are independent, two colours meet at equal
+brightness and the join is a hard edge, which reads as marbled oil rather than
+as depth. Then a few broad Gaussians for the tubes behind the sheet — added
+where they overpower the ink, so the hot spot washes towards the tube's colour
+instead of the artwork's, which is what says *lit from behind* rather than
+*painted bright*. Then a grey frame, because the glass in a real head is held
+by something.
+
+To look at one without a browser:
+
+```bash
+cargo run --release -p vpw-table --example backglass -- out.png table.vpx
+```
+
 ## Build
 
 Requires the wasm target and a `wasm-bindgen-cli` of the same version as the
@@ -247,12 +331,12 @@ On entering a table the console prints fps and physics ticks per second.
 
 ## The keys in full
 
-The player's own keys are in [Playing it](#playing-it); these are the rest,
-which exist for working on it rather than for playing.
+The player's own keys are in [Playing it](#playing-it) and every one of them
+can be rebound; these are the rest, which exist for working on it rather than
+for playing, and which cannot.
 
 | key | what it does |
 |---|---|
-| `Enter` | new ball, and clears the tilt |
 | `B` | mark: saves the last 30 s of telemetry |
 
 The physics runs at a fixed 1000 Hz, decoupled from the frame rate, exactly as
