@@ -34,6 +34,16 @@ fn main() {
         g.bg_scale_y_desktop,
         g.bg_scale_z_desktop
     );
+    println!(
+        "cabinet view: mode {:?} fov {} inclination {} layback {} offset ({}, {}, {})",
+        g.bg_view_mode_fullscreen,
+        g.bg_fov_fullscreen,
+        g.bg_inclination_fullscreen,
+        g.bg_layback_fullscreen,
+        g.bg_offset_x_fullscreen,
+        g.bg_offset_y_fullscreen,
+        g.bg_offset_z_fullscreen
+    );
 
     for item in &vpx.gameitems {
         let GameItemEnum::Primitive(p) = item else {

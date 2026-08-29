@@ -91,6 +91,22 @@ const RISE_RATIO: f32 = 0.35;
 /// little enough that it still reads as upright.
 const LEAN_DEGREES: f32 = 8.0;
 
+/// The eight corners of an axis-aligned box.
+///
+/// Here rather than in the renderer because the scene is what has boxes to
+/// hand over and the renderer is only one of the things that reads them.
+pub fn corners_of(min: Vec3, max: Vec3) -> [Vec3; 8] {
+    let mut out = [Vec3::ZERO; 8];
+    for (i, corner) in out.iter_mut().enumerate() {
+        *corner = Vec3::new(
+            if i & 1 == 0 { min.x } else { max.x },
+            if i & 2 == 0 { min.y } else { max.y },
+            if i & 4 == 0 { min.z } else { max.z },
+        );
+    }
+    out
+}
+
 /// Where the head stands, in the table's own coordinates.
 ///
 /// Built once and handed around: the renderer needs it to draw the panel, and

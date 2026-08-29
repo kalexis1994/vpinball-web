@@ -47,6 +47,9 @@ pub struct TableRenderer {
     built_head: bool,
     /// The camera the table's author set up, for the views that have one.
     authored: Option<vpw_table::geometry::AuthoredView>,
+    /// What the original's own camera is fitted to. See
+    /// [`vpw_table::geometry::Scene::legacy_bounds`].
+    legacy: Vec<Vec3>,
     /// Corners of what really stands on the playfield. See `Scene::occupied`.
     occupied: Vec<Vec3>,
     /// The player's day/night, when they have set one; the table's own
@@ -128,6 +131,7 @@ impl TableRenderer {
             framing: None,
             built_head: true,
             authored: None,
+            legacy: Vec::new(),
             flat: None,
             flat_on: false,
             render_scale: 1.0,
@@ -347,12 +351,20 @@ impl TableRenderer {
         } else {
             (table.min, table.max)
         };
+        // The front view is framed the original's way, on the parts the
+        // original frames on. The overhead view is ours, and keeps the finer
+        // set: looking straight down, where the tall things *actually* are is
+        // worth a couple of per cent of a phone screen.
+        let corners = match view {
+            crate::camera::View::Front => &self.legacy,
+            crate::camera::View::Overhead => &self.occupied,
+        };
         Some(Camera::for_authored_view(
             view,
             (table.min, table.max),
             head,
             w as f32 / h as f32,
-            &self.occupied,
+            corners,
             self.authored,
         ))
     }
@@ -448,6 +460,7 @@ impl TableRenderer {
         self.built_head = scene.built_head;
         self.authored = Some(scene.view);
         self.occupied = scene.occupied();
+        self.legacy = scene.legacy_bounds();
         self.reframe();
         self.lights
             .upload(&self.gpu.device, &self.gpu.queue, &self.pipeline, scene);

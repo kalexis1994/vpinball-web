@@ -382,7 +382,12 @@ fn main() {
                 ),
                 head,
                 aspect,
-                &scene.occupied(),
+                // The same two sets the player uses: the original's for the
+                // view the original has, ours for the one it does not.
+                &match view {
+                    vpw_render::camera::View::Front => scene.legacy_bounds(),
+                    vpw_render::camera::View::Overhead => scene.occupied(),
+                },
                 Some(scene.view),
             )
         }
@@ -422,6 +427,40 @@ fn main() {
         println!(
             "table {table:.4} vs screen {aspect:.4}: {:.1}% of bar is unavoidable",
             (1.0 - (table / aspect).min(aspect / table)) * 100.0
+        );
+    }
+
+    // VPW_FIT=1 says what the camera is actually fitted to, which is the
+    // question behind every "why is it standing there".
+    if std::env::var("VPW_FIT").is_ok() {
+        let legacy = scene.legacy_bounds();
+        let (mut lo, mut hi) = (
+            vpw_math::Vec3::splat(f32::MAX),
+            vpw_math::Vec3::splat(f32::MIN),
+        );
+        for p in &legacy {
+            lo = lo.min(*p);
+            hi = hi.max(*p);
+        }
+        let kinds = |k| {
+            scene
+                .meshes
+                .iter()
+                .filter(|m| m.visible && m.kind == k)
+                .count()
+        };
+        println!(
+            "legacy fit: {} corners from {} walls, {} ramps, {} rubbers -> x {:.0}..{:.0} y {:.0}..{:.0} z {:.0}..{:.0}",
+            legacy.len(),
+            kinds(vpw_table::geometry::MeshKind::Wall),
+            kinds(vpw_table::geometry::MeshKind::Ramp),
+            kinds(vpw_table::geometry::MeshKind::Rubber),
+            lo.x,
+            hi.x,
+            lo.y,
+            hi.y,
+            lo.z,
+            hi.z
         );
     }
 

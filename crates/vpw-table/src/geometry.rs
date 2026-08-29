@@ -539,6 +539,64 @@ impl Scene {
     /// that frames those leaves the table small in a corner. The margin is
     /// generous enough for a wall sitting on the edge and mean enough to catch
     /// something in the next postcode.
+    /// The corners the original's legacy camera is fitted to.
+    ///
+    /// Not "everything on the table", and that is the whole point. Visual
+    /// Pinball builds this set from three kinds of part and no others
+    /// (`ViewSetup.cpp:437`, and the `GetBoundingVertices` of each):
+    ///
+    /// * a **wall** contributes the *whole playfield rectangle* at its own top
+    ///   and bottom heights — "hardwired to table dimensions" is the comment
+    ///   in `surface.cpp:451`, and it is not a shortcut: it is what makes the
+    ///   fit frame the table rather than the furniture;
+    /// * a **ramp** and a **rubber** contribute their own boxes
+    ///   (`ramp.cpp:293`, `rubber.cpp:305`);
+    /// * a **primitive** contributes *nothing*. `primitive.cpp:622` says why
+    ///   in as many words: the position was computed from a partial bounding
+    ///   volume that would not include primitives, so it must never fill this
+    ///   list.
+    ///
+    /// Everything else — bumpers, targets, gates, spinners, kickers — has no
+    /// `GetBoundingVertices` at all and has never been framed on.
+    ///
+    /// So the height of this box is the tallest *wall, ramp or rubber*, which
+    /// on any table is two or three hundred units. That is the rule that
+    /// makes the front view robust without a single guess about what is
+    /// scenery: a table that models a room around itself does it with
+    /// primitives, and a camera that never framed on primitives never has to
+    /// find that out. The Sopranos' room reaches 1215 units over the whole
+    /// playfield and the original has simply never looked at it.
+    pub fn legacy_bounds(&self) -> Vec<Vec3> {
+        let pf = self.playfield;
+        let mut out = Vec::new();
+        for mesh in &self.meshes {
+            if !mesh.visible {
+                continue;
+            }
+            let Some(b) = mesh.bounds() else { continue };
+            let (lo, hi) = match mesh.kind {
+                // The table's own rectangle, raised to this wall's heights.
+                MeshKind::Wall => (
+                    Vec3::new(pf.min.x, pf.min.y, b.min.z),
+                    Vec3::new(pf.max.x, pf.max.y, b.max.z),
+                ),
+                MeshKind::Ramp | MeshKind::Rubber => (b.min, b.max),
+                _ => continue,
+            };
+            out.extend_from_slice(&crate::backbox::corners_of(lo, hi));
+        }
+        // A table with no wall, ramp or rubber at all is not a table anybody
+        // has, but a camera with nothing to frame is a black screen. The sheet
+        // itself is always something to look at.
+        if out.is_empty() {
+            out.extend_from_slice(&crate::backbox::corners_of(
+                Vec3::new(pf.min.x, pf.min.y, 0.0),
+                Vec3::new(pf.max.x, pf.max.y, 0.0),
+            ));
+        }
+        out
+    }
+
     pub fn occupied(&self) -> Vec<Vec3> {
         const SLACK: f32 = 50.0;
         let pf = self.playfield;
