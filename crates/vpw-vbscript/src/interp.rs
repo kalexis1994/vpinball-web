@@ -163,9 +163,17 @@ pub struct Interpreter {
     rng: RefCell<u32>,
     /// The last number `Rnd` produced, for `Rnd` with a negative argument.
     last_rnd: RefCell<f64>,
+    /// The locale identifier `SetLocale` was last given. See the call.
+    locale: std::cell::Cell<i32>,
 
     host: Rc<dyn Host>,
 }
+
+/// The locale this interpreter behaves as, and the one tables ask for.
+///
+/// 1033 is `en-US`. Numbers here are parsed and printed one way whatever is
+/// set, so this is a fact about the implementation rather than a setting.
+const US_ENGLISH: i32 = 1033;
 
 impl Default for Interpreter {
     fn default() -> Self {
@@ -193,6 +201,7 @@ impl Interpreter {
             // Any seed but zero; xorshift is stuck at zero forever.
             rng: RefCell::new(0x2545_F491),
             last_rnd: RefCell::new(0.0),
+            locale: std::cell::Cell::new(US_ENGLISH),
             host,
         }
     }
@@ -1458,6 +1467,43 @@ impl Interpreter {
             }
             "timer" => Ok(Some(Value::from_number(self.host.seconds()))),
 
+            // The locale, which a great many tables set on their first line.
+            //
+            // They do it for one reason: VBScript formats and parses numbers
+            // the way the machine's regional settings say, so on a German
+            // Windows `CDbl("1.5")` reads a thousands separator and a table's
+            // own `"0.5"` stops meaning a half. `SetLocale 1033` forces US
+            // English and makes the script's numbers mean what its author
+            // typed.
+            //
+            // Everything here is already invariant — numbers are parsed and
+            // printed one way, the way US English does it — so this is exactly
+            // the state those tables are asking for and there is nothing to
+            // change. What matters is that it *answers*: without it the call
+            // is an undefined procedure, and since it sits on the script's
+            // first line the rest of the table never runs at all. The value is
+            // kept so `GetLocale` can say what it was given, and the old one
+            // is returned because that is what `SetLocale` evaluates to.
+            "setlocale" => {
+                let was = self.locale.get();
+                let next = match arg(0) {
+                    // `SetLocale(0)` means "back to the system default", and
+                    // ours is the only one there is.
+                    Value::Empty => US_ENGLISH,
+                    v => match v.to_number() {
+                        Ok(n) if n as i32 == 0 => US_ENGLISH,
+                        Ok(n) => n as i32,
+                        // A name rather than a number: `SetLocale("en-us")` is
+                        // legal. Nothing downstream reads it, so the point is
+                        // only not to fail.
+                        Err(_) => US_ENGLISH,
+                    },
+                };
+                self.locale.set(next);
+                Ok(Some(Value::Long(was)))
+            }
+            "getlocale" => Ok(Some(Value::Long(self.locale.get()))),
+
             "msgbox" => {
                 // Not a dialog: a browser has nowhere to put one and nobody to
                 // dismiss it. Tables use `MsgBox` for real diagnostics —
@@ -1467,6 +1513,21 @@ impl Interpreter {
                 self.host.message(&text);
                 // The button the user "pressed". `vbOK`.
                 Ok(Some(Value::Long(1)))
+            }
+            "inputbox" => {
+                // There is nobody to type into it. A browser has nowhere to
+                // put a modal prompt and the script is not waiting for a
+                // person; what it is waiting for is a value it can carry on
+                // with, so it gets the default it offered. `core.vbs` asks
+                // this way for a volume level and passes the current one as
+                // the default, which makes the answer "leave it alone" —
+                // exactly what a cancelled dialog should mean.
+                let prompt = arg(0).to_str().unwrap_or_else(|_| Rc::from(""));
+                self.host.message(&prompt);
+                Ok(Some(match args.get(2) {
+                    Some(v) => Value::Str(v.to_str()?),
+                    None => Value::str(""),
+                }))
             }
             "createobject" | "getobject" => {
                 let id = arg(0).to_str()?;

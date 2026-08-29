@@ -477,7 +477,12 @@ cargo run --release -p vpw-s11 --example sound_cs_test -- /path/f14_l1.zip
 ## The WPC emulator
 
 `vpw-wpc` is the platform of the 90s: Twilight Zone, The Addams Family,
-Terminator 2 and a hundred more. It shares the CPU with the System 11 sound
+Terminator 2 and a hundred more.
+
+**Not playable yet.** The emulator boots these ROMs and runs them from the
+terminal, but it is not wired into the player: `vpw-game` knows about System
+11 and Whitestar, and a WPC table opened in the browser gets a playfield with
+nothing keeping score behind it. Connecting it is the next machine job. It shares the CPU with the System 11 sound
 board —a 6809— but the resemblance ends there: instead of six PIAs there is an
 ASIC that concentrates all the I/O, the ROM is paged in 16 KB banks to reach a
 megabyte, and the display is a 128x32 dot matrix.

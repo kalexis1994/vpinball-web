@@ -161,6 +161,22 @@ fn dispatch(key: &str, name: &str, args: &[Value]) -> Option<Result<Value>> {
         "typename" => strict(name, args, |v| Ok(Value::str(v.type_name()))),
         "vartype" => strict(name, args, |v| Ok(Value::Long(v.var_type()))),
 
+        // -- which engine is this --
+        //
+        // `controller.vbs` opens `LoadVBSFiles` with
+        // `If ScriptEngineMajorVersion < 5 Then MsgBox ...`, a guard against
+        // engines that predate this millennium. It sits under
+        // `On Error Resume Next`, so leaving it undefined does not stop the
+        // script — it does something quieter and worse: it raises, `Err` stays
+        // set, and the next line's `If Err Then MsgBox "Unable to open " &
+        // VBSfile` reports a file that opened perfectly well.
+        //
+        // The numbers are VBScript 5.8, the last version there was.
+        "scriptengine" => arity(name, args, 0, 0).map(|()| Value::str("VBScript")),
+        "scriptenginemajorversion" => arity(name, args, 0, 0).map(|()| Value::Long(5)),
+        "scriptengineminorversion" => arity(name, args, 0, 0).map(|()| Value::Long(8)),
+        "scriptenginebuildversion" => arity(name, args, 0, 0).map(|()| Value::Long(16996)),
+
         // -- strings --
         "len" => unary(name, args, |v| Ok(Value::Long(chars(v)?.len() as i32))),
         "left" => arity(name, args, 2, 2).and_then(|()| left_right(args, true)),

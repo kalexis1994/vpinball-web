@@ -1093,3 +1093,96 @@ Execute "ptr(k).Kick 4,5,6 ' 0 "
     );
     assert_eq!(v.to_number().unwrap(), 456.0);
 }
+
+/// `SetLocale` on the first line, which is where tables put it.
+///
+/// A user reported that most of the tables they tried failed with "Sub or
+/// Function not defined 'Setlocale'". It is the first statement of a great
+/// many published tables, so the whole script died on line one and the table
+/// came up empty — the worst possible place for a missing builtin.
+///
+/// Both call forms have to work: as a statement without parentheses, which is
+/// how it is nearly always written, and as a function whose value is read.
+#[test]
+fn a_table_may_set_its_locale_on_the_first_line() {
+    assert!(truth(
+        "SetLocale 1033
+Dim ok : ok = True
+",
+        "ok"
+    ));
+
+    // It answers with the locale it replaced, and `GetLocale` with the one it
+    // was given. A table that saves the old one to put it back afterwards —
+    // and some do — needs both halves to line up.
+    assert_eq!(
+        text(
+            "Dim was : was = SetLocale(1031)
+             Dim now : now = GetLocale()
+             Dim both : both = was & \"/\" & now
+",
+            "both"
+        ),
+        "1033/1031"
+    );
+
+    // Zero is "the system default", which here is the only one there is.
+    assert_eq!(
+        num(
+            "SetLocale 1031
+SetLocale 0
+Dim n : n = GetLocale()
+",
+            "n"
+        ),
+        1033.0
+    );
+
+    // And a locale named rather than numbered is legal VBScript. Nothing
+    // downstream reads it; the point is that it does not stop the script.
+    assert!(truth(
+        "SetLocale \"en-gb\"
+Dim ok : ok = True
+",
+        "ok"
+    ));
+}
+
+/// The engine-version guard at the top of `controller.vbs`.
+///
+/// `If ScriptEngineMajorVersion < 5 Then MsgBox ...` sits under
+/// `On Error Resume Next`, so leaving it undefined does not stop the script.
+/// It does something quieter: it sets `Err`, and the very next line's
+/// `If Err Then MsgBox "Unable to open " & VBSfile` then blames a file that
+/// opened perfectly well.
+#[test]
+fn the_engine_says_which_version_it_is() {
+    assert_eq!(num("v = ScriptEngineMajorVersion", "v"), 5.0);
+    assert_eq!(num("v = ScriptEngineMinorVersion", "v"), 8.0);
+    assert_eq!(text("v = ScriptEngine", "v"), "VBScript");
+
+    // The shape it is actually written in, error trapping and all: the guard
+    // must pass and must leave no error behind it.
+    assert!(truth(
+        "On Error Resume Next
+         If ScriptEngineMajorVersion < 5 Then Err.Raise 5
+         Dim ok : ok = (Err.Number = 0)
+",
+        "ok"
+    ));
+}
+
+/// `InputBox` answers with the default it was offered.
+///
+/// There is nobody to type into it. `core.vbs` asks this way for a volume
+/// level and passes the current one as the default, so answering with the
+/// default means "leave it alone" — which is what a dialog nobody saw should
+/// do.
+#[test]
+fn a_prompt_nobody_can_answer_returns_its_default() {
+    assert_eq!(
+        text("a = InputBox(\"Enter a volume\", \"Volume\", \"-12\")", "a"),
+        "-12"
+    );
+    assert_eq!(text("a = InputBox(\"Anything?\")", "a"), "");
+}
