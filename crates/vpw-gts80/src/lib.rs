@@ -14,10 +14,14 @@
 //! switch matrix, the lamp matrix, the solenoids, the dip switches and the
 //! BCD score displays. That is what makes a game run.
 //!
-//! Not here: the **sound board**, which is a second 6502 with its own ROM on
-//! its own card. The CPU board only ever writes a command to it, so its
-//! absence costs the sound and cannot stall the game — the same arrangement
-//! the Whitestar's display and sound have next door.
+//! The **sound card**: a second 6502 with its own ROM, on a card of its own,
+//! in both the shapes Gottlieb built it. See [`sound`].
+//!
+//! Not here: the **Sound & Speech board**, which is a third card again — two
+//! voice ROMs and a speech chip — and which about forty of these games carry.
+//! A set with one of those comes through with no card at all, which costs the
+//! sound and cannot stall the game: the CPU board writes a command to a latch
+//! and never waits for an answer.
 //!
 //! Not here either: the alphanumeric displays of **System 80B**, which are
 //! driven by a pair of Rockwell 10939 display processors rather than by BCD
@@ -58,5 +62,7 @@ pub mod board;
 pub mod display;
 pub mod games;
 pub mod io;
+pub mod sound;
 
 pub use board::{Board, System80};
+pub use sound::SoundBoard;

@@ -6,6 +6,7 @@ use vpw_riot::Riot;
 
 use crate::display::Displays;
 use crate::io::Io;
+use crate::sound::SoundBoard;
 
 /// How many bytes of battery-backed RAM the board has.
 ///
@@ -232,10 +233,14 @@ fn byte(rom: &[u8], at: usize) -> u8 {
     rom.get(at).copied().unwrap_or(0xFF)
 }
 
-/// A whole System 80: the board and the processor on it.
+/// A whole System 80: the board, the processor on it, and the card it talks to.
 pub struct Board {
     pub cpu: Cpu,
     pub mem: System80,
+    /// The sound card, when the set carried one this port knows. Its absence
+    /// costs the sound and cannot stall the game: the CPU board writes a
+    /// command to a latch and never waits for an answer.
+    pub sound: Option<SoundBoard>,
 }
 
 impl Board {
@@ -244,7 +249,21 @@ impl Board {
         let mut mem = System80::new(game, u2, u3);
         let mut cpu = Cpu::new();
         cpu.reset(&mut mem);
-        Self { cpu, mem }
+        Self {
+            cpu,
+            mem,
+            sound: None,
+        }
+    }
+
+    /// Plugs a sound card in, built from whatever the set carried.
+    pub fn load_sound(&mut self, sound: crate::games::Sound<'_>, rate: u32) {
+        self.sound = Some(match sound {
+            crate::games::Sound::Piggyback(rom) => SoundBoard::piggyback(rom.to_vec(), rate),
+            crate::games::Sound::Card { rom, system } => {
+                SoundBoard::sound(rom.to_vec(), system.to_vec(), rate)
+            }
+        });
     }
 
     /// Runs one instruction and gives the chips the clocks it took.
@@ -252,6 +271,21 @@ impl Board {
         self.cpu.irq = self.mem.irq();
         let clocks = self.cpu.step(&mut self.mem);
         self.mem.tick(clocks);
+
+        if let Some(sound) = &mut self.sound {
+            // A command reaches the card the instant the latch is written; on
+            // a piggyback it interrupts the card's processor, and on the older
+            // one it sits on port B until the firmware next looks.
+            if self.mem.io.sound_pending {
+                self.mem.io.sound_pending = false;
+                sound.command(self.mem.io.sound_command);
+            }
+            // The two processors are clocked by different things — one a
+            // crystal, the other a resistor and a capacitor — so the card runs
+            // for its own share of the same wall-clock time, remainder
+            // carried.
+            sound.run(f64::from(clocks) * f64::from(sound.card().clock()) / f64::from(CLOCK));
+        }
         clocks
     }
 
@@ -277,6 +311,22 @@ impl Board {
     pub fn restore_cmos(&mut self, bytes: &[u8]) {
         let n = bytes.len().min(NVRAM);
         self.mem.nvram[..n].copy_from_slice(&bytes[..n]);
+    }
+
+    /// Takes the sound card's audio away, resampled to the rate asked for.
+    pub fn take_audio_at(&mut self, rate: u32) -> Vec<f32> {
+        match &mut self.sound {
+            Some(s) => s.take_audio_at(rate),
+            None => Vec::new(),
+        }
+    }
+
+    /// Whether there is a card at all, and how many samples it has made.
+    pub fn sound_stats(&self) -> (bool, u64) {
+        match &self.sound {
+            Some(s) => (true, s.produced()),
+            None => (false, 0),
+        }
     }
 
     /// The score displays, as segment words a host can draw.

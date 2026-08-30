@@ -6,6 +6,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+vpw-audio = { version = "0.1.0", path = "../vpw-audio" }
 vpw-bus = { version = "0.1.0", path = "../vpw-bus" }
 vpw-m6502 = { version = "0.1.0", path = "../vpw-m6502" }
 vpw-riot = { version = "0.1.0", path = "../vpw-riot" }

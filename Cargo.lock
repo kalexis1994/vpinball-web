@@ -2052,6 +2052,7 @@ name = "vpw-gts80"
 version = "0.1.0"
 dependencies = [
  "log",
+ "vpw-audio",
  "vpw-bus",
  "vpw-m6502",
  "vpw-riot",

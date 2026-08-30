@@ -206,9 +206,7 @@ impl Hardware {
             // its own firmware out of the game's ROMs, and its output comes
             // out at its rate rather than ours. See [`vpw_ws::sound`].
             Self::Whitestar(b) => b.take_audio_at(vpw_s11::DEFAULT_AUDIO_RATE),
-            // The sound board is a second 6502 on a card of its own and is not
-            // here yet. Silence, and the game plays.
-            Self::Gts80(_) => Vec::new(),
+            Self::Gts80(b) => b.take_audio_at(vpw_s11::DEFAULT_AUDIO_RATE),
         }
     }
 
@@ -218,7 +216,7 @@ impl Hardware {
             // never a separate one to be missing.
             Self::S11(_) => (true, 0),
             Self::Whitestar(b) => b.sound_stats(),
-            Self::Gts80(_) => (false, 0),
+            Self::Gts80(b) => b.sound_stats(),
         }
     }
 
@@ -539,6 +537,16 @@ impl Machine {
             vpw_gts80::Board::new(roms.game.to_vec(), roms.u2.to_vec(), roms.u3.to_vec());
         if let Some(saved) = cmos {
             board.restore_cmos(saved);
+        }
+        // The sound card is a second processor on a card of its own, and about
+        // half the System 80 sets carry a third kind this port does not know.
+        // A set without one plays silently rather than not at all, which is
+        // what a machine with the card unplugged does.
+        match roms.sound {
+            Some(sound) => board.load_sound(sound, vpw_s11::DEFAULT_AUDIO_RATE),
+            None => {
+                log::warn!("no sound card this port knows in the set; the machine will be quiet")
+            }
         }
         *self.board.borrow_mut() = Hardware::Gts80(Box::new(board));
     }

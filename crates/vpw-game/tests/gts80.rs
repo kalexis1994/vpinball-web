@@ -122,6 +122,46 @@ fn a_coin_and_the_start_button_begin_a_game() {
     );
 }
 
+/// The sound card is a second processor on a card of its own, and its audio
+/// has to arrive here at the rate the mixer runs at.
+#[test]
+fn the_sound_card_produces_audio_at_the_mixers_rate() {
+    let Some(machine) = booted() else { return };
+    let (there, _) = machine.sound_stats();
+    assert!(
+        there,
+        "the set carries a piggyback card and it should be loaded"
+    );
+
+    // A second of machine time is a second of audio, whatever the card's own
+    // resistor-and-capacitor clock happens to be running at today.
+    let mut samples = 0;
+    for _ in 0..100 {
+        machine.advance(0.01);
+        samples += machine.take_audio().len();
+    }
+    let rate = vpw_game::AUDIO_RATE as usize;
+    assert!(
+        samples.abs_diff(rate) < rate / 20,
+        "a second should be about {rate} samples, and was {samples}"
+    );
+
+    // And it should be a sound and not a level. An attract mode with the
+    // tune switched off is genuinely silent, so the thing to listen for is a
+    // coin: the game board writes a command, the card's processor is
+    // interrupted, and it plays.
+    let mut loud = false;
+    for _ in 0..3 {
+        machine.set_switch(SW_COIN3, true);
+        for _ in 0..60 {
+            machine.advance(0.01);
+            loud |= machine.take_audio().iter().any(|s| s.abs() > 0.05);
+        }
+        machine.set_switch(SW_COIN3, false);
+    }
+    assert!(loud, "a coin should have made a noise");
+}
+
 /// The self-test button is a switch like any other on this board — there is no
 /// second wire into the CPU the way a System 11 has.
 #[test]

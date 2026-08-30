@@ -47,6 +47,11 @@
 //! Reading the timer clears its flag. Reading the flags clears the *edge*
 //! flag and leaves the timer's alone.
 
+pub mod r6530;
+mod timer;
+
+pub use r6530::Riot6530;
+
 /// One MOS 6532.
 #[derive(Debug, Clone)]
 pub struct Riot {
@@ -64,14 +69,9 @@ pub struct Riot {
     /// The same for port B.
     pub in_b: u8,
 
-    /// The count, as the CPU would read it.
-    timer: u8,
-    /// Clocks per decrement: 1, 8, 64 or 1024 until it times out, and 1 after.
-    divider: u32,
-    /// Clocks left before the next decrement.
-    remaining: u32,
-    timer_flag: bool,
-    timer_irq: bool,
+    /// The interval timer, which is the same circuit the 6530 has: see
+    /// [`timer::Timer`].
+    timer: timer::Timer,
 
     /// Whether the edge detector wants a rising edge rather than a falling one.
     edge_positive: bool,
@@ -96,11 +96,7 @@ impl Riot {
             out_b: 0,
             ddr_b: 0,
             in_b: 0xFF,
-            timer: 0,
-            divider: 1,
-            remaining: 1,
-            timer_flag: false,
-            timer_irq: false,
+            timer: timer::Timer::new(),
             edge_positive: false,
             edge_irq: false,
             edge_flag: false,
@@ -134,7 +130,7 @@ impl Riot {
     /// open drain and every RIOT on the board pulls the same line, so a
     /// machine ORs the three together.
     pub fn irq(&self) -> bool {
-        (self.timer_flag && self.timer_irq) || (self.edge_flag && self.edge_irq)
+        self.timer.interrupting() || (self.edge_flag && self.edge_irq)
     }
 
     /// Reads one of the I/O registers. `addr` is the five lines that reach the
@@ -156,14 +152,12 @@ impl Riot {
             // Reading the timer sets whether it may interrupt — the address
             // line is the switch, which is why a ROM has two different
             // addresses for "read the timer".
-            self.timer_irq = a & 0x08 != 0;
-            self.timer_flag = false;
-            self.timer
+            self.timer.read(a & 0x08 != 0)
         } else {
             // And reading the flags clears the *edge* one only. The timer's
             // is cleared by reading the timer, and a routine that wanted both
             // has to do both.
-            let flags = (u8::from(self.timer_flag) << 7) | (u8::from(self.edge_flag) << 6);
+            let flags = (u8::from(self.timer.flag()) << 7) | (u8::from(self.edge_flag) << 6);
             self.edge_flag = false;
             flags
         }
@@ -182,16 +176,7 @@ impl Riot {
             return;
         }
         if a & 0x10 != 0 {
-            self.timer = value;
-            self.divider = match a & 0x03 {
-                0 => 1,
-                1 => 8,
-                2 => 64,
-                _ => 1024,
-            };
-            self.remaining = self.divider;
-            self.timer_irq = a & 0x08 != 0;
-            self.timer_flag = false;
+            self.timer.start(value, a, a & 0x08 != 0);
         } else {
             self.edge_positive = a & 0x01 != 0;
             self.edge_irq = a & 0x02 != 0;
@@ -200,22 +185,7 @@ impl Riot {
 
     /// Runs the timer and the edge detector for a number of CPU clocks.
     pub fn tick(&mut self, clocks: u32) {
-        for _ in 0..clocks {
-            self.remaining -= 1;
-            if self.remaining > 0 {
-                continue;
-            }
-            if self.timer == 0 {
-                // Past zero: the flag sets and the divider goes to one, so
-                // what the CPU reads from here is how long ago that was.
-                self.timer = 0xFF;
-                self.timer_flag = true;
-                self.divider = 1;
-            } else {
-                self.timer -= 1;
-            }
-            self.remaining = self.divider;
-        }
+        self.timer.tick(clocks);
         self.check_edge();
     }
 
