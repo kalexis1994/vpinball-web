@@ -7,6 +7,7 @@ use vpw_riot::Riot;
 use crate::display::Displays;
 use crate::io::Io;
 use crate::sound::SoundBoard;
+use crate::speech::SpeechBoard;
 
 /// How many bytes of battery-backed RAM the board has.
 ///
@@ -240,7 +241,61 @@ pub struct Board {
     /// The sound card, when the set carried one this port knows. Its absence
     /// costs the sound and cannot stall the game: the CPU board writes a
     /// command to a latch and never waits for an answer.
-    pub sound: Option<SoundBoard>,
+    pub sound: Option<Audio>,
+}
+
+/// Whichever card is plugged in.
+///
+/// Gottlieb fitted three different ones over five years and they share only
+/// the latch: this is a 6502 and a 6530 with a resistor ladder, or a 6502 and
+/// a 6532 with two converters and a speech chip.
+pub enum Audio {
+    /// The 1980 sound card or the 1983 piggyback. See [`crate::sound`].
+    Card(SoundBoard),
+    /// The Sound & Speech board. See [`crate::speech`].
+    Speech(SpeechBoard),
+}
+
+impl Audio {
+    /// The card's own processor clock, which is not the game board's.
+    pub fn clock(&self) -> u32 {
+        match self {
+            Self::Card(c) => c.card().clock(),
+            Self::Speech(_) => crate::speech::CLOCK,
+        }
+    }
+
+    /// Hands the card a command from the game board.
+    pub fn command(&mut self, value: u8) {
+        match self {
+            Self::Card(c) => c.command(value),
+            Self::Speech(c) => c.command(value),
+        }
+    }
+
+    /// Runs for a number of the card's own clocks.
+    pub fn run(&mut self, clocks: f64) {
+        match self {
+            Self::Card(c) => c.run(clocks),
+            Self::Speech(c) => c.run(clocks),
+        }
+    }
+
+    /// Takes the audio away, resampled to the rate asked for.
+    pub fn take_audio_at(&mut self, rate: u32) -> Vec<f32> {
+        match self {
+            Self::Card(c) => c.take_audio_at(rate),
+            Self::Speech(c) => c.take_audio_at(rate),
+        }
+    }
+
+    /// How many samples the card has made since it was built.
+    pub fn produced(&self) -> u64 {
+        match self {
+            Self::Card(c) => c.produced(),
+            Self::Speech(c) => c.produced(),
+        }
+    }
 }
 
 impl Board {
@@ -259,9 +314,14 @@ impl Board {
     /// Plugs a sound card in, built from whatever the set carried.
     pub fn load_sound(&mut self, sound: crate::games::Sound<'_>, rate: u32) {
         self.sound = Some(match sound {
-            crate::games::Sound::Piggyback(rom) => SoundBoard::piggyback(rom.to_vec(), rate),
+            crate::games::Sound::Piggyback(rom) => {
+                Audio::Card(SoundBoard::piggyback(rom.to_vec(), rate))
+            }
             crate::games::Sound::Card { rom, system } => {
-                SoundBoard::sound(rom.to_vec(), system.to_vec(), rate)
+                Audio::Card(SoundBoard::sound(rom.to_vec(), system.to_vec(), rate))
+            }
+            crate::games::Sound::Speech { first, second } => {
+                Audio::Speech(SpeechBoard::new(first, second, rate))
             }
         });
     }
@@ -284,7 +344,7 @@ impl Board {
             // crystal, the other a resistor and a capacitor — so the card runs
             // for its own share of the same wall-clock time, remainder
             // carried.
-            sound.run(f64::from(clocks) * f64::from(sound.card().clock()) / f64::from(CLOCK));
+            sound.run(f64::from(clocks) * f64::from(sound.clock()) / f64::from(CLOCK));
         }
         clocks
     }

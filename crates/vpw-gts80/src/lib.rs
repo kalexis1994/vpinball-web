@@ -17,11 +17,13 @@
 //! The **sound card**: a second 6502 with its own ROM, on a card of its own,
 //! in both the shapes Gottlieb built it. See [`sound`].
 //!
-//! Not here: the **Sound & Speech board**, which is a third card again — two
-//! voice ROMs and a speech chip — and which about forty of these games carry.
-//! A set with one of those comes through with no card at all, which costs the
-//! sound and cannot stall the game: the CPU board writes a command to a latch
-//! and never waits for an answer.
+//! The **Sound & Speech board**, a third card again — a 6502, a 6532, two
+//! converters and a Votrax speech chip — which about forty of these games
+//! carry. See [`speech`] and [`votrax`].
+//!
+//! A set whose sound card this port does not know comes through with no card
+//! at all, which costs the sound and cannot stall the game: the CPU board
+//! writes a command to a latch and never waits for an answer.
 //!
 //! Not here either: the alphanumeric displays of **System 80B**, which are
 //! driven by a pair of Rockwell 10939 display processors rather than by BCD
@@ -63,6 +65,9 @@ pub mod display;
 pub mod games;
 pub mod io;
 pub mod sound;
+pub mod speech;
+pub mod votrax;
 
 pub use board::{Board, System80};
 pub use sound::SoundBoard;
+pub use speech::SpeechBoard;

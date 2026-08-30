@@ -51,6 +51,11 @@ fn main() {
                 rom.len(),
                 system.len()
             ),
+            Some(Sound::Speech { first, second }) => format!(
+                "sound & speech board, {} + {} bytes and a Votrax",
+                first.len(),
+                second.len()
+            ),
             None => "no card this port knows; the machine will be quiet".to_string(),
         }
     );
@@ -60,11 +65,7 @@ fn main() {
         board.load_sound(sound, RATE);
     }
     if let Some(card) = &board.sound {
-        println!(
-            "       reset to ${:04X}, clocked at {} Hz",
-            card.cpu.pc,
-            card.card().clock()
-        );
+        println!("       clocked at {} Hz", card.clock());
     }
 
     let mut wav = Vec::new();

@@ -36,6 +36,9 @@ pub enum Sound<'a> {
     /// The 1980 sound card: a kilobyte of four-bit samples, and the code in
     /// the 6530's own mask ROM beside it.
     Card { rom: &'a [u8], system: &'a [u8] },
+    /// The Sound & Speech board: two 2 KB images side by side in one 4 KB
+    /// window, and a Votrax between them and the cabinet.
+    Speech { first: &'a [u8], second: &'a [u8] },
 }
 
 /// Whether a set of images looks like a System 80, and which ROM is which.
@@ -68,13 +71,33 @@ pub fn detect(images: &[(String, Vec<u8>)]) -> Option<Roms<'_>> {
             .map(|(_, data)| data.as_slice())
     };
 
-    // The 6530's own kilobyte, which every set for the older card carries
-    // under the same name because every one of those cards has the same chip.
-    let system = named("6530", 1024);
-    let sound = match (of_size(2048, true), of_size(1024, true), system) {
-        (Some(rom), _, _) => Some(Sound::Piggyback(rom)),
-        (None, Some(rom), Some(system)) => Some(Sound::Card { rom, system }),
-        _ => None,
+    // Which card a set carries is written in the shape of its sound images.
+    // Two of 2 KB is the Sound & Speech board, whose halves Gottlieb names
+    // `s1` and `s2` — and which half is which decides what the machine says,
+    // so they are taken in name order rather than in whatever order the zip
+    // happened to store them. One of 2 KB is the piggyback. One of 1 KB
+    // beside the 6530's own — which every set for the older card carries
+    // under the same name, because every one of those cards has the same chip
+    // — is the 1980 sound card.
+    let mut two_k: Vec<&(String, Vec<u8>)> = images
+        .iter()
+        .filter(|(name, data)| {
+            let n = name.to_ascii_lowercase();
+            data.len() == 2048 && (n.contains("snd") || n.contains("-s."))
+        })
+        .collect();
+    two_k.sort_by_key(|(name, _)| name.to_ascii_lowercase());
+
+    let sound = match two_k.as_slice() {
+        [first, second, ..] => Some(Sound::Speech {
+            first: first.1.as_slice(),
+            second: second.1.as_slice(),
+        }),
+        [only] => Some(Sound::Piggyback(only.1.as_slice())),
+        [] => match (of_size(1024, true), named("6530", 1024)) {
+            (Some(rom), Some(system)) => Some(Sound::Card { rom, system }),
+            _ => None,
+        },
     };
 
     Some(Roms {
