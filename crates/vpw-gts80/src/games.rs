@@ -18,14 +18,28 @@
 //! no sound board, which is a machine that plays silently rather than not at
 //! all.
 
-/// The three ROMs a System 80 needs, borrowed from the set.
+/// The ROMs a System 80 needs, borrowed from the set.
 #[derive(Debug, Clone, Copy)]
 pub struct Roms<'a> {
+    /// The game's own ROM. Empty on the System 80B sets that hold the whole
+    /// game in the 8 KB image instead.
     pub game: &'a [u8],
-    pub u2: &'a [u8],
-    pub u3: &'a [u8],
+    /// The system ROM: two 4 KB images on a System 80 or 80A, one of 8 KB on
+    /// an 80B. Either way it lands at `$2000`.
+    pub system: System<'a>,
     /// The sound card's firmware, if the set carries a card this port knows.
     pub sound: Option<Sound<'a>>,
+}
+
+/// Which generation a set is, told by the shape of its system ROM.
+#[derive(Debug, Clone, Copy)]
+pub enum System<'a> {
+    /// System 80 and 80A: `u2_80a.bin` and `u3_80a.bin`, 4 KB each, and a
+    /// score display of BCD latches.
+    Bcd { u2: &'a [u8], u3: &'a [u8] },
+    /// System 80B: one 8 KB image where those two were, and two rows of
+    /// twenty characters instead of the latches.
+    Alphanumeric(&'a [u8]),
 }
 
 /// Which sound card a set is carrying, and its ROMs.
@@ -43,10 +57,14 @@ pub enum Sound<'a> {
 
 /// Whether a set of images looks like a System 80, and which ROM is which.
 ///
-/// Deliberately strict about the two system ROMs: they have to be named, not
-/// merely the right size. A set with two anonymous 4 KB images could be
-/// anything, and guessing which was U2 boots a machine that runs its own ROM
+/// Deliberately strict about the 80 and 80A's two system ROMs: they have to be
+/// named, not merely the right size. A set with two anonymous 4 KB images could
+/// be anything, and guessing which was U2 boots a machine that runs its own ROM
 /// backwards — which looks like a broken CPU rather than a misread set.
+///
+/// An 80B is told apart by the one thing that changed underneath: where the
+/// older boards have two 4 KB system ROMs it has a single 8 KB one, and that
+/// is also the board with the alphanumeric displays.
 pub fn detect(images: &[(String, Vec<u8>)]) -> Option<Roms<'_>> {
     let named = |token: &str, size: usize| {
         images
@@ -54,9 +72,12 @@ pub fn detect(images: &[(String, Vec<u8>)]) -> Option<Roms<'_>> {
             .find(|(name, data)| data.len() == size && name.to_ascii_lowercase().contains(token))
             .map(|(_, data)| data.as_slice())
     };
-
-    let u2 = named("u2", 4096)?;
-    let u3 = named("u3", 4096)?;
+    let of_size_any = |size: usize| {
+        images
+            .iter()
+            .find(|(_, data)| data.len() == size)
+            .map(|(_, data)| data.as_slice())
+    };
 
     // The game ROM is the 2 KB image that is not the sound board's. Gottlieb
     // names the sound one after the game with an `-s` on it, so the two sit
@@ -100,10 +121,24 @@ pub fn detect(images: &[(String, Vec<u8>)]) -> Option<Roms<'_>> {
         },
     };
 
+    // A System 80B: one 8 KB system image, and a game ROM of 2 KB or 4 KB
+    // beside it — or none at all on the sets whose whole game is in the 8 KB.
+    if let Some(system) = of_size_any(8192) {
+        return Some(Roms {
+            game: of_size(2048, false)
+                .or_else(|| of_size(4096, false))
+                .unwrap_or(&[]),
+            system: System::Alphanumeric(system),
+            sound,
+        });
+    }
+
     Some(Roms {
         game: of_size(2048, false)?,
-        u2,
-        u3,
+        system: System::Bcd {
+            u2: named("u2", 4096)?,
+            u3: named("u3", 4096)?,
+        },
         sound,
     })
 }

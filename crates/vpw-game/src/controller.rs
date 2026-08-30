@@ -530,23 +530,20 @@ impl Machine {
     /// Gottlieb's System 80. See [`vpw_gts80`].
     ///
     /// The simplest of the three to build: there is no wiring table to consult
-    /// and no display or sound board to hand images to, because a System 80
-    /// has neither. Three ROMs go in and the machine is the machine.
+    /// and no display board to hand images to, because the display is on the
+    /// game board. What the set's own shape decides is which generation it is
+    /// and which of three sound cards it carries.
     fn load_gts80(&self, roms: &vpw_gts80::games::Roms<'_>, cmos: Option<&[u8]>) {
-        let mut board =
-            vpw_gts80::Board::new(roms.game.to_vec(), roms.u2.to_vec(), roms.u3.to_vec());
+        // The sound card is a second processor on a card of its own, and some
+        // System 80 sets carry a kind this port does not know. A set without
+        // one plays silently rather than not at all, which is what a machine
+        // with the card unplugged does.
+        if roms.sound.is_none() {
+            log::warn!("no sound card this port knows in the set; the machine will be quiet");
+        }
+        let mut board = vpw_gts80::Board::from_roms(roms, vpw_s11::DEFAULT_AUDIO_RATE);
         if let Some(saved) = cmos {
             board.restore_cmos(saved);
-        }
-        // The sound card is a second processor on a card of its own, and about
-        // half the System 80 sets carry a third kind this port does not know.
-        // A set without one plays silently rather than not at all, which is
-        // what a machine with the card unplugged does.
-        match roms.sound {
-            Some(sound) => board.load_sound(sound, vpw_s11::DEFAULT_AUDIO_RATE),
-            None => {
-                log::warn!("no sound card this port knows in the set; the machine will be quiet")
-            }
         }
         *self.board.borrow_mut() = Hardware::Gts80(Box::new(board));
     }
@@ -921,10 +918,11 @@ impl Machine {
             Hardware::S11(b) => (b.upper_display(), b.lower_display()),
             // The dot matrix is a board of its own and is not here yet.
             Hardware::Whitestar(_) => (String::new(), String::new()),
-            // Two banks of sixteen: players one and two on top, three and four
-            // below. The ball-and-credit strip is a third bank with no row to
-            // put it in here.
-            Hardware::Gts80(b) => (b.mem.displays.text(0), b.mem.displays.text(1)),
+            // On a System 80 or 80A, two banks of sixteen: players one and two
+            // on top, three and four below, with the ball-and-credit strip a
+            // third bank there is no row for here. On an 80B, the two rows of
+            // twenty characters, which is what those rows are for.
+            Hardware::Gts80(b) => b.text(),
         }
     }
 

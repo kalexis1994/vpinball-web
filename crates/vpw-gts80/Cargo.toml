@@ -11,3 +11,8 @@ vpw-bus = { version = "0.1.0", path = "../vpw-bus" }
 vpw-m6502 = { version = "0.1.0", path = "../vpw-m6502" }
 vpw-riot = { version = "0.1.0", path = "../vpw-riot" }
 log = "0.4"
+
+[dev-dependencies]
+# Only so a test can check that this crate draws its sixteen segments in the
+# same order as the rest of the port. Nothing here depends on it to run.
+vpw-s11 = { version = "0.1.0", path = "../vpw-s11" }

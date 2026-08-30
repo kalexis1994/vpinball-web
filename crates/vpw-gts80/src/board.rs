@@ -4,6 +4,7 @@ use vpw_bus::Bus;
 use vpw_m6502::Cpu;
 use vpw_riot::Riot;
 
+use crate::alpha::Alphanumeric;
 use crate::display::Displays;
 use crate::io::Io;
 use crate::sound::SoundBoard;
@@ -16,6 +17,39 @@ use crate::speech::SpeechBoard;
 /// settings and the high scores all live here, and it is what a host has to
 /// keep between sessions for a machine to be the same machine next time.
 pub const NVRAM: usize = 256;
+
+/// Which generation of the board this is.
+///
+/// They share the processor, the three RIOTs, the switch matrix, the lamps and
+/// the solenoids. What differs is the score display and the shape of the ROMs
+/// that drive it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Generation {
+    /// System 80 and 80A: BCD latches, and two 4 KB system ROMs.
+    #[default]
+    Bcd,
+    /// System 80B: two rows of twenty sixteen-segment characters with a
+    /// Rockwell 10939 in front of each, and one 8 KB system ROM.
+    Alphanumeric,
+}
+
+/// The score display, whichever kind the board has.
+pub enum Screen {
+    /// Sixteen positions of BCD, three banks of them. See [`Displays`].
+    Bcd(Box<Displays>),
+    /// Two rows of twenty characters. See [`Alphanumeric`].
+    Alpha(Box<Alphanumeric>),
+}
+
+impl Screen {
+    /// RIOT 1's ports moved, which is the only way either kind is driven.
+    fn ports(&mut self, a: u8, b: u8) {
+        match self {
+            Self::Bcd(d) => d.port_a(a, b),
+            Self::Alpha(d) => d.ports(a, b),
+        }
+    }
+}
 
 /// The board's memory, and everything hanging off it.
 ///
@@ -33,7 +67,10 @@ pub struct System80 {
     pub nvram: [u8; NVRAM],
 
     pub io: Io,
-    pub displays: Displays,
+    pub screen: Screen,
+    /// Which generation this is, which decides how the ROMs are read and how
+    /// the sound command is put together.
+    pub generation: Generation,
 
     /// Clocks left before the next vertical blank, and how many have gone by.
     ///
@@ -46,8 +83,27 @@ pub struct System80 {
 }
 
 impl System80 {
-    /// Builds a board around a set of ROMs.
+    /// Builds a System 80 or 80A around its three ROMs.
     pub fn new(game: Vec<u8>, u2: Vec<u8>, u3: Vec<u8>) -> Self {
+        Self::build(game, u2, u3, Generation::Bcd)
+    }
+
+    /// Builds a System 80B around its game ROM and its one 8 KB system ROM.
+    ///
+    /// The 8 KB lands where the 80A's two 4 KB images did, so the map does not
+    /// change: it is split in half here and read as if it were still two
+    /// chips.
+    pub fn new_80b(game: Vec<u8>, system: Vec<u8>) -> Self {
+        let mut u2 = system;
+        let u3 = if u2.len() > 0x1000 {
+            u2.split_off(0x1000)
+        } else {
+            Vec::new()
+        };
+        Self::build(game, u2, u3, Generation::Alphanumeric)
+    }
+
+    fn build(game: Vec<u8>, u2: Vec<u8>, u3: Vec<u8>, generation: Generation) -> Self {
         Self {
             riot: [Riot::new(), Riot::new(), Riot::new()],
             game,
@@ -55,7 +111,11 @@ impl System80 {
             u3,
             nvram: [0; NVRAM],
             io: Io::new(),
-            displays: Displays::new(),
+            screen: match generation {
+                Generation::Bcd => Screen::Bcd(Box::default()),
+                Generation::Alphanumeric => Screen::Alpha(Box::default()),
+            },
+            generation,
             to_vblank: VBLANK_CLOCKS,
             vblanks: 0,
         }
@@ -87,7 +147,11 @@ impl System80 {
                 self.io.sweep();
             }
             if self.vblanks.is_multiple_of(DISPLAY_SWEEP) {
-                self.displays.sweep();
+                // Only the BCD display is swept: a System 80B's own processors
+                // do the multiplexing, so what they hold is already a frame.
+                if let Screen::Bcd(d) = &mut self.screen {
+                    d.sweep();
+                }
             }
         }
     }
@@ -134,10 +198,22 @@ impl System80 {
 
         // The sound command shares the port. Four bits of it, with a fifth
         // taken from a lamp latch, which is how a board with sixteen sounds
-        // came to have thirty-two.
-        let command = if data & 0x10 != 0 { data & 0x0F } else { 0 };
-        let high = u8::from(self.io.lamps[2] & 0x02 != 0) << 4;
-        let full = high | command;
+        // came to have thirty-two. Which latch lends the bit — and whether a
+        // command is sent at all when the enable is low — changed with the
+        // 80B, whose sound card is a different card.
+        let full = match self.generation {
+            Generation::Bcd => {
+                let command = if data & 0x10 != 0 { data & 0x0F } else { 0 };
+                (u8::from(self.io.lamps[2] & 0x02 != 0) << 4) | command
+            }
+            Generation::Alphanumeric => {
+                if data & 0x10 == 0 {
+                    // Nothing is being said, and the last thing said stands.
+                    return;
+                }
+                ((self.io.lamps[1] & 0x01) << 4) | (data & 0x0F)
+            }
+        };
         if full != self.io.sound_command {
             self.io.sound_command = full;
             self.io.sound_pending = true;
@@ -157,6 +233,44 @@ impl System80 {
             return;
         }
         self.io.lamps[selected - 1] = written & 0x0F;
+    }
+}
+
+impl System80 {
+    /// The BCD display, on a board that has one.
+    ///
+    /// A System 80B has an [`Alphanumeric`] instead, and nothing that reads
+    /// the digits of one can read the other: they are different hardware
+    /// showing different things.
+    pub fn displays(&self) -> Option<&Displays> {
+        match &self.screen {
+            Screen::Bcd(d) => Some(d),
+            Screen::Alpha(_) => None,
+        }
+    }
+
+    /// And the alphanumeric one, on a board that has that.
+    pub fn alpha(&self) -> Option<&Alphanumeric> {
+        match &self.screen {
+            Screen::Alpha(d) => Some(d),
+            Screen::Bcd(_) => None,
+        }
+    }
+
+    /// A byte of the game ROM.
+    ///
+    /// Almost always a straight read. The exception is a System 80B carrying a
+    /// **4 KB** game ROM: that one does not fit the 2 KB window, so the board
+    /// puts its halves in the two copies of the map that address line 15
+    /// tells apart — the only place on any of these boards where that line is
+    /// decoded rather than ignored.
+    fn game_byte(&self, addr: u16, offset: u16) -> u8 {
+        let bank = if self.game.len() > 0x0800 && addr & 0x8000 != 0 {
+            0x0800
+        } else {
+            0
+        };
+        byte(&self.game, usize::from(offset) + bank)
     }
 }
 
@@ -185,7 +299,7 @@ impl Bus for System80 {
             }
             0x0280..=0x02FF => self.riot[1].read(a),
             0x0300..=0x037F => self.riot[2].read(a),
-            0x1000..=0x17FF => byte(&self.game, usize::from(a - 0x1000)),
+            0x1000..=0x17FF => self.game_byte(addr, a - 0x1000),
             0x1800..=0x1FFF => self.nvram[usize::from(a & 0x00FF)],
             0x2000..=0x2FFF => byte(&self.u2, usize::from(a - 0x2000)),
             0x3000..=0x3FFF => byte(&self.u3, usize::from(a - 0x3000)),
@@ -203,10 +317,10 @@ impl Bus for System80 {
             0x0280..=0x02FF => {
                 self.riot[1].write(a, value);
                 // Port A carries the digit select and the latch strobes, and
-                // the displays are driven from the edges of those, so they are
+                // the display is driven from the edges of those, so it is
                 // looked at after every write rather than polled.
                 let (pa, pb) = (self.riot[1].port_a_output(), self.riot[1].port_b_output());
-                self.displays.port_a(pa, pb);
+                self.screen.ports(pa, pb);
             }
             0x0300..=0x037F => {
                 self.riot[2].write(a, value);
@@ -315,6 +429,34 @@ impl Board {
         }
     }
 
+    /// Builds a System 80B, whose system ROM is one 8 KB image.
+    pub fn new_80b(game: Vec<u8>, system: Vec<u8>) -> Self {
+        let mut mem = System80::new_80b(game, system);
+        let mut cpu = Cpu::new();
+        cpu.reset(&mut mem);
+        Self {
+            cpu,
+            mem,
+            sound: None,
+        }
+    }
+
+    /// Builds whichever machine a detected set describes, sound card and all.
+    pub fn from_roms(roms: &crate::games::Roms<'_>, rate: u32) -> Self {
+        let mut board = match roms.system {
+            crate::games::System::Bcd { u2, u3 } => {
+                Self::new(roms.game.to_vec(), u2.to_vec(), u3.to_vec())
+            }
+            crate::games::System::Alphanumeric(system) => {
+                Self::new_80b(roms.game.to_vec(), system.to_vec())
+            }
+        };
+        if let Some(sound) = roms.sound {
+            board.load_sound(sound, rate);
+        }
+        board
+    }
+
     /// Plugs a sound card in, built from whatever the set carried.
     pub fn load_sound(&mut self, sound: crate::games::Sound<'_>, rate: u32) {
         self.sound =
@@ -394,18 +536,33 @@ impl Board {
         }
     }
 
-    /// The score displays, as segment words a host can draw.
+    /// The score display, as segment words a host can draw.
     ///
-    /// The two player banks, sixteen positions each — which is exactly the two
-    /// rows of sixteen a score panel already has. The ball-and-credit strip is
-    /// a third bank with nowhere to go on that panel and is left out rather
-    /// than crammed in; it is `mem.displays.digits[2]` for whoever wants it.
+    /// On a System 80 or 80A: the two player banks, sixteen positions each,
+    /// which is exactly the two rows of sixteen a score panel already has. The
+    /// ball-and-credit strip is a third bank with nowhere to go on that panel
+    /// and is left out rather than crammed in; whoever wants it can read it
+    /// off the display itself.
+    ///
+    /// On a System 80B: the two rows of twenty characters, top row first, at
+    /// sixteen segments each rather than seven.
     pub fn segments(&self) -> Vec<u16> {
-        self.mem.displays.digits[0]
-            .iter()
-            .chain(self.mem.displays.digits[1].iter())
-            .map(|s| u16::from(*s))
-            .collect()
+        match &self.mem.screen {
+            Screen::Bcd(d) => d.digits[0]
+                .iter()
+                .chain(d.digits[1].iter())
+                .map(|s| u16::from(*s))
+                .collect(),
+            Screen::Alpha(d) => d.segments(),
+        }
+    }
+
+    /// The two rows of the score display, as text.
+    pub fn text(&self) -> (String, String) {
+        match &self.mem.screen {
+            Screen::Bcd(d) => (d.text(0), d.text(1)),
+            Screen::Alpha(d) => d.text(),
+        }
     }
 }
 

@@ -25,10 +25,15 @@
 //! at all, which costs the sound and cannot stall the game: the CPU board
 //! writes a command to a latch and never waits for an answer.
 //!
-//! Not here either: the alphanumeric displays of **System 80B**, which are
-//! driven by a pair of Rockwell 10939 display processors rather than by BCD
-//! latches. A 80B game will run on this and show nothing; the two generations
-//! differ in that one respect and share everything else.
+//! The alphanumeric displays of **System 80B** — two rows of twenty
+//! sixteen-segment characters with a Rockwell 10939 in front of each, where
+//! the older boards have BCD latches. See [`alpha`]. A set is recognised as an
+//! 80B by the one thing that changed underneath: one 8 KB system ROM where the
+//! 80A has two of 4 KB.
+//!
+//! Not here: the **80B sound boards**, which are a different card again in
+//! three generations — two more processors with an AY-8913 or a YM2151 — so an
+//! 80B set plays silently unless it carries one of the older cards.
 //!
 //! # The memory map (`gts80.c:505-517`)
 //!
@@ -60,6 +65,7 @@
 //! are fetched from `$FFFA`–`$FFFF`, which with A14 and A15 missing is the top
 //! of the U3 ROM. A map that does not fold cannot boot.
 
+pub mod alpha;
 pub mod board;
 pub mod display;
 pub mod games;
@@ -68,6 +74,6 @@ pub mod sound;
 pub mod speech;
 pub mod votrax;
 
-pub use board::{Board, System80};
+pub use board::{Board, Generation, System80};
 pub use sound::SoundBoard;
 pub use speech::SpeechBoard;

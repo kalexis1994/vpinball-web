@@ -226,7 +226,10 @@ fn the_displays_latch_on_a_rising_strobe_and_write_where_the_select_points() {
     // frame after this one, which on a running board is the score blinking.
     mem.tick(vpw_gts80::board::CLOCK / 25);
 
-    let lit = mem.displays.digits[0].iter().filter(|d| **d != 0).count();
+    let lit = mem.displays().expect("a BCD board").digits[0]
+        .iter()
+        .filter(|d| **d != 0)
+        .count();
     assert_eq!(lit, 1, "one digit, where the select pointed");
-    assert_eq!(mem.displays.number(0, 0, 16), 7);
+    assert_eq!(mem.displays().expect("a BCD board").number(0, 0, 16), 7);
 }

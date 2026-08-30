@@ -95,18 +95,31 @@ fn main() {
         board.mem.io.sound_command
     );
 
-    let written = board
-        .mem
-        .displays
-        .digits
-        .iter()
-        .flatten()
-        .filter(|d| **d != 0)
-        .count();
-    println!("  display      {written} of 48 positions lit");
-    for (i, bank) in board.mem.displays.digits.iter().enumerate() {
-        let text: String = bank.iter().map(|d| glyph(*d)).collect();
-        println!("    bank {i}      [{text}]");
+    if let Some(bcd) = board.mem.displays() {
+        let written = bcd.digits.iter().flatten().filter(|d| **d != 0).count();
+        println!("  display      {written} of 48 positions lit");
+        for (i, bank) in bcd.digits.iter().enumerate() {
+            let text: String = bank.iter().map(|d| glyph(*d)).collect();
+            println!("    bank {i}      [{text}]");
+        }
+    }
+    if let Some(alpha) = board.mem.alpha() {
+        let (top, bottom) = alpha.text();
+        println!(
+            "  display      two Rockwell 10939s, {} and {}",
+            if alpha.rows[0].running() {
+                "running"
+            } else {
+                "halted"
+            },
+            if alpha.rows[1].running() {
+                "running"
+            } else {
+                "halted"
+            },
+        );
+        println!("    top         [{top}]");
+        println!("    bottom      [{bottom}]");
     }
 
     // Where the time went, which is the quickest way to see a machine stuck in

@@ -60,10 +60,7 @@ fn main() {
         }
     );
 
-    let mut board = Board::new(roms.game.to_vec(), roms.u2.to_vec(), roms.u3.to_vec());
-    if let Some(sound) = roms.sound {
-        board.load_sound(sound, RATE);
-    }
+    let mut board = Board::from_roms(&roms, RATE);
     if let Some(card) = &board.sound {
         println!("       clocked at {} Hz", card.clock());
     }
