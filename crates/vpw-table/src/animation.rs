@@ -309,6 +309,12 @@ fn moving_primitives(vpx: &VPX, out: &mut Vec<AnimatedPart>) {
         let Some(mesh) = crate::geometry::primitive_part(p) else {
             continue;
         };
+        // A bake's lightmap layers are not parts and are not drawn. See
+        // [`crate::geometry::is_lightmap`] for why, when the pass that would
+        // draw them is right there.
+        if crate::geometry::is_lightmap(&p.name, &p.image) {
+            continue;
+        }
         // The whole placement is rebuilt from the numbers each frame, so
         // neither half of it belongs in `base` or `local`.
         out.push(AnimatedPart {

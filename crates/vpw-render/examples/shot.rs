@@ -260,6 +260,51 @@ fn main() {
     }
 
     let t2 = std::time::Instant::now();
+    // The pieces with a matrix of their own, on request. A baked table keeps
+    // nearly everything here — its `BM_*` meshes and its `LM_*` layers of
+    // light — so a photo without them is a photo of one mesh.
+    //
+    // `VPW_NOADD=1` leaves the layers of light out, which is how you find out
+    // whether a table that comes out white is being lit twice or added to
+    // ninety-six times.
+    if std::env::var("VPW_PARTS").is_ok() {
+        // Only the primitives the file marks dynamic, built straight from
+        // their meshes. The pieces the *physics* animates — flippers, gates,
+        // the plunger — are left out: this is for looking at a baked table,
+        // and a bake has none of them.
+        let mut parts: Vec<vpw_table::animation::AnimatedPart> = vpx
+            .gameitems
+            .iter()
+            .enumerate()
+            .filter_map(|(index, item)| match item {
+                vpin::vpx::gameitem::GameItemEnum::Primitive(p) if !p.static_rendering => {
+                    Some((index, p))
+                }
+                _ => None,
+            })
+            .filter_map(|(index, p)| {
+                Some(vpw_table::animation::AnimatedPart {
+                    mesh: vpw_table::geometry::primitive_part(p)?,
+                    base: vpw_math::Mat4::IDENTITY,
+                    local: vpw_math::Mat4::IDENTITY,
+                    anim: vpw_table::animation::Animation::Primitive { index },
+                })
+            })
+            .collect();
+        // What the file hides stays hidden. The player asks the live item every
+        // frame — a script shows and hides these constantly — but a photograph
+        // has no script, and drawing the hidden ones puts a baked table's
+        // discarded originals back on top of the bake that replaced them.
+        parts.retain(|p| p.mesh.visible);
+        // The same rule the real path uses, so the photo is of the table the
+        // player sees. See `vpw_table::geometry::is_lightmap`.
+        parts.retain(|p| !vpw_table::geometry::is_lightmap(&p.mesh.name, &p.mesh.image));
+        if std::env::var("VPW_NOADD").is_ok() {
+            parts.retain(|p| p.mesh.additive.is_none());
+        }
+        eprintln!("parts uploaded: {}", parts.len());
+        gpu.upload_dynamic(&scene, &parts);
+    }
     let gpu_scene = gpu.upload(&scene);
     gpu.upload_lights(&scene);
     // VPW_BAKE=1 traces the GI relay's lightmap first — shadows and all —

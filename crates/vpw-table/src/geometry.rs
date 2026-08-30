@@ -119,11 +119,22 @@ pub struct Additive {
 
 /// Whether a primitive is one of a baked table's lightmaps.
 ///
-/// Kept for what reads a table's shape rather than draws it: a lightmap is not
-/// a piece of the machine, so it has no place in the collision, the bounds or
-/// a bake of our own. What *draws* asks [`Mesh::additive`] instead, because the
-/// flag that decides how a part is drawn is the file's own Additive Blend and
-/// not anybody's naming.
+/// Two things ask. A lightmap is not a piece of the machine, so it has no
+/// place in the collision, the bounds or a bake of our own. And it is **not
+/// drawn**, which wants explaining, because the additive pass that would draw
+/// it is right here and works.
+///
+/// On the one baked table on hand — Circus (Gottlieb 1980) 2.0.1 VLM — adding
+/// the ninety-six layers doubles the picture: mean brightness goes from 30 to
+/// 62 out of 255 and the playfield saturates to a white sheet. Without them
+/// the table is exactly right. So this bake's `BM_*` meshes already carry the
+/// light these layers hold, and adding them is counting it twice. Which of
+/// VLM's bake modes produces a base that *does* want them is not something
+/// this port has established, and guessing wrong costs the table.
+///
+/// So: the file's Additive Blend flag is ported and drawn — a flasher, a toy,
+/// any table that throws it gets the pass — and a bake's own lightmap layers
+/// are left out until somebody works out what their base is supposed to be.
 pub fn is_lightmap(name: &str, image: &str) -> bool {
     name.starts_with("LM_") && image.starts_with("VLM.")
 }

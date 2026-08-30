@@ -310,7 +310,11 @@ impl GpuScene {
         let visible: Vec<&Mesh> = scene
             .meshes
             .iter()
-            .filter(|m| m.visible && m.additive.is_none())
+            .filter(|m| {
+                m.visible
+                    && m.additive.is_none()
+                    && !vpw_table::geometry::is_lightmap(&m.name, &m.image)
+            })
             .collect();
         let mut redrawn: HashMap<String, wgpu::Texture> = HashMap::new();
         // One copy of each picture across every batch. See [`TextureCache`].
