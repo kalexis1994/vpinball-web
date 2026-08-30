@@ -51,6 +51,7 @@
 
 pub mod ast;
 pub mod builtins;
+pub mod dates;
 pub mod error;
 pub mod instance;
 pub mod interp;

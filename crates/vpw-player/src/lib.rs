@@ -15,7 +15,7 @@ use std::rc::Rc;
 use std::collections::HashMap;
 
 use vpw_game::controller::RomSource;
-use vpw_game::{Game, Resources, ScriptLibrary};
+use vpw_game::{Clock, Game, Resources, ScriptLibrary};
 use vpw_physics::FixedStep;
 use vpw_render::TableRenderer;
 use vpw_render::camera::View;
@@ -1174,6 +1174,18 @@ thread_local! {
     static TABLE_VALUES: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
 }
 
+/// The browser's clock.
+///
+/// `Date.now()` and not `SystemTime`, because a wasm module has no system to
+/// ask. Same units either way: milliseconds since the Unix epoch.
+struct PageClock;
+
+impl Clock for PageClock {
+    fn now_millis(&self) -> f64 {
+        js_sys::Date::now()
+    }
+}
+
 /// The ROM registry, as the controller sees it.
 struct PageRoms;
 
@@ -1826,7 +1838,9 @@ fn observe_groups(
     // A scene of its own: `Game::load` takes the moving parts out of the one
     // it is given, and the bake wants the scene whole.
     let mut scene = vpw_table::geometry::extract(vpx);
-    let resources = Resources::new(Rc::new(PageLibraries)).with_roms(Rc::new(PageRoms));
+    let resources = Resources::new(Rc::new(PageLibraries))
+        .with_roms(Rc::new(PageRoms))
+        .with_clock(Rc::new(PageClock));
     let Ok(mut game) = Game::load(vpx, &mut scene, resources) else {
         return Vec::new();
     };
@@ -2113,7 +2127,9 @@ pub fn load_table(bytes: &[u8]) -> Result<SceneStats, JsValue> {
         // The libraries a table's script pulls in — `core.vbs` and the rest —
         // come from the page, which fetched them and handed them over through
         // `addScriptLibrary` before this ran.
-        let resources = Resources::new(Rc::new(PageLibraries)).with_roms(Rc::new(PageRoms));
+        let resources = Resources::new(Rc::new(PageLibraries))
+            .with_roms(Rc::new(PageRoms))
+            .with_clock(Rc::new(PageClock));
         let mut table = Game::load(&vpx, &mut scene, resources)
             .map_err(|e| JsValue::from_str(&format!("the table's script failed: {e}")))?;
         // Whatever this table saved last time, before its `Init` goes looking

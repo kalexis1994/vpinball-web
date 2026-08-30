@@ -127,6 +127,21 @@ pub trait Host {
     fn seconds(&self) -> f64 {
         0.0
     }
+
+    /// The wall clock, in milliseconds since the Unix epoch, if the host has
+    /// one.
+    ///
+    /// Kept apart from [`Self::seconds`], which is the *table's* clock: that
+    /// one starts at zero when the ball does and is what a script measures
+    /// intervals against. This is the one on the wall, and the only thing that
+    /// wants it is a table drawing a clock face.
+    ///
+    /// `None` from a host with no clock, and the date functions then answer
+    /// from the day VBScript counts from. A frozen clock is a clock whose
+    /// hands do not move; no clock at all used to be an error every tick.
+    fn now_millis(&self) -> Option<f64> {
+        None
+    }
 }
 
 /// A host that knows nothing. Useful for testing the language on its own.

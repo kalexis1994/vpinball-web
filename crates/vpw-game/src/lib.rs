@@ -127,6 +127,53 @@ impl ScriptLibrary for LibraryDir {
 pub struct Resources {
     pub libraries: Rc<dyn ScriptLibrary>,
     pub roms: Rc<dyn RomSource>,
+    /// The time of day, for the one thing that wants it. See [`Clock`].
+    pub clock: Rc<dyn Clock>,
+}
+
+/// Where the time of day comes from.
+///
+/// Some tables draw a clock on the backglass and set its hands from the real
+/// time. Nothing else in a pinball table asks: the clock a script measures
+/// intervals against is the table's own, it starts at zero when the player
+/// walks up, and it is a different thing entirely.
+///
+/// It is a seam rather than a call to the system because the machine this port
+/// runs on is a browser tab, which has no system clock to call.
+pub trait Clock {
+    /// Milliseconds since the Unix epoch.
+    fn now_millis(&self) -> f64;
+}
+
+/// A host with no clock at all. Every date reads as the day VBScript counts
+/// from, which is a Saturday in 1899, and a backglass clock drawn from it does
+/// not move.
+pub struct NoClock;
+
+impl Clock for NoClock {
+    fn now_millis(&self) -> f64 {
+        0.0
+    }
+}
+
+/// The machine's own clock, where there is a machine to ask.
+///
+/// Not on wasm, where there is no `SystemTime` and the page hands one in
+/// through [`Resources::with_clock`] instead.
+pub struct SystemClock;
+
+impl Clock for SystemClock {
+    #[cfg(not(target_arch = "wasm32"))]
+    fn now_millis(&self) -> f64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0.0, |d| d.as_millis() as f64)
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn now_millis(&self) -> f64 {
+        0.0
+    }
 }
 
 impl Default for Resources {
@@ -135,6 +182,7 @@ impl Default for Resources {
         Self {
             libraries: Rc::new(NoLibraries),
             roms: Rc::new(NoRoms),
+            clock: Rc::new(SystemClock),
         }
     }
 }
@@ -150,6 +198,11 @@ impl Resources {
 
     pub fn with_roms(mut self, roms: Rc<dyn RomSource>) -> Self {
         self.roms = roms;
+        self
+    }
+
+    pub fn with_clock(mut self, clock: Rc<dyn Clock>) -> Self {
+        self.clock = clock;
         self
     }
 }
@@ -279,6 +332,8 @@ pub struct GameState {
     pub machine: Rc<Machine>,
     /// Where the ROM images come from.
     roms: Rc<dyn RomSource>,
+    /// Where the time of day comes from.
+    clock: Rc<dyn Clock>,
     /// The rolling record of what the machine did. Off until a host turns it
     /// on; see [`telemetry`].
     pub telemetry: RefCell<telemetry::Telemetry>,
@@ -388,6 +443,7 @@ impl Game {
             libraries: resources.libraries,
             machine: Rc::new(Machine::new()),
             roms: resources.roms,
+            clock: resources.clock,
             controller: RefCell::new(None),
             values: RefCell::new(HashMap::new()),
             materials: RefCell::new(HashMap::new()),
@@ -1868,6 +1924,10 @@ impl Host for TableHost {
 
     fn seconds(&self) -> f64 {
         self.state.clock_ms.get() / 1000.0
+    }
+
+    fn now_millis(&self) -> Option<f64> {
+        Some(self.state.clock.now_millis())
     }
 }
 

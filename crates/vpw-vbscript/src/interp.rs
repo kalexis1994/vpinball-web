@@ -32,6 +32,7 @@ use std::rc::Rc;
 
 use crate::ast::*;
 use crate::builtins;
+use crate::dates;
 use crate::error::{Control, Error, Result};
 use crate::instance::{Instance, MAX_NAME, NameMap, Slot, Vars, fold, fold_into, read, slot};
 use crate::object::{Host, NoHost, Object};
@@ -1518,6 +1519,12 @@ impl Interpreter {
             // than anything else in this list.
             "err" => Ok(Some(Value::Object(Rc::new(ErrObject(self.err.clone()))))),
             "timer" => Ok(Some(Value::from_number(self.host.seconds()))),
+            // A date is a number: whole days since the thirtieth of December
+            // 1899, with the time of day in the fraction. See
+            // [`crate::dates`].
+            "now" => Ok(Some(Value::Double(self.wall_clock()))),
+            "date" => Ok(Some(Value::Double(dates::date_part(self.wall_clock())))),
+            "time" => Ok(Some(Value::Double(dates::time_part(self.wall_clock())))),
             "rnd" => Ok(Some(Value::Double(self.next_random(None)))),
             _ => {
                 if let Some(v) = builtins::constant(name) {
@@ -1530,6 +1537,16 @@ impl Interpreter {
                 self.call_builtin(name, &[])
             }
         }
+    }
+
+    /// What the host's clock says, as a VBScript date.
+    ///
+    /// A host with no clock answers from the day the count starts on, which is
+    /// a Saturday in 1899 and is obviously not today. That is the point: a
+    /// table drawing a clock face draws a stopped one rather than failing, and
+    /// nothing else in a pinball table asks.
+    fn wall_clock(&self) -> f64 {
+        self.host.now_millis().map_or(0.0, dates::from_unix_millis)
     }
 
     /// A builtin called with arguments.
@@ -1562,6 +1579,13 @@ impl Interpreter {
                 Ok(Some(Value::Empty))
             }
             "timer" => Ok(Some(Value::from_number(self.host.seconds()))),
+
+            // The three that read the wall clock. Written out again here
+            // because a script may say `Now` or `Now()` and the two forms
+            // arrive by different roads.
+            "now" => Ok(Some(Value::Double(self.wall_clock()))),
+            "date" => Ok(Some(Value::Double(dates::date_part(self.wall_clock())))),
+            "time" => Ok(Some(Value::Double(dates::time_part(self.wall_clock())))),
 
             // The locale, which a great many tables set on their first line.
             //

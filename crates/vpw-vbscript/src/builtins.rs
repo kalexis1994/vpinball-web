@@ -158,6 +158,33 @@ fn dispatch(key: &str, name: &str, args: &[Value]) -> Option<Result<Value>> {
         // a date. Tables call `IsDate` on entered text and fall back to a
         // default when it says no, which is the branch we want anyway.
         "isdate" => strict(name, args, |_| Ok(Value::Bool(false))),
+
+        // -- pulling a date apart --
+        //
+        // A date is a number and these are arithmetic on it, so they need
+        // nothing from the host. What produces one — `Now`, `Date`, `Time` —
+        // does, and lives with the interpreter.
+        "year" => strict(name, args, |v| {
+            Ok(Value::Long(crate::dates::civil(v.to_number()?).0))
+        }),
+        "month" => strict(name, args, |v| {
+            Ok(Value::Long(crate::dates::civil(v.to_number()?).1 as i32))
+        }),
+        "day" => strict(name, args, |v| {
+            Ok(Value::Long(crate::dates::civil(v.to_number()?).2 as i32))
+        }),
+        "hour" => strict(name, args, |v| {
+            Ok(Value::Long(crate::dates::hour(v.to_number()?)))
+        }),
+        "minute" => strict(name, args, |v| {
+            Ok(Value::Long(crate::dates::minute(v.to_number()?)))
+        }),
+        "second" => strict(name, args, |v| {
+            Ok(Value::Long(crate::dates::second(v.to_number()?)))
+        }),
+        "weekday" => strict(name, args, |v| {
+            Ok(Value::Long(crate::dates::weekday(v.to_number()?)))
+        }),
         "typename" => strict(name, args, |v| Ok(Value::str(v.type_name()))),
         "vartype" => strict(name, args, |v| Ok(Value::Long(v.var_type()))),
 

@@ -810,6 +810,11 @@ impl Host for TestHost {
     fn seconds(&self) -> f64 {
         1234.5
     }
+    /// Midday on the first of January 2000, UTC, and it does not move. A test
+    /// that asserts against the real time is a test that fails at midnight.
+    fn now_millis(&self) -> Option<f64> {
+        Some(946_728_000_000.0)
+    }
 }
 
 fn with_host() -> (Interpreter, Rc<TestHost>) {
@@ -1361,4 +1366,38 @@ Dim kept: kept = BallSize",
     )
     .expect("a redundant Dim is not an error");
     assert_eq!(number(&i, "kept"), 50.0);
+}
+
+/// A table with a clock on its backglass reads the wall clock, and it is not
+/// the clock a script measures intervals against: `Timer` is the table's own
+/// and starts at zero.
+#[test]
+fn a_script_reads_the_wall_clock() {
+    let (i, _) = with_host();
+    i.load(
+        "Dim y, m, d, h, w, bare
+         y = Year(Now)
+         m = Month(Now())
+         d = Day(Now)
+         h = Hour(Now)
+         w = Weekday(Now)
+         bare = Date",
+    )
+    .unwrap();
+    assert_eq!(i.get_global("y").unwrap().to_number().unwrap(), 2000.0);
+    assert_eq!(i.get_global("m").unwrap().to_number().unwrap(), 1.0);
+    assert_eq!(i.get_global("d").unwrap().to_number().unwrap(), 1.0);
+    assert_eq!(i.get_global("h").unwrap().to_number().unwrap(), 12.0);
+    // The first of January 2000 was a Saturday, and Sunday is one.
+    assert_eq!(i.get_global("w").unwrap().to_number().unwrap(), 7.0);
+    // `Date` is the same day with the time of day cut off.
+    assert_eq!(i.get_global("bare").unwrap().to_number().unwrap(), 36_526.0);
+}
+
+/// The table clock and the wall clock are different clocks.
+#[test]
+fn the_table_clock_is_not_the_wall_clock() {
+    let (i, _) = with_host();
+    i.load("Dim t: t = Timer").unwrap();
+    assert_eq!(i.get_global("t").unwrap().to_number().unwrap(), 1234.5);
 }
