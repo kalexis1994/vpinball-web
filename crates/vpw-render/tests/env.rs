@@ -80,6 +80,7 @@ fn floor_under(env_image: &str, images: Vec<Image>) -> Scene {
             clamp: false,
             scenery: false,
             kind: MeshKind::Playfield,
+            lightmap: false,
         }],
         materials: vec![Material {
             name: "floor".into(),

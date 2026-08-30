@@ -23,7 +23,7 @@
 //! not allocate a buffer in the middle of a frame.
 
 use crate::pipeline::TablePipeline;
-use crate::scene::{GpuVertex, material_slot, table_sampler, white_texture};
+use crate::scene::{GpuVertex, table_sampler, white_texture};
 use vpw_math::{Mat4, Vec3};
 use vpw_table::animation::AnimatedPart;
 use vpw_table::geometry::{Material, Mesh, Scene};
@@ -139,14 +139,17 @@ impl DynamicParts {
             (first_index, indices.len() as u32 - first_index)
         };
 
-        let make_part = |device: &wgpu::Device,
-                         first_index: u32,
-                         index_count: u32,
-                         material: Option<&Material>,
-                         image: Option<&vpw_table::geometry::Image>,
-                         transform: Mat4,
-                         visible: bool| {
-            let slot = material_slot(
+        // One copy of each picture, however many parts name it. See
+        // [`crate::scene::TextureCache`].
+        let mut textures = crate::scene::TextureCache::new();
+        let mut make_part = |device: &wgpu::Device,
+                             first_index: u32,
+                             index_count: u32,
+                             material: Option<&Material>,
+                             image: Option<&vpw_table::geometry::Image>,
+                             transform: Mat4,
+                             visible: bool| {
+            let slot = crate::scene::material_slot_cached(
                 device,
                 queue,
                 &pipeline.material_layout,
@@ -155,6 +158,7 @@ impl DynamicParts {
                 material,
                 image,
                 false,
+                &mut textures,
             );
             let with_alpha = image.is_some_and(|i| i.has_alpha);
             let transparent = material.is_some_and(|m| m.is_transparent(with_alpha));

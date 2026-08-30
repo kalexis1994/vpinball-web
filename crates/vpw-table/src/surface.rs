@@ -103,6 +103,7 @@ fn side(wall: &vpin::vpx::gameitem::wall::Wall, points: &[Point]) -> Mesh {
         clamp: false,
         scenery: false,
         kind: MeshKind::Wall,
+        lightmap: false,
     }
 }
 
@@ -161,5 +162,6 @@ fn top(
         clamp: false,
         scenery: false,
         kind: MeshKind::Wall,
+        lightmap: false,
     })
 }

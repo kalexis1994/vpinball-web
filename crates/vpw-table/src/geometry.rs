@@ -70,6 +70,32 @@ pub struct Mesh {
     /// the real one.
     pub clamp: bool,
     pub kind: MeshKind,
+    /// Whether this is a **lightmap** from a baked table rather than a piece of
+    /// the table. See [`is_lightmap`].
+    pub lightmap: bool,
+}
+
+/// Whether a primitive is one of a baked table's lightmaps.
+///
+/// The Virtual Lighting Mod is a tool that bakes a table in Blender and puts
+/// the result back into the `.vpx`: the whole machine becomes a handful of
+/// `BM_*` meshes textured from a `VLM.Nestmap*` atlas, and every lamp gets its
+/// own `LM_*` copy of the geometry it touches, holding that lamp's *light* and
+/// nothing else. The original draws an `LM_` mesh **added** on top of the bake,
+/// scaled by how bright the script says the lamp is; the table's script drives
+/// that through `BlendDisableLighting` sixty times a second.
+///
+/// A port with no additive pass cannot draw them, and drawing them anyway is
+/// far worse than leaving them out: a lightmap is black everywhere its lamp
+/// does not reach, so ninety-six opaque copies of the table go on top of the
+/// table and bury it. Circus is 354,000 triangles of that over 158,000
+/// triangles of machine.
+///
+/// Both halves are checked. The name is VLM's convention and nothing else, but
+/// a table is free to call a part whatever it likes; the atlas is the thing
+/// only a bake has.
+pub fn is_lightmap(name: &str, image: &str) -> bool {
+    name.starts_with("LM_") && image.starts_with("VLM.")
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -613,7 +639,7 @@ impl Scene {
         let mut lo = Vec3::splat(f32::MAX);
         let mut hi = Vec3::splat(f32::MIN);
         let mut any = false;
-        for mesh in self.meshes.iter().filter(|m| m.visible) {
+        for mesh in self.meshes.iter().filter(|m| m.visible && !m.lightmap) {
             if let Some(b) = mesh.bounds() {
                 lo = lo.min(b.min);
                 hi = hi.max(b.max);
@@ -1067,6 +1093,7 @@ fn playfield_quad(b: Bounds, image: &str, material: &str) -> Mesh {
         clamp: false,
         scenery: false,
         kind: MeshKind::Playfield,
+        lightmap: false,
     }
 }
 
@@ -1111,6 +1138,7 @@ fn primitive_mesh(p: &Primitive) -> Option<Mesh> {
         clamp: false,
         scenery: false,
         kind: MeshKind::Primitive,
+        lightmap: is_lightmap(&p.name, &p.image),
     })
 }
 

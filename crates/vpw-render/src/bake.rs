@@ -463,7 +463,7 @@ impl Bvh {
     /// slingshots black under their own covers.
     fn occluders(scene: &Scene) -> Self {
         let mut tris = Vec::new();
-        for mesh in &scene.meshes {
+        for mesh in scene.meshes.iter().filter(|m| !m.lightmap) {
             if !mesh.visible || matches!(mesh.kind, MeshKind::Playfield | MeshKind::Backbox) {
                 continue;
             }

@@ -75,6 +75,7 @@ fn floor_scene() -> Scene {
         clamp: false,
         scenery: false,
         kind: MeshKind::Playfield,
+        lightmap: false,
     };
 
     Scene {

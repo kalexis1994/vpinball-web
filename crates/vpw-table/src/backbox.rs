@@ -229,6 +229,7 @@ impl Backbox {
             clamp: false,
             scenery: false,
             kind: MeshKind::Backbox,
+            lightmap: false,
         }
     }
 
@@ -274,6 +275,7 @@ impl Backbox {
             clamp: false,
             scenery: false,
             kind: MeshKind::Backbox,
+            lightmap: false,
         }
     }
 }

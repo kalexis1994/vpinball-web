@@ -70,6 +70,7 @@ fn one_bright_light(intensity: f32, alpha: f32) -> Scene {
         clamp: false,
         scenery: false,
         kind: MeshKind::Playfield,
+        lightmap: false,
     };
     // Slightly above the floor, so it is not fighting it for depth.
     floor.transform = Mat4::IDENTITY;
@@ -391,6 +392,7 @@ fn scene_with_something_to_mirror(reflection: f32) -> Scene {
         clamp: false,
         scenery: false,
         kind: MeshKind::Primitive,
+        lightmap: false,
     });
     scene
 }

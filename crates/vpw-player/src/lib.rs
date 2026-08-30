@@ -2132,6 +2132,7 @@ pub fn load_table(bytes: &[u8]) -> Result<SceneStats, JsValue> {
             .with_clock(Rc::new(PageClock));
         let mut table = Game::load(&vpx, &mut scene, resources)
             .map_err(|e| JsValue::from_str(&format!("the table's script failed: {e}")))?;
+        let t_built = clock_ms();
         // Whatever this table saved last time, before its `Init` goes looking
         // for it. See `vpw_game::Game::restore_table_values`.
         TABLE_VALUES.with(|v| table.restore_table_values(&v.borrow()));
@@ -2150,7 +2151,9 @@ pub fn load_table(bytes: &[u8]) -> Result<SceneStats, JsValue> {
             table.new_ball();
         }
 
+        let t_script = clock_ms();
         player.renderer.load_with_parts(&scene, table.parts());
+        let t_gpu = clock_ms();
         // Zero milliseconds: this is the first sync of a table that has not
         // run yet, so a lamp's fade has nothing to advance over — it should
         // start wherever the file left it, not somewhere along a ramp.
@@ -2174,6 +2177,17 @@ pub fn load_table(bytes: &[u8]) -> Result<SceneStats, JsValue> {
             .stats()
             .ok_or_else(|| JsValue::from_str("the scene did not end up loaded"))?;
 
+        // Where the wait went. The step is one line on the curtain and four
+        // very different jobs behind it, and without this the only way to know
+        // which one is slow is to guess.
+        log::info!(
+            "load: {:.0} ms reading the file, {:.0} ms building the geometry,              {:.0} ms physics and script, {:.0} ms running Init, {:.0} ms to the GPU",
+            t1 - t0,
+            t2 - t1,
+            t_built - t2,
+            t_script - t_built,
+            t_gpu - t_script,
+        );
         log::trace!(
             "table loaded: {} meshes, {} triangles, {} draw calls (one per mesh would be {})",
             s.meshes,

@@ -163,6 +163,7 @@ fn test_playfield(b: Bounds) -> Mesh {
         clamp: false,
         scenery: false,
         kind: MeshKind::Playfield,
+        lightmap: false,
     }
 }
 
@@ -387,4 +388,25 @@ fn the_flipper_takes_the_tables_radii_and_does_not_scale_the_mesh() {
         (wide - 80.0).abs() < 20.0,
         "with radius 40 the flipper should measure about 80 units across; it gave {wide}"
     );
+}
+
+/// A baked table's lightmaps are not pieces of the table.
+///
+/// Both halves have to agree before one is claimed: the name is the bake
+/// tool's convention and a table may call a part anything, but only a bake has
+/// the atlas. See `vpw_table::geometry::is_lightmap`.
+#[test]
+fn a_lightmap_is_told_apart_from_a_part() {
+    use vpw_table::geometry::is_lightmap;
+    // What Circus carries, ninety-six times.
+    assert!(is_lightmap(
+        "LM_All_Lights_gi_001_Playfield",
+        "VLM.Nestmap0"
+    ));
+    // The bake meshes are the table and stay.
+    assert!(!is_lightmap("BM_Playfield", "VLM.Nestmap0"));
+    // A part that merely starts with the same two letters is a part.
+    assert!(!is_lightmap("LM_ramp_left", "plastics.png"));
+    assert!(!is_lightmap("LMbracket", "VLM.Nestmap0"));
+    assert!(!is_lightmap("Playfield", ""));
 }

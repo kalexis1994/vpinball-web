@@ -33,7 +33,109 @@ fn main() {
         resources = resources.with_roms(Rc::new(vpw_game::controller::RomDir(ROMS.into())));
     }
 
+    let count = |scene: &vpw_table::geometry::Scene| {
+        let shown = scene.meshes.iter().filter(|m| m.visible).count();
+        let tris: usize = scene
+            .meshes
+            .iter()
+            .filter(|m| m.visible)
+            .map(|m| m.indices.len() / 3)
+            .sum();
+        (scene.meshes.len(), shown, tris)
+    };
+    let before = count(&scene);
+
     let mut game = Game::load(&vpx, &mut scene, resources).expect("the table should load");
+    let after = count(&scene);
+    for m in &scene.meshes {
+        println!(
+            "   static: {:<28} {:>7} tris  visible={}  material={:?} image={:?}",
+            m.name,
+            m.indices.len() / 3,
+            m.visible,
+            m.material,
+            m.image
+        );
+    }
+    {
+        use std::collections::BTreeMap;
+        let mut by: BTreeMap<String, (usize, usize, usize)> = BTreeMap::new();
+        for pt in game.parts() {
+            let k = if pt.mesh.name.starts_with("LM_") {
+                "LM_*".to_string()
+            } else if pt.mesh.name.starts_with("BM_") {
+                format!("BM: {}", pt.mesh.name)
+            } else {
+                "other".to_string()
+            };
+            let e = by.entry(k).or_default();
+            e.0 += 1;
+            e.1 += pt.mesh.indices.len() / 3;
+            if pt.mesh.visible {
+                e.2 += 1;
+            }
+        }
+        for (k, (n, t, v)) in &by {
+            println!("   part {k:<28} {n:>4} meshes {t:>8} tris, {v} visible");
+        }
+        // Do the materials and textures these meshes name actually exist?
+        let mut missing_mat: BTreeMap<String, usize> = BTreeMap::new();
+        let mut missing_img: BTreeMap<String, usize> = BTreeMap::new();
+        let mut check = |m: &vpw_table::geometry::Mesh| {
+            if !m.material.is_empty() && scene.material(&m.material).is_none() {
+                *missing_mat.entry(m.material.clone()).or_default() += 1;
+            }
+            if !m.image.is_empty() && scene.image(&m.image).is_none() {
+                *missing_img.entry(m.image.clone()).or_default() += 1;
+            }
+        };
+        for pt in game.parts() {
+            check(&pt.mesh);
+        }
+        for m in &scene.meshes {
+            check(m);
+        }
+        println!("   materials named but not in the table: {missing_mat:?}");
+        println!("   images named but not in the table:    {missing_img:?}");
+        // What one lightmap looks like, since there is no code that knows what
+        // one is.
+        if let Some(lm) = game.parts().iter().find(|p| p.mesh.name.starts_with("LM_")) {
+            println!(
+                "   a lightmap: {} material={:?} image={:?}",
+                lm.mesh.name, lm.mesh.material, lm.mesh.image
+            );
+        }
+        println!("   images in the table:");
+        for i in &scene.images {
+            if i.name.to_lowercase().contains("nestmap") {
+                println!(
+                    "     {} {}x{} alpha={}",
+                    i.name, i.width, i.height, i.has_alpha
+                );
+            }
+        }
+    }
+    let shown_parts = game.parts().iter().filter(|p| p.mesh.visible).count();
+    let part_tris: usize = game
+        .parts()
+        .iter()
+        .filter(|p| p.mesh.visible)
+        .map(|p| p.mesh.indices.len() / 3)
+        .sum();
+    println!(
+        "   parts: {shown_parts} visible of {}, {part_tris} triangles",
+        game.parts().len()
+    );
+    println!(
+        "-- scene: {} meshes ({} visible, {} triangles) -> {} meshes ({} visible, {} triangles), {} moving parts --",
+        before.0,
+        before.1,
+        before.2,
+        after.0,
+        after.1,
+        after.2,
+        game.parts().len()
+    );
     match game.start() {
         Ok(()) => println!("-- the script started --"),
         Err(e) => println!("-- the script failed to start: {e} --"),

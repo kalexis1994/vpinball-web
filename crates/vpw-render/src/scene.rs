@@ -295,8 +295,18 @@ impl GpuScene {
         layout: &wgpu::BindGroupLayout,
         scene: &Scene,
     ) -> Self {
-        let visible: Vec<&Mesh> = scene.meshes.iter().filter(|m| m.visible).collect();
+        // A baked table's lightmaps are the one thing here that is not a piece
+        // of the table: they hold light, to be *added* on top of the bake, and
+        // there is no additive pass to add them in. Drawn as ordinary geometry
+        // they bury the machine. See [`vpw_table::geometry::is_lightmap`].
+        let visible: Vec<&Mesh> = scene
+            .meshes
+            .iter()
+            .filter(|m| m.visible && !m.lightmap)
+            .collect();
         let mut redrawn: HashMap<String, wgpu::Texture> = HashMap::new();
+        // One copy of each picture across every batch. See [`TextureCache`].
+        let mut textures_on_card = TextureCache::new();
 
         // Group by material+texture before touching the GPU. Meshes that share
         // state end up contiguous in the index buffer, which is what lets us
@@ -376,7 +386,7 @@ impl GpuScene {
                 continue;
             }
 
-            let slot = material_slot(
+            let slot = material_slot_cached(
                 device,
                 queue,
                 layout,
@@ -385,6 +395,7 @@ impl GpuScene {
                 scene.material(&key.material),
                 scene.image(&key.image),
                 key.playfield,
+                &mut textures_on_card,
             );
             if slot.textured {
                 textures += 1;
@@ -556,6 +567,18 @@ fn sampler(device: &wgpu::Device, mode: wgpu::AddressMode) -> wgpu::Sampler {
 /// `fallback` is the 1x1 white texture: the shader always samples, so there has
 /// to be something bound even when the piece has no image.
 #[allow(clippy::too_many_arguments)]
+/// Textures already on the card, by image name.
+///
+/// A table names the same picture from a great many parts, and a baked one
+/// names the same *atlas* from nearly all of them. Without this, every part
+/// that mentions `VLM.Nestmap1` uploads its own copy of a four-thousand-pixel
+/// square: on Circus that was two hundred uploads of sixty-seven megabytes
+/// each, which is nine and a half seconds of the ten the table took to load,
+/// and a card full of the same picture.
+pub type TextureCache = std::collections::HashMap<String, (wgpu::Texture, wgpu::TextureView)>;
+
+/// [`material_slot`] with a fresh cache, for a caller that builds only one.
+#[allow(clippy::too_many_arguments)]
 pub fn material_slot(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
@@ -566,7 +589,38 @@ pub fn material_slot(
     image: Option<&vpw_table::geometry::Image>,
     playfield: bool,
 ) -> MaterialSlot {
-    let uploaded = image.and_then(|i| upload_texture(device, queue, i));
+    let mut cache = TextureCache::new();
+    material_slot_cached(
+        device, queue, layout, sampler, fallback, material, image, playfield, &mut cache,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn material_slot_cached(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    layout: &wgpu::BindGroupLayout,
+    sampler: &wgpu::Sampler,
+    fallback: &wgpu::TextureView,
+    material: Option<&vpw_table::geometry::Material>,
+    image: Option<&vpw_table::geometry::Image>,
+    playfield: bool,
+    cache: &mut TextureCache,
+) -> MaterialSlot {
+    // A picture whose pixels change while the table runs is not shared: its
+    // owner rewrites it, and two parts rewriting one texture is a different
+    // decision from this one.
+    let uploaded = image.and_then(|i| {
+        if i.redrawn {
+            return upload_texture(device, queue, i);
+        }
+        if let Some(hit) = cache.get(&i.name) {
+            return Some(hit.clone());
+        }
+        let made = upload_texture(device, queue, i)?;
+        cache.insert(i.name.clone(), made.clone());
+        Some(made)
+    });
     let redrawn = match (image, uploaded.as_ref()) {
         (Some(i), Some((tex, _))) if i.redrawn => Some(tex.clone()),
         _ => None,

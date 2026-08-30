@@ -75,6 +75,7 @@ fn scene() -> Scene {
         clamp: false,
         scenery: false,
         kind: MeshKind::Playfield,
+        lightmap: false,
     };
     let playfield = Bounds {
         min: Vec3::new(0.0, 0.0, 0.0),

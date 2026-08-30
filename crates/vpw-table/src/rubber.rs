@@ -75,6 +75,7 @@ pub fn mesh(rubber: &vpin::vpx::gameitem::rubber::Rubber) -> Option<Mesh> {
         clamp: false,
         scenery: false,
         kind: MeshKind::Rubber,
+        lightmap: false,
     })
 }
 
