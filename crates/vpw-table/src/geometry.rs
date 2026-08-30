@@ -836,7 +836,7 @@ pub fn extract(vpx: &VPX) -> Scene {
     //
     // Usually, and not always — which is the whole of the check below.
     let head = crate::backbox::Backbox::for_playfield(playfield);
-    let build_head = !brings_its_own_head(&meshes, &head);
+    let build_head = !brings_its_own_head(&meshes, playfield, &head);
     if build_head {
         meshes.push(head.mesh());
         meshes.push(head.display_mesh());
@@ -1213,23 +1213,34 @@ fn sane(value: f32, range: std::ops::RangeInclusive<f32>, fallback: f32) -> f32 
 
 /// Whether the table already models a head of its own.
 ///
-/// Nothing that belongs on a playfield stands as high as the bottom edge of a
-/// machine's head — the tallest ramp on a table is two or three hundred units
-/// and the head starts three times higher — so anything reaching up there is
-/// scenery: a cabinet, a backbox, a whole room modelled around the machine.
-/// The Sopranos has one, and standing our own head over it gave that machine
-/// two: the table's, dark and without artwork, and ours floating above it.
+/// Three things have to be true at once, and every one of them was learned by
+/// getting it wrong.
 ///
-/// So the head is built for the tables that have none, which is nearly all of
-/// them, and the ones that brought their own keep it. The score display goes
-/// to the floating panel there — it has one, and it is the same panel the
-/// overhead view uses.
-fn brings_its_own_head(meshes: &[Mesh], head: &crate::backbox::Backbox) -> bool {
-    let floor = head.bounds().min.z;
+/// **It has to be high.** Nothing that belongs on a playfield stands as high
+/// as a machine's head — the tallest ramp is two or three hundred units and
+/// the head starts three times higher. But *reaching* the head's floor is not
+/// enough: The Sopranos has a toy at the back of its playfield topping out
+/// eleven units above it, and that toy was enough to make us go without a
+/// head. So the test is halfway up the head, not its underside.
+///
+/// **It has to be behind the playfield.** A backbox stands at the far end,
+/// off the end of the table; a *room* stands over the whole thing. The
+/// Sopranos has one of those too, reaching twelve hundred units over the
+/// entire playfield, and height alone called it a head.
+///
+/// Get either wrong and the table loses its backglass and the score panel
+/// standing on it, which is a great deal to give up for a pole dancer.
+fn brings_its_own_head(meshes: &[Mesh], playfield: Bounds, head: &crate::backbox::Backbox) -> bool {
+    let box_ = head.bounds();
+    // Halfway up the head we would otherwise build.
+    let high = (box_.min.z + box_.max.z) * 0.5;
+    // And at or behind the far edge of the playfield, with a hair of slack for
+    // a head modelled a few units onto it.
+    let behind = playfield.min.y + (playfield.max.y - playfield.min.y) * 0.01;
     meshes.iter().any(|m| {
         m.visible
             && m.bounds()
-                .is_some_and(|b| b.max.z > floor && b.max.z > b.min.z)
+                .is_some_and(|b| b.max.z > high && b.min.y <= behind)
     })
 }
 

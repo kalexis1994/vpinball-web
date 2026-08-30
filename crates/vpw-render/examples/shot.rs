@@ -394,9 +394,8 @@ fn main() {
                     _ => scene.view,
                 }),
             );
-            // The same start the player uses on a table that brought its own
-            // scenery.
-            if matches!(view, vpw_render::camera::View::Front) && !scene.built_head {
+            // The same start the player uses.
+            if matches!(view, vpw_render::camera::View::Front) {
                 camera.start_at(&scene.legacy_bounds());
             }
             camera

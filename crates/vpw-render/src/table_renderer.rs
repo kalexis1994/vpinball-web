@@ -373,11 +373,17 @@ impl TableRenderer {
                 _ => self.authored,
             },
         );
-        // On a table that models its own room, the front view starts at the
-        // table: the room's lid is between the eye and the playfield from
-        // every angle this view can take. Tables that brought no scenery of
-        // their own have nothing up there and nothing changes for them.
-        if matches!(view, crate::camera::View::Front) && !self.built_head {
+        // The front view starts at the table. On most tables there is nothing
+        // between the eye and the playfield and this only buys a little depth
+        // precision; on a table that models a room around itself there is the
+        // room, and its lid hangs over the playfield from every angle this
+        // view can take.
+        //
+        // Whether we built the machine a head has nothing to do with it — the
+        // head is at the far end and is never what is in the way — and tying
+        // the two together was how The Sopranos ended up choosing between
+        // seeing its playfield and having a backglass.
+        if matches!(view, crate::camera::View::Front) {
             camera.start_at(&self.legacy);
         }
         Some(camera)
