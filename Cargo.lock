@@ -2047,6 +2047,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "vpw-gts80"
+version = "0.1.0"
+dependencies = [
+ "log",
+ "vpw-bus",
+ "vpw-m6502",
+ "vpw-riot",
+]
+
+[[package]]
 name = "vpw-m6502"
 version = "0.1.0"
 dependencies = [
