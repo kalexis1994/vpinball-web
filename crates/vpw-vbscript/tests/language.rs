@@ -1257,3 +1257,53 @@ Dim v : v = t
     );
     assert_eq!(e.number, 438, "{e}");
 }
+
+/// A single-line `If` whose statements are introduced by colons.
+///
+/// `If c Then: a: Else: b` is one line and one statement, and the colon after
+/// `Then` is a separator rather than the end of anything. Read as a block `If`
+/// — which is what happens if the parser asks "is the next token an end of
+/// statement" instead of "is there anything left on this line" — it is an `If`
+/// that never ends, and the parser runs off the bottom of the file looking for
+/// an `End If`. Circus writes it that way eleven times.
+#[test]
+fn a_single_line_if_may_put_a_colon_after_then() {
+    assert_eq!(num("a = 0 : If 1 = 1 Then: a = 7: Else: a = 9", "a"), 7.0);
+    assert_eq!(num("a = 0 : If 1 = 2 Then: a = 7: Else: a = 9", "a"), 9.0);
+
+    // And both halves keep taking several statements.
+    assert_eq!(
+        num("If 1 = 1 Then: a = 1: b = 2: Else: a = 3: b = 4", "b"),
+        2.0
+    );
+    assert_eq!(
+        num("If 1 = 2 Then: a = 1: b = 2: Else: a = 3: b = 4", "b"),
+        4.0
+    );
+
+    // A block `If` is still a block `If` when its line ends in a stray colon.
+    let src = "If 1 = 1 Then:
+        a = 5
+    End If";
+    assert_eq!(num(src, "a"), 5.0);
+}
+
+/// `Public Default` marks the member an instance answers to with no name at
+/// all — which is what `(new Thing)(a, b)` calls. Visual Pinball's own script
+/// library uses it twice and the tables built on it use it constantly.
+#[test]
+fn a_class_can_have_a_default_member() {
+    let src = "
+        Class Adder
+            Private total
+            Public Default Function init(a, b)
+                total = a + b
+                Set init = Me
+            End Function
+            Public Property Get Sum(): Sum = total: End Property
+        End Class
+        Dim x
+        Set x = (new Adder)(3, 4)
+        a = x.Sum";
+    assert_eq!(num(src, "a"), 7.0);
+}

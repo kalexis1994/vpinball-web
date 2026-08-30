@@ -21,6 +21,23 @@ const TEST: i32 = 7;
 const CHUTES: [i32; 3] = [17, 27, 37];
 const START: i32 = 47;
 
+/// Runs a machine until it has something on its display, or gives up.
+///
+/// Not every System 80 is ready in a second. The 1980 games run their main
+/// loop off a timer at forty-eight a second where a 1985 one runs at a
+/// thousand, so Circus takes about ten seconds of machine time to reach its
+/// attract mode — and coining it before then is coining a machine that is
+/// still counting its own memory.
+fn until_awake(board: &mut Board) {
+    for _ in 0..60 {
+        board.run_seconds(0.5);
+        let (top, bottom) = board.text();
+        if top.trim().len() + bottom.trim().len() > 2 {
+            return;
+        }
+    }
+}
+
 fn main() {
     let mut args = std::env::args().skip(1);
     let dir = PathBuf::from(args.next().expect("a rom directory"));
@@ -50,7 +67,7 @@ fn main() {
         println!("looking for the trough switch");
         for candidate in 0..80 {
             let mut board = Board::from_roms(&roms, RATE);
-            board.run_seconds(2.5);
+            until_awake(&mut board);
             board.mem.io.set_switch(candidate, true);
             board.run_seconds(0.5);
             for _ in 0..3 {
@@ -82,8 +99,15 @@ fn main() {
 
     let show = |board: &Board, what: &str| {
         let (top, bottom) = board.text();
+        // A System 80 or 80A keeps its ball and credit counts in a third bank
+        // of digits, which is not one of the two rows a score panel has — and
+        // which is where the answer is when a coin seems to do nothing.
+        let strip = match board.mem.displays() {
+            Some(d) => format!(" [{}]", d.text(2).trim_end()),
+            None => String::new(),
+        };
         println!(
-            "{what:<14} [{}] [{}]  relays {:02b}",
+            "{what:<14} [{}] [{}]{strip}  relays {:02b}",
             top.trim_end(),
             bottom.trim_end(),
             board.mem.io.lamps[0] & 3
@@ -98,7 +122,7 @@ fn main() {
             .join(",")
     };
 
-    board.run_seconds(3.0);
+    until_awake(&mut board);
     for &switch in &trough {
         board.mem.io.set_switch(switch, true);
     }

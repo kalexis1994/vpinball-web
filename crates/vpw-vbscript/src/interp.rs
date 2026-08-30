@@ -1170,6 +1170,15 @@ impl Interpreter {
             let slots: Vec<Slot> = args.iter().map(|a| slot(a.clone())).collect();
             return self.invoke(&p, &slots, Some(inst.clone()));
         }
+        // No name at all: the instance is being used where a value is wanted,
+        // or called outright — `Set d = (new DropTarget)(a, b, c)`. What runs
+        // is whichever member the class marked `Public Default`.
+        if name.is_empty()
+            && let Some(p) = inst.def.members.iter().find(|p| p.is_default)
+        {
+            let slots: Vec<Slot> = args.iter().map(|a| slot(a.clone())).collect();
+            return self.invoke(p, &slots, Some(inst.clone()));
+        }
         if let Some(cell) = inst.field(name) {
             let v = read(&cell);
             if args.is_empty() {

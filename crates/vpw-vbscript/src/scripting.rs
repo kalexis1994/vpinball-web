@@ -192,6 +192,86 @@ fn same_key(a: &Value, b: &Value, text_compare: bool) -> bool {
     }
 }
 
+/// `CreateObject("Scripting.FileSystemObject")`, for a host with no files.
+///
+/// Tables use this for one thing: remembering a preference between sessions —
+/// a colour lookup table, a chosen camera, a high score. Circus keeps its LUT
+/// number in `Circus_LUT.txt`, and half the tables of the last decade do
+/// something like it.
+///
+/// A browser has no such folder, and the answer is not to refuse: the scripts
+/// that use it are written defensively, because on a real machine the file is
+/// not there the first time either.
+///
+/// ```vbscript
+/// Set FileObj = CreateObject("Scripting.FileSystemObject")
+/// If Not FileObj.FolderExists(UserDirectory) Then
+///     LUTset = 17
+///     Exit Sub
+/// End If
+/// ```
+///
+/// So this answers **no** to every question about what exists, and swallows
+/// every write. A table takes the path it takes on a machine it has never run
+/// on before, which is the truth: it has not. Refusing to create the object at
+/// all fails the whole script on the `CreateObject` line, and the table does
+/// not load.
+///
+/// What it does *not* do is pretend to persist. A host that wants the
+/// preference to survive a reload should put it somewhere a browser can keep
+/// it, and this is the seam to do that behind.
+pub struct FileSystem;
+
+impl Object for FileSystem {
+    fn type_name(&self) -> &'static str {
+        "FileSystemObject"
+    }
+
+    fn get(&self, name: &str, _args: &[Value]) -> Result<Value> {
+        match &*name.to_ascii_lowercase() {
+            // Nothing is there, which is what a table checks before reading.
+            "fileexists" | "folderexists" | "driveexists" => Ok(Value::Bool(false)),
+            // And a file it opens to write is somewhere to write to.
+            "createtextfile" | "opentextfile" | "getfile" | "getfolder" | "createfolder"
+            | "getspecialfolder" => Ok(Value::Object(Rc::new(TextStream))),
+            "buildpath" => Ok(Value::Empty),
+            other => Err(Error::new(
+                438,
+                format!("Object doesn't support this property or method: '{other}'"),
+            )),
+        }
+    }
+
+    fn set(&self, _name: &str, _args: &[Value], _value: Value, _by_ref: bool) -> Result<()> {
+        Ok(())
+    }
+}
+
+/// What [`FileSystem`] hands back for a file: something that takes writes and
+/// has nothing to read.
+pub struct TextStream;
+
+impl Object for TextStream {
+    fn type_name(&self) -> &'static str {
+        "TextStream"
+    }
+
+    fn get(&self, name: &str, _args: &[Value]) -> Result<Value> {
+        match &*name.to_ascii_lowercase() {
+            // A reader should stop before it starts rather than block.
+            "atendofstream" | "atendofline" => Ok(Value::Bool(true)),
+            "readline" | "readall" | "read" => Ok(Value::str("")),
+            "line" | "column" => Ok(Value::Long(1)),
+            // Writing, closing, deleting: all fine, all nowhere.
+            _ => Ok(Value::Empty),
+        }
+    }
+
+    fn set(&self, _name: &str, _args: &[Value], _value: Value, _by_ref: bool) -> Result<()> {
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

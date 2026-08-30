@@ -157,6 +157,14 @@ pub struct Proc {
     pub visibility: Visibility,
     /// Set for `Property Get/Let/Set` inside a class.
     pub property: Option<PropKind>,
+    /// `Public Default` — the member an instance answers to when it is used
+    /// where a value is wanted, or called with no member name at all.
+    ///
+    /// `Set d = (new DropTarget)(a, b, c)` is the second of those: the class
+    /// is constructed and then *called*, and what runs is whichever member
+    /// was marked default. Visual Pinball's own script library does it twice
+    /// and half the tables written since do it once.
+    pub is_default: bool,
     pub line: u32,
     /// Whether the unit this was written in opened with `Option Explicit`.
     ///

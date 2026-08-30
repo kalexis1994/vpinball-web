@@ -294,6 +294,10 @@ pub struct GameState {
     /// options, whatever it wants to find again next time. Keyed by the
     /// table's name and the value's, both folded. See [`LoadValue`].
     values: RefCell<HashMap<String, String>>,
+    /// Materials the script merely repainted with `MaterialColor`, by folded
+    /// name. Kept apart from the wholesale rewrites because a repaint has to
+    /// leave the gloss and the thickness where the table's author put them.
+    pub tints: RefCell<HashMap<String, [f32; 3]>>,
     /// Materials the script rewrote with `UpdateMaterial`, by folded name.
     materials: RefCell<HashMap<String, MaterialChange>>,
 }
@@ -368,6 +372,7 @@ impl Game {
         let engine = Rc::new(RefCell::new(engine));
         let items = Items::new(vpx, &collision, engine.clone());
         let state = Rc::new(GameState {
+            tints: RefCell::new(HashMap::new()),
             engine: engine.clone(),
             items,
             active_ball: Cell::new(None),
@@ -607,8 +612,17 @@ impl Game {
     /// script stopping at the call.
     pub fn apply_material_changes(&self, scene: &mut Scene) {
         let changes = self.state.materials.borrow();
-        if changes.is_empty() {
+        let tints = self.state.tints.borrow();
+        if changes.is_empty() && tints.is_empty() {
             return;
+        }
+        // The repaints go on first, so a wholesale rewrite of the same
+        // material still wins: that is the order the script made the calls in
+        // for every table that does both.
+        for m in &mut scene.materials {
+            if let Some(colour) = tints.get(&m.name.to_lowercase()) {
+                m.base_color = *colour;
+            }
         }
         for m in &mut scene.materials {
             let Some(c) = changes.get(&m.name.to_lowercase()) else {
@@ -1726,6 +1740,28 @@ impl TableHost {
                 state: self.state.clone(),
                 physics_only: true,
             }))),
+            // The read half of the pair, which a table uses to save a
+            // material's colour before it tints it
+            // (`ScriptGlobalTable.cpp:700`).
+            //
+            // It answers, and it answers nothing. `GetMaterial` hands its
+            // values back through **sixteen by-reference arguments**, and a
+            // host object here is given values rather than the caller's cells
+            // — script procedures alias them, objects do not. So the variables
+            // come back `Empty`.
+            //
+            // That is the difference between a table that loads and one that
+            // does not, which is worth having on its own; what it costs is the
+            // room-brightness feature a few tables build on top, which will
+            // save a colour of nothing and tint towards it.
+            "getmaterial" => Some(Value::Object(Rc::new(crate::controller::Chainable))),
+            // The same idea with one argument instead of sixteen: repaint a
+            // material and leave everything else about it alone
+            // (`ScriptGlobalTable.cpp:757`). A table uses it to tint its
+            // rubbers and its plastics as the general illumination comes up.
+            "materialcolor" => Some(Value::Object(Rc::new(MaterialColor {
+                state: self.state.clone(),
+            }))),
             "loadvalue" => Some(Value::Object(Rc::new(LoadValue {
                 state: self.state.clone(),
             }))),
@@ -1800,6 +1836,12 @@ impl Host for TableHost {
             return Ok(Value::Object(Rc::new(
                 vpw_vbscript::scripting::Dictionary::new(),
             )));
+        }
+        // And a table that remembers a preference between sessions asks for a
+        // file system. There is none here, and saying so is what lets the
+        // table take the path it takes the first time it is ever run.
+        if id.contains("filesystemobject") {
+            return Ok(Value::Object(Rc::new(vpw_vbscript::scripting::FileSystem)));
         }
         Err(VbError::new(
             429,
@@ -2228,6 +2270,48 @@ struct MaterialChange {
     clearcoat_color: [f32; 3],
     is_metal: bool,
     opacity_active: bool,
+}
+
+/// `MaterialColor(name, colour)`: repaint one material and change nothing
+/// else about it.
+///
+/// Which is why it does not go through [`MaterialChange`]. That record is a
+/// material's *whole* appearance, and filling one in from a single colour
+/// would hand back a rubber with no gloss and no thickness. A repaint is kept
+/// on its own and laid over whatever the table was authored with.
+struct MaterialColor {
+    state: Rc<GameState>,
+}
+
+impl Object for MaterialColor {
+    fn type_name(&self) -> &'static str {
+        "MaterialColor"
+    }
+
+    fn get(&self, _name: &str, args: &[Value]) -> VbResult<Value> {
+        let Some(first) = args.first() else {
+            return Err(VbError::invalid_call());
+        };
+        let name = first.to_str()?.to_lowercase();
+        let packed = args.get(1).map_or(Ok(0.0), |v| v.to_number())? as u32;
+        // An OLE colour: blue, green and red packed into a long, in that
+        // order, which is the other way round from how anybody says it.
+        let colour = [
+            (packed & 0xff) as f32 / 255.0,
+            ((packed >> 8) & 0xff) as f32 / 255.0,
+            ((packed >> 16) & 0xff) as f32 / 255.0,
+        ];
+
+        // If the script has already rewritten this material wholesale, the
+        // repaint belongs in that record; otherwise it is a tint of its own,
+        // and everything else about the material stays as authored.
+        if let Some(existing) = self.state.materials.borrow_mut().get_mut(&name) {
+            existing.base_color = colour;
+            return Ok(Value::Empty);
+        }
+        self.state.tints.borrow_mut().insert(name, colour);
+        Ok(Value::Empty)
+    }
 }
 
 /// `LoadValue(table, name)` — what the table saved last time, or "".

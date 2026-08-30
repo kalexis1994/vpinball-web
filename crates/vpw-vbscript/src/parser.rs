@@ -104,6 +104,29 @@ impl Parser {
         matches!(self.at().tok, Tok::Eol | Tok::Eof)
     }
 
+    /// Whether anything but colons is left on this line.
+    ///
+    /// Which is not the same question as [`Self::at_eos`], and the difference
+    /// is what tells a single-line `If` from a block one when the line is
+    /// written `If c Then: a = 1: Else: a = 2`. That is one line and one
+    /// statement; read as a block it is an `If` that never ends, and the
+    /// parser runs off the bottom of the file looking for its `End If`.
+    fn line_is_spent(&self) -> bool {
+        let last = self.toks.len() - 1;
+        let line = self.toks[self.pos.min(last)].line;
+        // Colons only, and only the ones on this line. The lexer drops the end
+        // of a line that already has a `:` on it, so `Then:` at the end of a
+        // line and `Then:` in the middle of one are the same two tokens —
+        // which line they sit on is the only thing that tells them apart.
+        let mut i = self.pos;
+        while matches!(self.toks[i.min(last)].tok, Tok::Eos) && self.toks[i.min(last)].line == line
+        {
+            i += 1;
+        }
+        let next = &self.toks[i.min(last)];
+        matches!(next.tok, Tok::Eol | Tok::Eof) || next.line != line
+    }
+
     fn eat_punct(&mut self, p: Punct) -> bool {
         if self.at().is_punct(p) {
             self.bump();
@@ -263,9 +286,9 @@ impl Parser {
                 || self.peek_kw(1, "default")
             {
                 let visibility = self.visibility();
-                // `Public Default Function` marks the default member; we accept
-                // it and ignore the marker, which is what a host that has no
-                // default value would do anyway.
+                // Outside a class `Default` means nothing: there is no
+                // instance for it to be the default of. Inside one it is read
+                // where the members are, in `class_def`.
                 self.eat_kw("default");
                 return self.procedure_or_class(visibility);
             }
@@ -502,8 +525,9 @@ impl Parser {
         self.expect_kw("then")?;
 
         // A single-line `If`: everything up to the end of the line, and there
-        // is no `End If`.
-        if !self.at_eos() {
+        // is no `End If`. What decides it is whether anything follows `Then`
+        // *on this line*, and a `:` is not the end of a line.
+        if !self.line_is_spent() {
             return self.single_line_if(cond);
         }
 
@@ -780,6 +804,7 @@ impl Parser {
         }
 
         Ok(Proc {
+            is_default: false,
             name,
             params,
             body,
@@ -843,12 +868,16 @@ impl Parser {
             } else {
                 Visibility::Public
             };
-            // `Public Default Function` marks the class's default member.
-            self.eat_kw("default");
+            // `Public Default Function` marks the class's default member:
+            // the one an instance answers to when it is used where a value is
+            // wanted, or called outright.
+            let default = self.eat_kw("default");
 
             if self.at().is_kw("sub") || self.at().is_kw("function") || self.at().is_kw("property")
             {
-                members.push(Rc::new(self.proc_def(visibility)?));
+                let mut proc = self.proc_def(visibility)?;
+                proc.is_default = default;
+                members.push(Rc::new(proc));
                 continue;
             }
             // Anything else at class level is a field. `Dim` is optional inside

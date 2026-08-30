@@ -1268,7 +1268,7 @@ impl Door {
 }
 
 /// The corners of VPinMAME that are configuration rather than emulation.
-struct Chainable;
+pub(crate) struct Chainable;
 
 impl Object for Chainable {
     fn type_name(&self) -> &'static str {
