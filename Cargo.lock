@@ -2125,6 +2125,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "vpw-riot"
+version = "0.1.0"
+
+[[package]]
 name = "vpw-s11"
 version = "0.1.0"
 dependencies = [
