@@ -2132,6 +2132,7 @@ dependencies = [
  "pollster",
  "vpin",
  "vpw-math",
+ "vpw-physics",
  "vpw-table",
  "wasm-bindgen",
  "wgpu",

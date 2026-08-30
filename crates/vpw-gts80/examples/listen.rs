@@ -102,7 +102,16 @@ fn main() {
         wav.extend_from_slice(&audio);
     };
 
-    board.run_seconds(3.0);
+    // How long to let it settle before putting a coin in. Three seconds is
+    // enough for Ice Fever; the early two-PROM sets take far longer to finish
+    // powering up — Circus has nothing on its displays at two seconds and is
+    // fully awake by fifteen — and a coin offered to a machine that has not
+    // finished booting is a coin it never sees.
+    let settle: f64 = std::env::var("GTS80_SETTLE")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(3.0);
+    board.run_seconds(settle);
     take(&mut board, &mut wav, "attract");
 
     for &switch in trough {
@@ -120,8 +129,43 @@ fn main() {
     board.mem.io.set_switch(START, true);
     board.run_seconds(0.3);
     board.mem.io.set_switch(START, false);
-    board.run_seconds(3.0);
+    // How long to listen after the game begins, and every command heard while
+    // listening: a machine that says nothing and a machine we never asked are
+    // the same silence otherwise.
+    let play: f64 = std::env::var("GTS80_PLAY")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(3.0);
+    let mut heard: Vec<u8> = Vec::new();
+    let step: f64 = 0.02;
+    let mut left = play;
+    while left > 0.0 {
+        board.run_seconds(step.min(left));
+        left -= step;
+        let c = board.mem.io.sound_command;
+        if c != 0 && !heard.contains(&c) {
+            heard.push(c);
+        }
+    }
+    // A machine with a game on and nothing happening on the playfield has
+    // nothing to say. `GTS80_POKE=1` closes every switch in turn — a bumper, a
+    // target, a rollover — and says which ones made a noise.
+    if std::env::var("GTS80_POKE").is_ok() {
+        let mut spoke: Vec<(i32, u8)> = Vec::new();
+        for sw in 1..=77 {
+            board.mem.io.set_switch(sw, true);
+            board.run_seconds(0.12);
+            board.mem.io.set_switch(sw, false);
+            board.run_seconds(0.12);
+            let c = board.mem.io.sound_command;
+            if c != 0 {
+                spoke.push((sw, c));
+            }
+        }
+        println!("       switches that made a sound: {spoke:02x?}");
+    }
     take(&mut board, &mut wav, "start");
+    println!("       commands heard: {heard:02x?}");
 
     // The one line that says whether any of this worked: the game-on relay,
     // which a table reads as solenoid 10 and without which no flipper moves.
