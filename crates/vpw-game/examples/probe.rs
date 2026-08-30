@@ -39,7 +39,21 @@ fn main() {
         Err(e) => println!("-- the script failed to start: {e} --"),
     }
 
+    println!(
+        "-- {} sounds in the table --",
+        vpw_table::sound::extract(&vpx).len()
+    );
+
     for (i, expr) in args.enumerate() {
+        // A statement rather than a value: anything with a space in it that is
+        // not an expression — `PlaySound "x"` — is run as it stands.
+        if expr.contains(' ') && !expr.contains('=') {
+            match game.script().load(&expr) {
+                Ok(()) => println!("{expr} -- ran"),
+                Err(e) => println!("{expr} -> {e}"),
+            }
+            continue;
+        }
         let name = format!("__probe{i}");
         let src = format!("Dim {name} : {name} = {expr}");
         match game.script().load(&src) {
@@ -50,4 +64,17 @@ fn main() {
             Err(e) => println!("{expr} -> {e}"),
         }
     }
+
+    // What comes out of the mixer over the next second of table time, with
+    // whatever the expressions above set going.
+    let mut peak = 0.0f32;
+    let mut out = vec![0.0f32; 1024];
+    for _ in 0..60 {
+        for _ in 0..17 {
+            game.step();
+        }
+        game.render_audio(&mut out);
+        peak = peak.max(out.iter().fold(0.0f32, |a, b| a.max(b.abs())));
+    }
+    println!("-- mixer peak over a second: {peak:.4} --");
 }
