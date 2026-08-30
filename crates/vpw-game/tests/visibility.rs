@@ -141,3 +141,73 @@ fn the_key_handler_is_named_after_the_table_object() {
         );
     }
 }
+
+// --- what the table puts away for itself ------------------------------------
+
+/// `LoadValue` answers "" for something never saved, and `SaveValue` comes
+/// back through it.
+///
+/// Both matter and the first one more: `If LoadValue(...) = "" Then` is how
+/// every table asks whether anybody has played it before, so a `LoadValue`
+/// that raised instead of answering stopped Ice Fever on the first line of its
+/// `Init` — and a table that does not start is a table with nothing on the
+/// screen.
+#[test]
+fn a_table_keeps_its_own_values() {
+    let mut vpx = vpin::vpx::VPX::default();
+    vpx.gamedata.name = "Table1".into();
+    vpx.gamedata.code = "Dim before, after\n\
+         before = LoadValue(\"Ice\", \"HighScore\")\n\
+         SaveValue \"Ice\", \"HighScore\", 12345\n\
+         after = LoadValue(\"Ice\", \"HighScore\")\n"
+        .as_bytes()
+        .into();
+
+    let mut scene = vpw_table::geometry::extract(&vpx);
+    let libraries: Rc<dyn ScriptLibrary> = Rc::new(NoLibraries);
+    let game =
+        Game::load(&vpx, &mut scene, Resources::new(libraries)).expect("the table should load");
+
+    let text = |name: &str| {
+        game.script()
+            .get_global(name)
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string())
+    };
+    assert_eq!(text("before").as_deref(), Some(""), "never saved is empty");
+    assert_eq!(text("after").as_deref(), Some("12345"));
+
+    // And it comes out as a flat list for the page to keep, keyed by the
+    // table and the name folded, so a reload can put it back.
+    let pairs = game.table_values();
+    assert_eq!(
+        pairs,
+        vec!["ice/highscore".to_string(), "12345".to_string()]
+    );
+}
+
+/// A previous session's values are there before the table's `Init` looks.
+#[test]
+fn values_handed_over_are_there_from_the_start() {
+    let mut vpx = vpin::vpx::VPX::default();
+    vpx.gamedata.name = "Table1".into();
+    vpx.gamedata.code = "Dim seen\n".as_bytes().into();
+
+    let mut scene = vpw_table::geometry::extract(&vpx);
+    let libraries: Rc<dyn ScriptLibrary> = Rc::new(NoLibraries);
+    let mut game =
+        Game::load(&vpx, &mut scene, Resources::new(libraries)).expect("the table should load");
+    game.restore_table_values(&["ice/highscore".into(), "999".into()]);
+
+    game.script_mut()
+        .load("seen = LoadValue(\"Ice\", \"HighScore\")")
+        .expect("the snippet should run");
+    assert_eq!(
+        game.script()
+            .get_global("seen")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string())
+            .as_deref(),
+        Some("999")
+    );
+}

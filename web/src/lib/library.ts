@@ -10,13 +10,14 @@ import ParseWorker from './parse.worker?worker';
 import type { ParseRequest, ParseResponse } from './parse.worker';
 
 const DB_NAME = 'vpinball-web';
-const DB_VERSION = 3;
+const DB_VERSION = 4;
 
 const STORE_TABLES = 'tables'; // TableEntry, keyPath: id
 const STORE_FILES = 'files'; // Blob of the .vpx, key: id
 const STORE_THUMBS = 'thumbs'; // Blob of the screenshot, key: id
 const STORE_ROMS = 'roms'; // Blob of the ROM zip, key: set name, lowercased
 const STORE_SAVES = 'saves'; // The machine's CMOS, key: set name, lowercased
+const STORE_VALUES = 'values'; // What a table saved with SaveValue, key: table id
 const STORE_BAKES = 'bakes'; // A GiBake, key: the table's load key
 
 export class StorageUnavailable extends Error {
@@ -44,7 +45,14 @@ function openDb(): Promise<IDBDatabase> {
       if (!db.objectStoreNames.contains(STORE_TABLES)) {
         db.createObjectStore(STORE_TABLES, { keyPath: 'id' });
       }
-      for (const name of [STORE_FILES, STORE_THUMBS, STORE_ROMS, STORE_SAVES, STORE_BAKES]) {
+      for (const name of [
+        STORE_FILES,
+        STORE_THUMBS,
+        STORE_ROMS,
+        STORE_SAVES,
+        STORE_BAKES,
+        STORE_VALUES,
+      ]) {
         if (!db.objectStoreNames.contains(name)) db.createObjectStore(name);
       }
     };
@@ -322,6 +330,31 @@ export async function readMachineState(set: string): Promise<Uint8Array | null> 
   } catch {
     return null;
   }
+}
+
+/**
+ * What the table itself saved, as opposed to what its machine did.
+ *
+ * `SaveValue` is Visual Pinball's own key-value store and a table keeps its
+ * options and often its high scores there — a different place from the ROM's
+ * battery-backed memory, and a table with no ROM at all has only this one. A
+ * flat list of key and value, which is the shape the player hands over.
+ */
+export async function readTableValues(key: string): Promise<string[]> {
+  try {
+    const rows = await transact([STORE_VALUES], 'readonly', (tx) =>
+      promisify(tx.objectStore(STORE_VALUES).get(key) as IDBRequest<string[] | undefined>),
+    );
+    return rows ?? [];
+  } catch {
+    return [];
+  }
+}
+
+export async function writeTableValues(key: string, pairs: string[]): Promise<void> {
+  await transact([STORE_VALUES], 'readwrite', async (tx) => {
+    tx.objectStore(STORE_VALUES).put(pairs, key);
+  });
 }
 
 export async function writeMachineState(set: string, data: Uint8Array): Promise<void> {

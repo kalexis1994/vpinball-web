@@ -284,6 +284,10 @@ pub struct GameState {
     /// the script has already seen*, or two pollers would each get half of the
     /// lamp changes and half the playfield would stay dark.
     controller: RefCell<Option<Rc<Controller>>>,
+    /// What the table has saved with `SaveValue`: its high scores, its
+    /// options, whatever it wants to find again next time. Keyed by the
+    /// table's name and the value's, both folded. See [`LoadValue`].
+    values: RefCell<HashMap<String, String>>,
 }
 
 impl GameState {
@@ -372,6 +376,7 @@ impl Game {
             machine: Rc::new(Machine::new()),
             roms: resources.roms,
             controller: RefCell::new(None),
+            values: RefCell::new(HashMap::new()),
         });
 
         // Filled after the state exists, because a collection holds the same
@@ -550,6 +555,35 @@ impl Game {
 
     pub fn items(&self) -> &Items {
         &self.state.items
+    }
+
+    /// Everything the table has saved with `SaveValue`, as a flat list of
+    /// key and value.
+    ///
+    /// For a host that wants to keep it between sessions, which is the whole
+    /// point of the call: a table saves its high scores and its options this
+    /// way and looks for them again next time. See [`LoadValue`].
+    pub fn table_values(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        let values = self.state.values.borrow();
+        // Sorted, so two saves of the same state are the same bytes and the
+        // page can tell whether anything changed.
+        let mut keys: Vec<&String> = values.keys().collect();
+        keys.sort();
+        for k in keys {
+            out.push(k.clone());
+            out.push(values[k].clone());
+        }
+        out
+    }
+
+    /// Puts a previous session's values back. Before `start`, because a
+    /// table's `Init` is where it reads them.
+    pub fn restore_table_values(&mut self, pairs: &[String]) {
+        let mut values = self.state.values.borrow_mut();
+        for pair in pairs.as_chunks::<2>().0 {
+            values.insert(pair[0].clone(), pair[1].clone());
+        }
     }
 
     /// The emulated ROM board, for a host that wants to draw the score.
@@ -1586,6 +1620,24 @@ impl TableHost {
             "gettextfile" => Some(Value::Object(Rc::new(GetTextFile {
                 state: self.state.clone(),
             }))),
+            // The player's own key-value store, which is where a table keeps
+            // its high scores and its options between sessions
+            // (`ScriptGlobalTable.cpp:505` and `:581`). Two things about it
+            // matter and both are load-bearing: a value that was never saved
+            // reads back as an **empty string** rather than failing, which is
+            // how every table asks "has anybody played me before"; and it is
+            // keyed by the table's own name, so two tables cannot tread on
+            // each other's scores.
+            //
+            // Ice Fever calls it on the first line of its `Init` and stopped
+            // there without it, which is the shape of every missing global:
+            // silent until the one table that uses it, then total.
+            "loadvalue" => Some(Value::Object(Rc::new(LoadValue {
+                state: self.state.clone(),
+            }))),
+            "savevalue" => Some(Value::Object(Rc::new(SaveValue {
+                state: self.state.clone(),
+            }))),
             // `GetBalls` is how a table finds the balls in play, and there is
             // no other way: the script has `ActiveBall` inside a handler and
             // nothing at all outside one. Every table's rolling-sound routine
@@ -2002,6 +2054,59 @@ impl Object for GetTextFile {
             None => Err(VbError::new(53, format!("File not found: '{wanted}'"))),
         }
     }
+}
+
+/// `LoadValue(table, name)` — what the table saved last time, or "".
+struct LoadValue {
+    state: Rc<GameState>,
+}
+
+impl Object for LoadValue {
+    fn type_name(&self) -> &'static str {
+        "LoadValue"
+    }
+
+    fn get(&self, _name: &str, args: &[Value]) -> VbResult<Value> {
+        let key = value_key(args)?;
+        Ok(Value::str(
+            self.state
+                .values
+                .borrow()
+                .get(&key)
+                .map_or("", String::as_str),
+        ))
+    }
+}
+
+/// `SaveValue(table, name, value)`.
+struct SaveValue {
+    state: Rc<GameState>,
+}
+
+impl Object for SaveValue {
+    fn type_name(&self) -> &'static str {
+        "SaveValue"
+    }
+
+    fn get(&self, _name: &str, args: &[Value]) -> VbResult<Value> {
+        let key = value_key(args)?;
+        // Everything comes back out as a string, because that is all the
+        // original's storage holds: a table that saves a number and compares
+        // it to one later is relying on VBScript's own coercion, not on us
+        // keeping the type.
+        let text = args.get(2).map_or(Ok(Rc::from("")), Value::to_str)?;
+        self.state.values.borrow_mut().insert(key, text.to_string());
+        Ok(Value::Empty)
+    }
+}
+
+/// How a value is filed: the table's name and the value's, folded.
+fn value_key(args: &[Value]) -> VbResult<String> {
+    let table = args.first().map_or(Ok(Rc::from("")), Value::to_str)?;
+    let name = args.get(1).map_or(Ok(Rc::from("")), Value::to_str)?;
+    // Folded, because a table that saves "HighScore" and loads "Highscore" is
+    // a table VBScript would have answered.
+    Ok(format!("{}/{}", table.to_lowercase(), name.to_lowercase()))
 }
 
 /// Something that accepts anything and does nothing.

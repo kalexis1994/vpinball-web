@@ -20,8 +20,10 @@ import {
   readBake,
   readMachineState,
   readRom,
+  readTableValues,
   writeBake,
   writeMachineState,
+  writeTableValues,
   type GiBake,
 } from './library';
 import BakeWorker from './bake.worker?worker';
@@ -177,8 +179,17 @@ let runningSet: string | null = null;
  * is a machine that forgets its high scores every time.
  */
 export async function saveMachineState(): Promise<void> {
-  if (!runningSet || !started) return;
+  if (!started) return;
   const h = await host();
+  // Two different memories and only one of them belongs to the machine: the
+  // ROM's battery-backed RAM, and whatever the *table's script* put away with
+  // `SaveValue`. A table with no ROM has only the second, so neither can be
+  // skipped because the other is missing.
+  if (loaded) {
+    const pairs = await h.call<string[]>('tableValues');
+    if (pairs.length > 0) await writeTableValues(loaded.key.split('|')[0], pairs);
+  }
+  if (!runningSet) return;
   const data = await h.call<Uint8Array | undefined>('machineState');
   if (data) await writeMachineState(runningSet, data);
 }
@@ -299,6 +310,9 @@ export function loadTable(
     // The bytes are moved, not copied: on the worker path this is 111 MB that
     // would otherwise exist twice while the copy is in flight.
     const size = bytes.byteLength;
+    // What this table saved last time, before it is loaded: a table reads its
+    // own values inside `Init`, which runs as part of the load.
+    await h.call('restoreTableValues', [await readTableValues(key)]);
     const s = await h.call<SceneStats>('loadTable', [bytes], [bytes.buffer as ArrayBuffer]);
     // The lightmaps, in the background: from the cache when a visit already
     // paid for them, traced in the bake worker when not. The table is already

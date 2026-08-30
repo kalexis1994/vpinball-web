@@ -1133,6 +1133,24 @@ pub fn restore_machine_state(set: String, data: Vec<u8>) {
     });
 }
 
+/// What the table saved last time, handed over before it is loaded.
+///
+/// The same shape as [`restore_machine_state`] and for the same reason: the
+/// reading happens inside the load, so the values have to be here before it
+/// starts rather than handed to it afterwards.
+#[wasm_bindgen(js_name = restoreTableValues)]
+pub fn restore_table_values(pairs: Vec<String>) {
+    TABLE_VALUES.with(|v| *v.borrow_mut() = pairs);
+}
+
+/// And what it has saved this session, as a flat list of key and value.
+#[wasm_bindgen(js_name = tableValues)]
+pub fn table_values() -> Vec<String> {
+    with_player(|player| player.table.as_ref().map(vpw_game::Game::table_values))
+        .flatten()
+        .unwrap_or_default()
+}
+
 /// The current machine's memory, for the page to put in local storage.
 ///
 /// Returns nothing if no ROM is running.
@@ -1149,6 +1167,11 @@ pub fn machine_state() -> Option<Vec<u8>> {
 #[wasm_bindgen(js_name = romCount)]
 pub fn rom_count() -> usize {
     ROMS.with(|r| r.borrow().len())
+}
+
+thread_local! {
+    /// What the page handed over for the table about to be loaded.
+    static TABLE_VALUES: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
 }
 
 /// The ROM registry, as the controller sees it.
@@ -2093,6 +2116,9 @@ pub fn load_table(bytes: &[u8]) -> Result<SceneStats, JsValue> {
         let resources = Resources::new(Rc::new(PageLibraries)).with_roms(Rc::new(PageRoms));
         let mut table = Game::load(&vpx, &mut scene, resources)
             .map_err(|e| JsValue::from_str(&format!("the table's script failed: {e}")))?;
+        // Whatever this table saved last time, before its `Init` goes looking
+        // for it. See `vpw_game::Game::restore_table_values`.
+        TABLE_VALUES.with(|v| table.restore_table_values(&v.borrow()));
         if let Err(e) = table.start() {
             log::error!("the table's Init failed: {e}");
         }
