@@ -364,6 +364,57 @@ fn nebula(palette: &Palette) -> Vec<[f32; 3]> {
     out
 }
 
+/// How far the cloud is smeared before it is stretched over the sheet, in
+/// field texels.
+///
+/// The sheet is a print behind glass with light coming through it from
+/// behind, and neither of those is sharp: the light passes a diffuser and the
+/// ink sits on the far side of a few millimetres of acrylic. The noise that
+/// makes the cloud has no idea about that — it is as crisp at its finest
+/// octave as at its coarsest — so it is softened here, once, before anything
+/// samples it.
+const SMEAR: usize = 2;
+
+/// Softens the cloud.
+///
+/// Two box passes, which is close enough to a Gaussian that nothing about a
+/// nebula could tell the difference, and separable, so it costs a row and a
+/// column per texel rather than the square of the radius.
+fn smear(field: &mut [[f32; 3]], (w, h): (usize, usize), radius: usize) {
+    if radius == 0 {
+        return;
+    }
+    let mut tmp = vec![[0.0f32; 3]; field.len()];
+    for _ in 0..2 {
+        for y in 0..h {
+            for x in 0..w {
+                let mut sum = [0.0f32; 3];
+                let mut n = 0.0;
+                for d in x.saturating_sub(radius)..(x + radius + 1).min(w) {
+                    for k in 0..3 {
+                        sum[k] += field[y * w + d][k];
+                    }
+                    n += 1.0;
+                }
+                tmp[y * w + x] = [sum[0] / n, sum[1] / n, sum[2] / n];
+            }
+        }
+        for y in 0..h {
+            for x in 0..w {
+                let mut sum = [0.0f32; 3];
+                let mut n = 0.0;
+                for d in y.saturating_sub(radius)..(y + radius + 1).min(h) {
+                    for k in 0..3 {
+                        sum[k] += tmp[d * w + x][k];
+                    }
+                    n += 1.0;
+                }
+                field[y * w + x] = [sum[0] / n, sum[1] / n, sum[2] / n];
+            }
+        }
+    }
+}
+
 /// The colour of the cloud at a given density: void, body, core.
 ///
 /// Four stops, blended smoothly. The dark end is the table's own first colour
@@ -444,7 +495,8 @@ fn sample(field: &[[f32; 3]], u: f32, v: f32) -> [f32; 3] {
 /// Paints the head's face: RGBA, [`BACKGLASS_PIXELS`] big, fully opaque.
 pub fn paint(palette: &Palette) -> Vec<u8> {
     let (w, h) = (BACKGLASS_PIXELS.0 as usize, BACKGLASS_PIXELS.1 as usize);
-    let field = nebula(palette);
+    let mut field = nebula(palette);
+    smear(&mut field, FIELD, SMEAR);
     let mut out = vec![255u8; w * h * 4];
 
     for y in 0..h {

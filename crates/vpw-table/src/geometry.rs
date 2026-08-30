@@ -872,6 +872,17 @@ pub fn extract(vpx: &VPX) -> Scene {
                 l.scenery = true;
             }
         }
+        // And the table's own backbox lamps go out, because we just put a
+        // backbox of our own where they were. A flasher standing at the very
+        // back of the table, a hand's width or more above the wood, is not
+        // lighting a playfield: The Sopranos has eight of them at 165 and 265
+        // units across the back, which is its backglass lit from behind, and
+        // with our head standing over them they read as a row of dots hanging
+        // in the gap. The script keeps them — it can still switch them on and
+        // read them back — they are simply not drawn.
+        let far_end = playfield.min.y + (playfield.max.y - playfield.min.y) * 0.02;
+        const BACKBOX_LAMP_HEIGHT: f32 = 100.0;
+        flashers.retain(|f| !(f.center.y <= far_end && f.state.height >= BACKBOX_LAMP_HEIGHT));
         meshes.push(head.mesh());
         meshes.push(head.display_mesh());
     }
