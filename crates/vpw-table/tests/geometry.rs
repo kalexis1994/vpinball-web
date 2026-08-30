@@ -161,6 +161,7 @@ fn test_playfield(b: Bounds) -> Mesh {
         material: String::new(),
         visible: true,
         clamp: false,
+        scenery: false,
         kind: MeshKind::Playfield,
     }
 }

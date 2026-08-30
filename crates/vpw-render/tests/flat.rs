@@ -60,6 +60,7 @@ fn floor_with_lamp() -> Scene {
         material: "floor".into(),
         visible: true,
         clamp: false,
+        scenery: false,
         kind: MeshKind::Playfield,
     };
 

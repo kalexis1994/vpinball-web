@@ -164,6 +164,7 @@ fn place(
         material,
         visible: true,
         clamp: false,
+        scenery: false,
         kind,
     })
 }

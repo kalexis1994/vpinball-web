@@ -847,6 +847,11 @@ impl TableRenderer {
                 label: Some("vpw-frame"),
             });
         let head = self.view.shows_backbox();
+        // The room a table stands in is drawn from inside it and nowhere else.
+        // Looking *at* the machine you are outside it, and all it can do is
+        // hang its lid over the playfield and across the backglass. See
+        // `vpw_table::geometry::Mesh::scenery`.
+        let room = matches!(self.view, crate::camera::View::Cabinet);
         if let Some(flat) = self.flat.as_ref().filter(|f| self.flat_on && f.ready()) {
             // The flat frame: the photographs plus everything that moves.
             // The transmitted-light buffer still runs — the live pieces'
@@ -915,7 +920,7 @@ impl TableRenderer {
             self.dynamic.as_ref(),
             Some(&self.lights),
             Some(&self.flashers),
-            move |b| head || !b.backbox,
+            move |b| (head || !b.backbox) && (room || !b.scenery),
         );
         self.post.finish(&mut encoder, &view);
         self.gpu.queue.submit(Some(encoder.finish()));

@@ -101,6 +101,7 @@ fn side(wall: &vpin::vpx::gameitem::wall::Wall, points: &[Point]) -> Mesh {
         material: wall.side_material.clone(),
         visible: true,
         clamp: false,
+        scenery: false,
         kind: MeshKind::Wall,
     }
 }
@@ -158,6 +159,7 @@ fn top(
         material: wall.top_material.clone(),
         visible: true,
         clamp: false,
+        scenery: false,
         kind: MeshKind::Wall,
     })
 }

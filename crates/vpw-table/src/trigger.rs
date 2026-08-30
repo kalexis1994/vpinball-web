@@ -127,6 +127,7 @@ pub fn build(t: &Trigger, base_z: f32) -> Option<Mesh> {
         material: t.material.clone(),
         visible: true,
         clamp: false,
+        scenery: false,
         kind: MeshKind::Builtin,
     })
 }

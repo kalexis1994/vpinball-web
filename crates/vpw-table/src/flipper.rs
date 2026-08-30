@@ -214,6 +214,7 @@ pub fn build(f: &vpin::vpx::gameitem::flipper::Flipper, base_z: f32) -> Option<M
         material: f.material.clone(),
         visible: true,
         clamp: false,
+        scenery: false,
         kind: MeshKind::Builtin,
     })
 }
@@ -286,6 +287,7 @@ pub fn rubber(f: &vpin::vpx::gameitem::flipper::Flipper, base_z: f32) -> Option<
         material: f.rubber_material.clone(),
         visible: true,
         clamp: false,
+        scenery: false,
         kind: MeshKind::Builtin,
     })
 }

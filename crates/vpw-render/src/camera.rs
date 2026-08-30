@@ -295,7 +295,13 @@ impl Camera {
             // on screen is what kept the whole machine small on a wide
             // window. On a portrait screen the width binds instead and the
             // crown comes back into shot on its own; nothing is lost there.
-            let trim = vpw_table::backbox::DISPLAY_AREA[1];
+            // Half of the blank strip above the display, not all of it. Taking
+            // all of it frames the machine with the display's own top edge
+            // exactly on the edge of the screen, and on a squat window — where
+            // the width binds and the machine is tall — that is a score cut in
+            // half. Half the strip leaves the display a margin of its own
+            // height above it and still buys most of the closer stance.
+            let trim = vpw_table::backbox::DISPLAY_AREA[1] * 0.5;
             let mut head_max = backbox.1;
             head_max.z -= (backbox.1.z - backbox.0.z) * trim;
             min = min.min(backbox.0);

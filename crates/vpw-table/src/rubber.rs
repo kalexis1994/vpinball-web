@@ -73,6 +73,7 @@ pub fn mesh(rubber: &vpin::vpx::gameitem::rubber::Rubber) -> Option<Mesh> {
         material: rubber.material.clone(),
         visible: true,
         clamp: false,
+        scenery: false,
         kind: MeshKind::Rubber,
     })
 }

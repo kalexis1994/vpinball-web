@@ -73,6 +73,7 @@ fn scene() -> Scene {
         material: "floor".into(),
         visible: true,
         clamp: false,
+        scenery: false,
         kind: MeshKind::Playfield,
     };
     let playfield = Bounds {

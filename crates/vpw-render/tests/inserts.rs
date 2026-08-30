@@ -82,6 +82,7 @@ fn scene(image: &str, image_mode: bool, surface_image: &str, state: f32) -> Scen
         material: "floor".into(),
         visible: true,
         clamp: false,
+        scenery: false,
         kind: MeshKind::Playfield,
     };
 

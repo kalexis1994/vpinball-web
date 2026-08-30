@@ -216,6 +216,9 @@ pub struct Batch {
     pub textured: bool,
     /// Whether this is the machine's head rather than the table.
     pub backbox: bool,
+    /// Whether this is the room the machine stands in rather than the machine.
+    /// See [`vpw_table::geometry::Mesh::scenery`].
+    pub scenery: bool,
     /// Whether the batch draws with back faces culled.
     ///
     /// The original's scene default is `CULL_CCW` (`Renderer.cpp:927`) and a
@@ -274,6 +277,7 @@ struct BatchKey {
     /// Kept in the key so the head never merges into a batch with the table:
     /// a view that leaves it out has to be able to leave it out on its own.
     backbox: bool,
+    scenery: bool,
     playfield: bool,
     /// See [`Batch::culled`]; culled and two-sided meshes cannot share a
     /// draw call.
@@ -310,6 +314,7 @@ impl GpuScene {
                 image: m.image.clone(),
                 transparent,
                 backbox: matches!(m.kind, vpw_table::geometry::MeshKind::Backbox),
+                scenery: m.scenery,
                 playfield: matches!(m.kind, vpw_table::geometry::MeshKind::Playfield),
                 // Opaque primitives take the original's `CULL_CCW`; anything
                 // transparent draws without depth writes there and goes
@@ -407,6 +412,7 @@ impl GpuScene {
                 image: key.image.clone(),
                 textured: slot.textured,
                 backbox: key.backbox,
+                scenery: key.scenery,
                 culled: key.culled,
             });
         }

@@ -73,6 +73,7 @@ fn floor_scene() -> Scene {
         material: String::new(),
         visible: true,
         clamp: false,
+        scenery: false,
         kind: MeshKind::Playfield,
     };
 

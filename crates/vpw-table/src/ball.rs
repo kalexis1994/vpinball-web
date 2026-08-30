@@ -39,6 +39,7 @@ pub fn mesh() -> Mesh {
         material: String::new(),
         visible: true,
         clamp: false,
+        scenery: false,
         kind: MeshKind::Builtin,
     }
 }
@@ -90,6 +91,7 @@ pub fn shadow_mesh() -> Mesh {
         material: String::new(),
         visible: true,
         clamp: false,
+        scenery: false,
         kind: MeshKind::Builtin,
     }
 }

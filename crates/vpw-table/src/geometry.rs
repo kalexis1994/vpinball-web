@@ -43,6 +43,21 @@ pub struct Mesh {
     /// Material name, if it has one. Resolved against `Scene::materials`.
     pub material: String,
     pub visible: bool,
+    /// Whether this part is the room the table stands in rather than the
+    /// machine itself.
+    ///
+    /// Set only on a table that models one — a cabinet, a backdrop, a whole
+    /// room — and only for the parts of it that stand up at head height. It is
+    /// scenery built for one camera: the author's cabinet view, from inside
+    /// it. From any view that looks *at* the machine you are outside it, and
+    /// what you see is the underside of its lid hanging over the playfield and
+    /// across the backglass.
+    ///
+    /// So the views that look at the machine leave it out, and the one that
+    /// stands you inside it draws it. That is the same arrangement the head
+    /// itself already has, and for the same reason: what belongs in a picture
+    /// depends on where the picture is taken from.
+    pub scenery: bool,
     /// Whether the texture stops at its edges instead of tiling.
     ///
     /// The original chooses this per part rather than once for the scene, and
@@ -838,6 +853,16 @@ pub fn extract(vpx: &VPX) -> Scene {
     let head = crate::backbox::Backbox::for_playfield(playfield);
     let build_head = !brings_its_own_head(&meshes, playfield, &head);
     if build_head {
+        // The table brought no head, so anything of its own standing up at
+        // head height is the room it is standing in rather than the machine.
+        // Marked here and left in: which views draw it is the renderer's
+        // question, and the answer is the one that stands you inside it.
+        let floor = head.bounds().min.z;
+        for m in &mut meshes {
+            if m.bounds().is_some_and(|b| b.max.z > floor) {
+                m.scenery = true;
+            }
+        }
         meshes.push(head.mesh());
         meshes.push(head.display_mesh());
     }
@@ -1020,6 +1045,7 @@ fn playfield_quad(b: Bounds, image: &str, material: &str) -> Mesh {
         material: material.to_string(),
         visible: true,
         clamp: false,
+        scenery: false,
         kind: MeshKind::Playfield,
     }
 }
@@ -1063,6 +1089,7 @@ fn primitive_mesh(p: &Primitive) -> Option<Mesh> {
         material: p.material.clone(),
         visible: p.is_visible,
         clamp: false,
+        scenery: false,
         kind: MeshKind::Primitive,
     })
 }

@@ -527,7 +527,14 @@ fn main() {
         std::env::var("VPW_VIEW").ok().as_deref(),
         Some("overhead") | Some("cenital")
     );
+    let room = matches!(
+        std::env::var("VPW_VIEW").ok().as_deref(),
+        Some("cabinet") | Some("gabinete")
+    );
     let pixels = gpu.render_filtered(&gpu_scene, &camera, |b| {
+        if !room && b.scenery {
+            return false;
+        }
         if !head && b.backbox {
             return false;
         }

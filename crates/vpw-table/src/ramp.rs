@@ -329,6 +329,7 @@ fn strip(
         // printed on it, and repeating that laid a second apron, mirrored,
         // across the cabinet beside the real one.
         clamp: !world_uv,
+        scenery: false,
         kind: MeshKind::Ramp,
     }
 }
@@ -382,6 +383,7 @@ fn wires(ramp: &Ramp, c: &Outline) -> Vec<Mesh> {
                 material: ramp.material.clone(),
                 visible: true,
                 clamp: false,
+                scenery: false,
                 kind: MeshKind::Ramp,
             })
         })

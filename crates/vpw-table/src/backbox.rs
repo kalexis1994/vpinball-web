@@ -227,6 +227,7 @@ impl Backbox {
             material: String::new(),
             visible: true,
             clamp: false,
+            scenery: false,
             kind: MeshKind::Backbox,
         }
     }
@@ -271,6 +272,7 @@ impl Backbox {
             material: String::new(),
             visible: true,
             clamp: false,
+            scenery: false,
             kind: MeshKind::Backbox,
         }
     }
