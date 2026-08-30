@@ -1,7 +1,8 @@
 //! The audio chips of the pinball sound boards.
 //!
-//! The 8-bit DAC and the HC55516 CVSD decoder of the XS board, and the
-//! YM2151, the FM synthesiser of the CS board.
+//! The 8-bit DAC and the HC55516 CVSD decoder of the XS board, the YM2151 —
+//! the FM synthesiser of the CS board — and the AY-3-8910, which is what a
+//! Gottlieb System 80B makes its music with.
 //!
 //! # How you get audio out of this
 //!
@@ -26,6 +27,7 @@
 //! assert!(!output.is_empty());
 //! ```
 
+pub mod ay8910;
 pub mod biquad;
 pub mod bsmt2000;
 mod cvsd;
@@ -34,6 +36,7 @@ mod dcblock;
 pub mod mixer;
 mod ym2151;
 
+pub use ay8910::Ay8910;
 pub use biquad::{Biquad, OutputFilter};
 pub use cvsd::Cvsd;
 pub use dac::{Dac, SILENCE};
