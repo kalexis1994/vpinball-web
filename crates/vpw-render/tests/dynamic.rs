@@ -479,3 +479,54 @@ fn a_layer_follows_its_lamp() {
         "a full lamp was no brighter than half: {half} -> {full}"
     );
 }
+
+/// A lightmap's alpha is its **coverage**: where the bake holds nothing for
+/// that lamp, the layer must add nothing.
+///
+/// The pass blends with `SRC_ALPHA, ONE` and the shader returns
+/// `staticColor_Alpha * texel` including the alpha, so a fully transparent
+/// texel contributes nothing at all. Getting either half wrong adds the whole
+/// atlas over the whole layer — and with ninety-six layers on a baked table,
+/// turns it white.
+#[test]
+fn a_layer_adds_nothing_where_its_texture_is_transparent() {
+    let Some(mut held) = gpu() else { return };
+    let gpu = &mut *held;
+    let mut scene = floor_scene();
+    // One texel: white, and completely transparent.
+    scene.images.push(vpw_table::geometry::Image {
+        name: "clear".into(),
+        encoded: None,
+        rgba: Some(vec![255, 255, 255, 0]),
+        width: 1,
+        height: 1,
+        has_alpha: true,
+        alpha_test: -1.0,
+        redrawn: false,
+    });
+    let uploaded = gpu.upload(&scene);
+    let camera = top_down();
+
+    let mut layer = light_layer("LM_clear", Some("gi_001"));
+    layer.mesh.image = "clear".into();
+    gpu.upload_dynamic(&scene, &[layer]);
+
+    gpu.dynamic
+        .as_mut()
+        .unwrap()
+        .set_layer_level(&gpu.queue, 0, 0.0);
+    let dark = gpu.render(&uploaded, &camera);
+
+    gpu.dynamic
+        .as_mut()
+        .unwrap()
+        .set_layer_level(&gpu.queue, 0, 1.0);
+    let lit = gpu.render(&uploaded, &camera);
+
+    let px = changed(&dark, &lit);
+    assert!(
+        px.is_empty(),
+        "a layer with no coverage changed {} pixels",
+        px.len()
+    );
+}

@@ -356,7 +356,13 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
     // is at full power. The original's `SHADER_TECHNIQUE_unshaded_with_texture`
     // with `staticColor_Alpha` (`primitive.cpp:1166-1173`).
     if (material.extra.w > 3.5 && material.extra.w < 4.5) {
-        return vec4<f32>(texel.rgb * material.base_color.rgb, material.base_color.a);
+        // `staticColor_Alpha * tex2D(...)`, componentwise and including the
+        // alpha (`BasicShader.hlsl:432`). The alpha is not decoration here:
+        // the pass blends with `SRC_ALPHA, ONE`, so the texture's own alpha is
+        // the layer's **coverage** — where the atlas holds nothing for this
+        // lamp, nothing is added. Dropping it adds the whole atlas everywhere
+        // and the table comes out white.
+        return material.base_color * texel;
     }
 
     // The head's artwork: also its own light — a sheet with tubes behind it —

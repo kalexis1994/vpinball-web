@@ -421,14 +421,18 @@ impl TablePipeline {
                 "vpw-dynamic-additive",
                 &dynamic_shader,
                 &dynamic_layout,
-                // Source added to destination, both at full weight. The colour
-                // has already been multiplied by its alpha on the Rust side —
-                // the original does the same
-                // (`color.x * color.w, …`, `primitive.cpp:1170`) — so there is
-                // nothing left for the blend to weigh.
+                // `SRCBLEND = SRC_ALPHA`, `DESTBLEND = ONE`, `BLENDOP = ADD`
+                // — the original's `EnableAlphaBlend(true)`
+                // (`RenderDevice.cpp:2497`).
+                //
+                // The source alpha is doing real work: for a lightmap it is
+                // the coverage baked into the atlas, so a lamp adds light only
+                // where the bake says it reaches. With `ONE, ONE` the whole
+                // atlas lands on every layer and ninety-six of them turn the
+                // table white.
                 Some(wgpu::BlendState {
                     color: wgpu::BlendComponent {
-                        src_factor: wgpu::BlendFactor::One,
+                        src_factor: wgpu::BlendFactor::SrcAlpha,
                         dst_factor: wgpu::BlendFactor::One,
                         operation: wgpu::BlendOperation::Add,
                     },
