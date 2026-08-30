@@ -162,6 +162,9 @@ impl Resources {
 const HIT: &str = "Hit";
 const UNHIT: &str = "Unhit";
 const TIMER: &str = "Timer";
+/// Fired once a frame at everything that moves, so a table can drag whatever it
+/// has drawn on top of a part into line with it. See [`Game::animate`].
+const ANIMATE: &str = "Animate";
 const SPIN: &str = "Spin";
 const SLINGSHOT: &str = "Slingshot";
 /// A drop target reaching the bottom of its travel, and the top again.
@@ -217,6 +220,9 @@ pub struct Game {
     /// How many script handlers have been called. A cell because the events
     /// are dispatched through `&self`.
     fired: Cell<u64>,
+    /// Which parts have an `_Animate` handler, worked out once. See
+    /// [`Game::animate`].
+    animated: RefCell<Option<Vec<Rc<str>>>>,
     /// Set once the script has been told the table is starting.
     started: bool,
     /// What each kicker was holding last time the record looked, so a take or
@@ -395,6 +401,7 @@ impl Game {
         }));
 
         let mut game = Self {
+            animated: RefCell::new(None),
             engine,
             controls,
             parts,
@@ -1186,7 +1193,45 @@ impl Game {
     /// parts have been animated and before anything is drawn
     /// (`player.cpp:2132`).
     pub fn new_frame(&mut self) {
+        self.animate();
         self.fire_frame_timers(-1.0);
+    }
+
+    /// Tells every moving part that a frame is about to be drawn.
+    ///
+    /// `Player::UpdateAnimations`, which fires the event at each animatable
+    /// object every frame (`player.cpp:2107`). A table uses it to drag
+    /// something it has drawn *on top of* a part into line with the part
+    /// itself:
+    ///
+    /// ```vbscript
+    /// Sub LeftFlipper_Animate: LeftFlipper_Top.RotZ = LeftFlipper.CurrentAngle: End Sub
+    /// ```
+    ///
+    /// Almost every table since about 2015 does that, because a flipper drawn
+    /// as a primitive looks far better than the editor's own. Without this the
+    /// primitive never turns: it sits at whatever angle it was authored at
+    /// while the invisible flipper underneath does the work, which looks
+    /// exactly like a flipper that has come off the playfield.
+    ///
+    /// Which parts get it is decided once, by asking the script: an object with
+    /// no handler costs nothing to skip, and a table with three hundred parts
+    /// should not pay for three hundred lookups sixty times a second.
+    fn animate(&mut self) {
+        if self.animated.borrow().is_none() {
+            let names: Vec<Rc<str>> = self
+                .state
+                .items
+                .iter()
+                .filter(|i| self.script.has_proc(&format!("{}_{ANIMATE}", i.name)))
+                .map(|i| i.name.clone())
+                .collect();
+            *self.animated.borrow_mut() = Some(names);
+        }
+        let names = self.animated.borrow().clone().unwrap_or_default();
+        for name in names {
+            self.fire(&name, ANIMATE, None);
+        }
     }
 
     /// The physics has caught up with the wall clock: `TimerInterval = -2`.
