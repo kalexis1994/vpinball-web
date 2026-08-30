@@ -12,6 +12,9 @@
 //! do the falling "TILT" — the same word, spoken slower and deeper each time
 //! (`gts80s.c:392`).
 //!
+//! The card's two voices are summed here: the converter at half and the speech
+//! chip at full, which is the balance PinMAME mixes them at.
+//!
 //! # The memory map (`gts80s.c:483`)
 //!
 //! | From | To | What |
@@ -52,8 +55,12 @@ const ROM_SIZE: usize = 0x1000;
 /// off — which is where VPinMAME leaves them — reads back as all ones.
 const DIPS: u8 = 0x00;
 
-/// How loud the card sits in the mix (`gts80s.c:657`, a stream level of 50).
-const LEVEL: f32 = 0.5;
+/// How loud the converter sits under the voice.
+///
+/// PinMAME gives the card's audio stream a level of 50 out of 100 and the
+/// speech chip's 100 (`gts80s.c:657` and `:672`), so the effects and music sit
+/// at half the voice. That is the balance a table author has been hearing.
+const DAC_LEVEL: f32 = 0.5;
 
 /// The corner of the network on the converter's output, in Hz.
 ///
@@ -134,7 +141,14 @@ impl Bus for Speech {
                 self.votrax.set_muted(false);
                 self.votrax.write(value ^ 0x3F);
             }
-            0x3000..=0x3FFF => self.votrax.set_clock(value),
+            // The converter drives the chip's clock straight: `$7E` is the
+            // middle of the range and gives the 720 kHz of ordinary speech,
+            // and `$46` the 398 kHz of a finished TILT. Both points were
+            // measured on real hardware with a frequency meter
+            // (`gts80s.c:392`).
+            0x3000..=0x3FFF => self
+                .votrax
+                .set_clock((u32::from(value) * 5750).saturating_sub(4500)),
             // A write into the ROM window: the firmware's delay loop, and the
             // card's off switch for the voice.
             ROM_BASE..=0x7FFF => self.votrax.set_muted(true),
@@ -193,7 +207,7 @@ impl SpeechBoard {
         self.rate = rate;
         self.clock = SampleClock::new(CLOCK, rate);
         self.dc = DcBlocker::new(rate);
-        self.mem.votrax.set_rate(rate);
+        self.mem.votrax.set_host_rate(rate);
         let k = 1.0 - (-std::f32::consts::TAU * RECONSTRUCTION_HZ / rate as f32).exp();
         self.smoothing = k.clamp(0.0, 1.0);
         self.smoothed = 0.0;
@@ -240,7 +254,7 @@ impl SpeechBoard {
             self.smoothed += self.smoothing * (raw - self.smoothed);
             let voice = self.mem.votrax.sample();
             self.audio
-                .push(self.dc.process(self.smoothed + voice) * LEVEL);
+                .push(self.dc.process(self.smoothed * DAC_LEVEL + voice));
             self.produced += 1;
         }
 

@@ -32,8 +32,8 @@ fn main() {
     let mut samples = Vec::new();
 
     // The chip's own clock, which the board would be setting with its second
-    // converter. `$7E` is the middle of the range and gives 720 kHz.
-    chip.set_clock(0x7E);
+    // converter.
+    chip.set_clock(NOMINAL_CLOCK);
 
     for name in &words {
         let Some(code) = vpw_gts80::votrax::code_of(name) else {
@@ -53,8 +53,10 @@ fn main() {
 
     // And the same again slowed down, which is how these machines say "TILT":
     // the clock falls and the voice goes with it.
-    for latch in [0x7E, 0x74, 0x6A, 0x60, 0x56, 0x4C, 0x46] {
-        chip.set_clock(latch);
+    // The board steps its converter down by ten a time, from the middle of the
+    // range to near the bottom of it.
+    for latch in [0x7Eu32, 0x74, 0x6A, 0x60, 0x56, 0x4C, 0x46] {
+        chip.set_clock(latch * 5750 - 4500);
         for name in ["T", "I", "L", "T", "PA1"] {
             let code = vpw_gts80::votrax::code_of(name).expect("a phoneme");
             chip.write(code);

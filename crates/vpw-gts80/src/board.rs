@@ -246,14 +246,18 @@ pub struct Board {
 
 /// Whichever card is plugged in.
 ///
+/// Boxed, because the two are not the same size: the Sound & Speech board
+/// carries a whole speech chip with its filter histories, and an unboxed enum
+/// would make every machine pay for it.
+///
 /// Gottlieb fitted three different ones over five years and they share only
 /// the latch: this is a 6502 and a 6530 with a resistor ladder, or a 6502 and
 /// a 6532 with two converters and a speech chip.
 pub enum Audio {
     /// The 1980 sound card or the 1983 piggyback. See [`crate::sound`].
-    Card(SoundBoard),
+    Card(Box<SoundBoard>),
     /// The Sound & Speech board. See [`crate::speech`].
-    Speech(SpeechBoard),
+    Speech(Box<SpeechBoard>),
 }
 
 impl Audio {
@@ -313,17 +317,18 @@ impl Board {
 
     /// Plugs a sound card in, built from whatever the set carried.
     pub fn load_sound(&mut self, sound: crate::games::Sound<'_>, rate: u32) {
-        self.sound = Some(match sound {
-            crate::games::Sound::Piggyback(rom) => {
-                Audio::Card(SoundBoard::piggyback(rom.to_vec(), rate))
-            }
-            crate::games::Sound::Card { rom, system } => {
-                Audio::Card(SoundBoard::sound(rom.to_vec(), system.to_vec(), rate))
-            }
-            crate::games::Sound::Speech { first, second } => {
-                Audio::Speech(SpeechBoard::new(first, second, rate))
-            }
-        });
+        self.sound =
+            Some(match sound {
+                crate::games::Sound::Piggyback(rom) => {
+                    Audio::Card(Box::new(SoundBoard::piggyback(rom.to_vec(), rate)))
+                }
+                crate::games::Sound::Card { rom, system } => Audio::Card(Box::new(
+                    SoundBoard::sound(rom.to_vec(), system.to_vec(), rate),
+                )),
+                crate::games::Sound::Speech { first, second } => {
+                    Audio::Speech(Box::new(SpeechBoard::new(first, second, rate)))
+                }
+            });
     }
 
     /// Runs one instruction and gives the chips the clocks it took.

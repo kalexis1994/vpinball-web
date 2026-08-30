@@ -562,7 +562,16 @@ and the tests that check against them expect a checkout next door.
 ## Licence
 
 GPL-3.0-or-later, inherited from Visual Pinball. The parts ported from PinMAME
-are BSD-3-Clause, which that permits.
+are BSD-3-Clause, which that permits — and only those parts: PinMAME's move to
+that licence is unfinished, and the files still under the old MAME one are
+non-commercial and so incompatible. Anything of theirs that is (the 6502, the
+6532 and 6530, the pinball core) was written here from the hardware
+specification instead.
+
+The largest single thing carried across is the **Votrax SC-01** speech
+synthesiser at `crates/vpw-gts80/src/votrax.rs`, from `votrax.c` — Olivier
+Galibert's reconstruction of the chip from its die, phoneme ROM and all. Its
+notice is at the top of that file.
 
 The one third-party asset is the display typeface the menus are set in:
 **Orbitron** by The League of Moveable Type, SIL Open Font License 1.1, bundled
