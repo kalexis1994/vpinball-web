@@ -156,6 +156,7 @@ pub fn head_mesh(name: &str, half_width: f32, material: String) -> Mesh {
         scenery: false,
         kind: MeshKind::Builtin,
         additive: None,
+        disable_lighting: 0.0,
     }
 }
 
@@ -195,6 +196,7 @@ pub fn shaft_mesh(name: &str, half_width: f32, material: String) -> Mesh {
         scenery: false,
         kind: MeshKind::Builtin,
         additive: None,
+        disable_lighting: 0.0,
     }
 }
 

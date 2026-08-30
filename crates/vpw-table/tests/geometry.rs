@@ -164,6 +164,7 @@ fn test_playfield(b: Bounds) -> Mesh {
         scenery: false,
         kind: MeshKind::Playfield,
         additive: None,
+        disable_lighting: 0.0,
     }
 }
 

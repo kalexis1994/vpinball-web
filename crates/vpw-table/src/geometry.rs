@@ -73,6 +73,17 @@ pub struct Mesh {
     /// Set when the part is drawn by **adding** it to what is already there
     /// rather than by lighting it. See [`Additive`].
     pub additive: Option<Additive>,
+    /// How much of the scene's light this part refuses, 0..1 — the primitive's
+    /// **BlendDisableLighting** (`m_disableLightingTop`).
+    ///
+    /// At 1 the surface is drawn as its own texture and the light loop is
+    /// skipped: the original lerps the lit result towards the raw diffuse by
+    /// this (`Material.fxh:144`). A table sets it on anything whose lighting
+    /// is already painted into the picture — a lit backglass, an insert's
+    /// "on" artwork, and every mesh of a baked table, whose whole point is
+    /// that the light is in the texture. Lighting those a second time is how
+    /// a baked table comes out white.
+    pub disable_lighting: f32,
 }
 
 /// A part that is light rather than a thing: it is *added* to the picture,
@@ -1120,6 +1131,7 @@ fn playfield_quad(b: Bounds, image: &str, material: &str) -> Mesh {
         scenery: false,
         kind: MeshKind::Playfield,
         additive: None,
+        disable_lighting: 0.0,
     }
 }
 
@@ -1186,6 +1198,7 @@ fn primitive_mesh(p: &Primitive) -> Option<Mesh> {
         scenery: false,
         kind: MeshKind::Primitive,
         additive: additive(p),
+        disable_lighting: p.disable_lighting_top.unwrap_or(0.0).clamp(0.0, 1.0),
     })
 }
 

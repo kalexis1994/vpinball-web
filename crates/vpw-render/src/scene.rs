@@ -64,6 +64,9 @@ pub struct GpuMaterial {
     /// x = specular image lerp, y = thickness, z = alpha test,
     /// w = emissive: the texel is the light itself, skip the light loop
     pub extra: [f32; 4],
+    /// x = how much of the scene's light the part refuses, 0..1. See
+    /// [`vpw_table::geometry::Mesh::disable_lighting`]. The rest is spare.
+    pub blend: [f32; 4],
 }
 
 impl GpuMaterial {
@@ -89,6 +92,7 @@ impl GpuMaterial {
                 i.edge,
             ],
             extra: [i.glossy_image_lerp, i.thickness, alpha_test, 0.0],
+            blend: [0.0; 4],
         }
     }
 }
@@ -285,6 +289,11 @@ struct BatchKey {
     /// Whether this batch's texture stops at its edges. See
     /// [`clamped_sampler`]; two parts that disagree cannot share a draw.
     clamp: bool,
+    /// How much of the scene's light the part refuses, as bits so the key can
+    /// be hashed. It belongs to the part rather than to its material — a lit
+    /// insert and an unlit one are the same plastic — so two that disagree
+    /// cannot share a draw either.
+    disable_lighting: u32,
 }
 
 impl GpuScene {
@@ -333,6 +342,7 @@ impl GpuScene {
                 // share a draw if one of them wants its image to stop at the
                 // edge and the other wants it to tile.
                 clamp: m.clamp,
+                disable_lighting: m.disable_lighting.to_bits(),
             };
             groups.entry(key).or_default().push(m);
         }
@@ -394,6 +404,7 @@ impl GpuScene {
                 scene.material(&key.material),
                 scene.image(&key.image),
                 key.playfield,
+                f32::from_bits(key.disable_lighting),
                 &mut textures_on_card,
             );
             if slot.textured {
@@ -595,7 +606,7 @@ pub fn material_slot(
 ) -> MaterialSlot {
     let mut cache = TextureCache::new();
     material_slot_cached(
-        device, queue, layout, sampler, fallback, material, image, playfield, &mut cache,
+        device, queue, layout, sampler, fallback, material, image, playfield, 0.0, &mut cache,
     )
 }
 
@@ -609,6 +620,7 @@ pub fn material_slot_cached(
     material: Option<&vpw_table::geometry::Material>,
     image: Option<&vpw_table::geometry::Image>,
     playfield: bool,
+    disable_lighting: f32,
     cache: &mut TextureCache,
 ) -> MaterialSlot {
     // A picture whose pixels change while the table runs is not shared: its
@@ -671,6 +683,11 @@ pub fn material_slot_cached(
     if playfield {
         data.extra[3] = 2.0;
     }
+    // How much of the scene's light this part refuses. It belongs to the part
+    // and not to the material it names — see
+    // [`vpw_table::geometry::Mesh::disable_lighting`] — which is why it is an
+    // argument here and part of the batch key.
+    data.blend[0] = disable_lighting;
     let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("vpw-material"),
         contents: bytemuck::bytes_of(&data),

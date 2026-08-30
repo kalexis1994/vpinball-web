@@ -186,8 +186,11 @@ fn main() {
         .and_then(|v| v.parse().ok())
         .unwrap_or(1);
     let mut peak = 0.0f32;
+    let mut recent = 0.0f32;
+    let mut energy = 0.0f64;
+    let mut counted = 0.0f64;
     let mut out = vec![0.0f32; 1024];
-    for _ in 0..60 * seconds {
+    for i in 0..60 * seconds {
         // A frame is a run of physics steps and then `new_frame`, which is
         // what fires the `-1` timers — the ones a table runs its lamp fades
         // on. Stepping without it is a table whose lamps never move.
@@ -196,9 +199,26 @@ fn main() {
         }
         game.new_frame();
         game.render_audio(&mut out);
-        peak = peak.max(out.iter().fold(0.0f32, |a, b| a.max(b.abs())));
+        let frame_peak = out.iter().fold(0.0f32, |a, b| a.max(b.abs()));
+        peak = peak.max(frame_peak);
+        // The last second on its own: a machine that made one noise at
+        // power-on and has been silent since looks exactly like a machine
+        // that is playing, if all you look at is the peak.
+        if i >= 60 * seconds - 60 {
+            recent = recent.max(frame_peak);
+            energy += out.iter().map(|v| f64::from(v * v)).sum::<f64>();
+            counted += out.len() as f64;
+        }
     }
+    let rms = (energy / counted.max(1.0)).sqrt();
+    println!("-- last second: peak {recent:.4}, rms {rms:.5} --");
     println!("-- mixer peak over {seconds}s: {peak:.4} --");
+    let (card, made) = game.machine().sound_stats();
+    println!(
+        "-- sound board: {} , {made} samples made, rom running: {} --",
+        if card { "there" } else { "missing" },
+        game.machine().is_running()
+    );
 
     // The same questions again, now that the table has been running: a lamp
     // that fades up takes a second or two to get there.

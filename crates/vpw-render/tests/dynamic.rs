@@ -76,6 +76,7 @@ fn floor_scene() -> Scene {
         scenery: false,
         kind: MeshKind::Playfield,
         additive: None,
+        disable_lighting: 0.0,
     };
 
     Scene {
@@ -379,6 +380,7 @@ fn light_layer(name: &str, lamp: Option<&str>) -> AnimatedPart {
             clamp: false,
             scenery: false,
             kind: MeshKind::Primitive,
+            disable_lighting: 0.0,
             additive: Some(vpw_table::geometry::Additive {
                 color: [1.0, 1.0, 1.0],
                 alpha: 1.0,
@@ -527,6 +529,48 @@ fn a_layer_adds_nothing_where_its_texture_is_transparent() {
     assert!(
         px.is_empty(),
         "a layer with no coverage changed {} pixels",
+        px.len()
+    );
+}
+
+/// `BlendDisableLighting = 1`: the part is its own texture, and the scene's
+/// light does not touch it.
+///
+/// Every mesh of a baked table carries this — the lighting is painted into the
+/// picture, which is the whole point of a bake — so lighting one again is how
+/// a baked table comes out white. The test is that the *same* part under two
+/// very different scene lights comes out identical.
+#[test]
+fn a_part_that_refuses_the_light_ignores_the_scene() {
+    let Some(mut held) = gpu() else { return };
+    let gpu = &mut *held;
+    let camera = top_down();
+
+    let render = |gpu: &mut vpw_render::offscreen::Offscreen, emission: f32, refuse: f32| {
+        let mut scene = floor_scene();
+        scene.lighting.emission = [emission, emission, emission];
+        scene.lighting.ambient = [emission * 0.5, emission * 0.5, emission * 0.5];
+        scene.meshes[0].disable_lighting = refuse;
+        let uploaded = gpu.upload(&scene);
+        gpu.upload_dynamic(&scene, &[]);
+        gpu.render(&uploaded, &camera)
+    };
+
+    // Lit as usual, the scene's light is what decides how it looks.
+    let lit_bright = render(gpu, 1.0, 0.0);
+    let lit_dark = render(gpu, 0.0, 0.0);
+    assert!(
+        !changed(&lit_bright, &lit_dark).is_empty(),
+        "the scene light changed nothing, so this test proves nothing"
+    );
+
+    // Refusing it, the same two scenes are the same picture.
+    let free_bright = render(gpu, 1.0, 1.0);
+    let free_dark = render(gpu, 0.0, 1.0);
+    let px = changed(&free_bright, &free_dark);
+    assert!(
+        px.is_empty(),
+        "a part that refuses the light still moved with it: {} pixels",
         px.len()
     );
 }

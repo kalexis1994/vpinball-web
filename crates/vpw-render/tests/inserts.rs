@@ -85,6 +85,7 @@ fn scene(image: &str, image_mode: bool, surface_image: &str, state: f32) -> Scen
         scenery: false,
         kind: MeshKind::Playfield,
         additive: None,
+        disable_lighting: 0.0,
     };
 
     let (c, half) = (TABLE / 2.0, 60.0);

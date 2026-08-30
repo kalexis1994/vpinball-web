@@ -63,6 +63,7 @@ fn floor_with_lamp() -> Scene {
         scenery: false,
         kind: MeshKind::Playfield,
         additive: None,
+        disable_lighting: 0.0,
     };
 
     let lamp = 60.0;

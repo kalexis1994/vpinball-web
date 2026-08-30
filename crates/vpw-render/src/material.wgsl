@@ -79,6 +79,9 @@ struct MaterialData {
     flags      : vec4<f32>,
     // x = specular image lerp, y = thickness
     extra      : vec4<f32>,
+    // x = how much of the scene's light this part refuses, 0..1; the rest
+    // spare. The original's `fDisableLighting_top_below.x`.
+    blend      : vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> frame : Frame;
@@ -668,5 +671,20 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
     // catch whatever overshoots — which is the order the original works in and
     // the reason its own tone mapper carries the note that overflow is handled
     // by bloom.
+    // BlendDisableLighting: how much of all that the part refuses.
+    //
+    // `lerp(result, diffuse, fDisableLighting_top_below.x)` — the original
+    // does it inside the light loop (`Material.fxh:144`) and again on the
+    // ambient; the visible effect is the same, and doing it once at the end
+    // leaves the loop above readable. At 1 the surface is simply its own
+    // texture.
+    //
+    // A table sets this on anything whose lighting is already painted into the
+    // picture. Every mesh of a **baked** table carries it, because that is
+    // what a bake is; lighting those a second time is how one comes out white.
+    if (material.blend.x > 0.0) {
+        color = mix(color, diffuse, material.blend.x);
+    }
+
     return vec4<f32>(color, alpha);
 }

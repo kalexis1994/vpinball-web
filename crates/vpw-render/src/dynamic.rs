@@ -169,7 +169,8 @@ impl DynamicParts {
                              material: Option<&Material>,
                              image: Option<&vpw_table::geometry::Image>,
                              transform: Mat4,
-                             visible: bool|
+                             visible: bool,
+                             disable_lighting: f32|
          -> (Part, wgpu::Buffer) {
             let slot = crate::scene::material_slot_cached(
                 device,
@@ -180,6 +181,7 @@ impl DynamicParts {
                 material,
                 image,
                 false,
+                disable_lighting,
                 &mut textures,
             );
             let with_alpha = image.is_some_and(|i| i.has_alpha);
@@ -224,6 +226,7 @@ impl DynamicParts {
                 scene.image(&part.mesh.image),
                 part.mesh.transform,
                 true,
+                part.mesh.disable_lighting,
             );
             // A piece that is light rather than a thing: its material is not a
             // surface at all, and its brightness follows a lamp. The slot's
@@ -278,6 +281,7 @@ impl DynamicParts {
                     Some(&decal),
                     Mat4::IDENTITY,
                     false,
+                    0.0,
                 )
                 .0,
             );
@@ -301,6 +305,7 @@ impl DynamicParts {
                     Some(&shadow_image),
                     Mat4::IDENTITY,
                     false,
+                    0.0,
                 )
                 .0,
             );

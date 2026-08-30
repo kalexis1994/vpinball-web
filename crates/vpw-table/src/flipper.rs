@@ -217,6 +217,7 @@ pub fn build(f: &vpin::vpx::gameitem::flipper::Flipper, base_z: f32) -> Option<M
         scenery: false,
         kind: MeshKind::Builtin,
         additive: None,
+        disable_lighting: 0.0,
     })
 }
 
@@ -291,5 +292,6 @@ pub fn rubber(f: &vpin::vpx::gameitem::flipper::Flipper, base_z: f32) -> Option<
         scenery: false,
         kind: MeshKind::Builtin,
         additive: None,
+        disable_lighting: 0.0,
     })
 }
