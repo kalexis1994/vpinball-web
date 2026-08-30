@@ -149,6 +149,15 @@ fn main() {
     for (i, expr) in args.enumerate() {
         // A statement rather than a value: anything with a space in it that is
         // not an expression — `PlaySound "x"` — is run as it stands.
+        // A leading `!` forces the line to be run as a statement, for the ones
+        // that would otherwise read as a comparison: `!x.p(1) = 2`.
+        if let Some(stmt) = expr.strip_prefix('!') {
+            match game.script().load(stmt) {
+                Ok(()) => println!("{stmt} -- ran"),
+                Err(e) => println!("{stmt} -> {e}"),
+            }
+            continue;
+        }
         if expr.contains(' ') && !expr.contains('=') {
             match game.script().load(&expr) {
                 Ok(()) => println!("{expr} -- ran"),
@@ -169,21 +178,32 @@ fn main() {
 
     // What comes out of the mixer over the next second of table time, with
     // whatever the expressions above set going.
+    // How long to let it run before asking again. A table's own timers are on
+    // the clock — Circus turns its general illumination on two and a half
+    // seconds after the script starts — so a second is not always enough.
+    let seconds: u32 = std::env::var("PROBE_SECONDS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1);
     let mut peak = 0.0f32;
     let mut out = vec![0.0f32; 1024];
-    for _ in 0..60 {
+    for _ in 0..60 * seconds {
+        // A frame is a run of physics steps and then `new_frame`, which is
+        // what fires the `-1` timers — the ones a table runs its lamp fades
+        // on. Stepping without it is a table whose lamps never move.
         for _ in 0..17 {
             game.step();
         }
+        game.new_frame();
         game.render_audio(&mut out);
         peak = peak.max(out.iter().fold(0.0f32, |a, b| a.max(b.abs())));
     }
-    println!("-- mixer peak over a second: {peak:.4} --");
+    println!("-- mixer peak over {seconds}s: {peak:.4} --");
 
     // The same questions again, now that the table has been running: a lamp
     // that fades up takes a second or two to get there.
     for (i, expr) in std::env::args().skip(2).enumerate() {
-        if expr.contains(' ') && !expr.contains('=') {
+        if expr.starts_with('!') || (expr.contains(' ') && !expr.contains('=')) {
             continue;
         }
         let name = format!("__after{i}");
@@ -193,7 +213,7 @@ fn main() {
             .is_ok()
         {
             println!(
-                "after a second: {expr} = {:?}",
+                "after {seconds}s: {expr} = {:?}",
                 game.script().get_global(&name)
             );
         }

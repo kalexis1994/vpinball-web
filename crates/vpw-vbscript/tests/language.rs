@@ -1483,3 +1483,65 @@ Fills \"x\", a(0), a(1)",
     assert_eq!(read(0), 10.0);
     assert_eq!(read(1), 11.0);
 }
+
+/// `obj.Prop(i) = v` on a class of the script's own.
+///
+/// The line is ambiguous on its face — `Lampz.state(140) = 1` reads just as
+/// well as a call whose argument is the comparison `(140) = 1` — and VBScript
+/// resolves it as an assignment. Reading it the other way is silent: the
+/// getter runs, its answer is thrown away, and nothing is stored.
+///
+/// Every table built on the `LampFader` lamp framework does this once per lamp
+/// per frame (`Sub SetLamp(aNr, aOn): Lampz.state(aNr) = abs(aOn)`), so a port
+/// that drops it has a table whose lamps never change.
+#[test]
+fn a_parameterised_property_can_be_set_through_an_object() {
+    let src = "Class Holder
+               Private v(10)
+               Public Property Let Item(i, x)
+               v(i) = x
+               End Property
+               Public Property Get Item(i)
+               Item = v(i)
+               End Property
+               End Class
+               Dim h : Set h = New Holder
+               h.Item(3) = 7
+               Dim got : got = h.Item(3)";
+    assert_eq!(num(src, "got"), 7.0);
+}
+
+/// The same, where the value assigned is itself a call — which is what the
+/// lamp framework actually writes: `Lampz.state(aNr) = abs(aOn)`.
+#[test]
+fn a_parameterised_property_takes_a_computed_value() {
+    let src = "Class Holder
+               Private v(10)
+               Public Property Let Item(i, x)
+               v(i) = x
+               End Property
+               Public Property Get Item(i)
+               Item = v(i)
+               End Property
+               End Class
+               Dim h : Set h = New Holder
+               h.Item(2) = Abs(-4)
+               Dim got : got = h.Item(2)";
+    assert_eq!(num(src, "got"), 4.0);
+}
+
+/// The lamp framework's own shape: a `Property Let` with **no `Get` beside
+/// it**, a `ByVal` index, and the effect visible only through a public field.
+#[test]
+fn a_write_only_parameterised_property_still_takes() {
+    let src = "Class Holder
+               Public seen(10)
+               Public Property Let Item(ByVal i, x)
+               seen(i) = x
+               End Property
+               End Class
+               Dim h : Set h = New Holder
+               h.Item(3) = 7
+               Dim got : got = h.seen(3)";
+    assert_eq!(num(src, "got"), 7.0);
+}
