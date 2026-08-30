@@ -288,6 +288,8 @@ pub struct GameState {
     /// options, whatever it wants to find again next time. Keyed by the
     /// table's name and the value's, both folded. See [`LoadValue`].
     values: RefCell<HashMap<String, String>>,
+    /// Materials the script rewrote with `UpdateMaterial`, by folded name.
+    materials: RefCell<HashMap<String, MaterialChange>>,
 }
 
 impl GameState {
@@ -377,6 +379,7 @@ impl Game {
             roms: resources.roms,
             controller: RefCell::new(None),
             values: RefCell::new(HashMap::new()),
+            materials: RefCell::new(HashMap::new()),
         });
 
         // Filled after the state exists, because a collection holds the same
@@ -583,6 +586,39 @@ impl Game {
         let mut values = self.state.values.borrow_mut();
         for pair in pairs.as_chunks::<2>().0 {
             values.insert(pair[0].clone(), pair[1].clone());
+        }
+    }
+
+    /// Puts the script's `UpdateMaterial` calls into the scene.
+    ///
+    /// Called between the script running and the scene being uploaded, which
+    /// is the window where a material can still be changed: after the upload
+    /// each one is a bind group on the GPU and a change would have to go back
+    /// up. Almost every call is in that window — a table tunes its materials
+    /// while setting itself up — and one made later is recorded and takes
+    /// effect nowhere, which is the honest half-measure and better than the
+    /// script stopping at the call.
+    pub fn apply_material_changes(&self, scene: &mut Scene) {
+        let changes = self.state.materials.borrow();
+        if changes.is_empty() {
+            return;
+        }
+        for m in &mut scene.materials {
+            let Some(c) = changes.get(&m.name.to_lowercase()) else {
+                continue;
+            };
+            m.wrap_lighting = c.wrap_lighting;
+            m.roughness = c.roughness;
+            m.glossy_image_lerp = c.glossy_image_lerp;
+            m.thickness = c.thickness;
+            m.edge = c.edge;
+            m.edge_alpha = c.edge_alpha;
+            m.opacity = c.opacity;
+            m.base_color = c.base_color;
+            m.glossy_color = c.glossy_color;
+            m.clearcoat_color = c.clearcoat_color;
+            m.is_metal = c.is_metal;
+            m.opacity_active = c.opacity_active;
         }
     }
 
@@ -1632,6 +1668,19 @@ impl TableHost {
             // Ice Fever calls it on the first line of its `Init` and stopped
             // there without it, which is the shape of every missing global:
             // silent until the one table that uses it, then total.
+            // A table rewriting a material at run time
+            // (`ScriptGlobalTable.cpp:724`). Almost every call is set-up —
+            // The Getaway tunes its ball shadows this way before the first
+            // ball — so the change is recorded and put into the scene before
+            // it is uploaded. See [`Game::apply_material_changes`].
+            "updatematerial" => Some(Value::Object(Rc::new(UpdateMaterial {
+                state: self.state.clone(),
+                physics_only: false,
+            }))),
+            "updatematerialphysics" => Some(Value::Object(Rc::new(UpdateMaterial {
+                state: self.state.clone(),
+                physics_only: true,
+            }))),
             "loadvalue" => Some(Value::Object(Rc::new(LoadValue {
                 state: self.state.clone(),
             }))),
@@ -1817,6 +1866,10 @@ impl Object for BallObject {
             "angmomx" => Value::Double(b.angular_momentum.x.into()),
             "angmomy" => Value::Double(b.angular_momentum.y.into()),
             "angmomz" => Value::Double(b.angular_momentum.z.into()),
+            // Its own number, which the original hands out once and never
+            // reuses (`ball.cpp:829`). A table's velocity tracker keeps an
+            // array indexed by it, so a reused one would mix two balls up.
+            "id" => Value::Long(b.id as i32),
             "radius" => Value::Double(b.radius.into()),
             "mass" => Value::Double(b.mass.into()),
             // Presentation the renderer does not read yet.
@@ -2054,6 +2107,82 @@ impl Object for GetTextFile {
             None => Err(VbError::new(53, format!("File not found: '{wanted}'"))),
         }
     }
+}
+
+/// `UpdateMaterial(name, ...)` and its physics-only sibling.
+struct UpdateMaterial {
+    state: Rc<GameState>,
+    physics_only: bool,
+}
+
+impl Object for UpdateMaterial {
+    fn type_name(&self) -> &'static str {
+        "UpdateMaterial"
+    }
+
+    fn get(&self, _name: &str, args: &[Value]) -> VbResult<Value> {
+        let Some(first) = args.first() else {
+            return Err(VbError::invalid_call());
+        };
+        let name = first.to_str()?.to_lowercase();
+        // Only the look. The four physics numbers at the end are the same in
+        // both forms and are not modelled: a material's elasticity is read
+        // when the collision shapes are built, and those are built before a
+        // script can say anything.
+        if self.physics_only {
+            return Ok(Value::Empty);
+        }
+        let n = |i: usize| {
+            args.get(i)
+                .map_or(Ok(0.0), |v| v.to_number())
+                .map(|v| v as f32)
+        };
+        let colour = |i: usize| -> VbResult<[f32; 3]> {
+            let c = args.get(i).map_or(Ok(0.0), |v| v.to_number())? as u32;
+            // An OLE colour, which is BGR packed into a long.
+            Ok([
+                (c & 0xff) as f32 / 255.0,
+                ((c >> 8) & 0xff) as f32 / 255.0,
+                ((c >> 16) & 0xff) as f32 / 255.0,
+            ])
+        };
+        let boolean = |i: usize| args.get(i).is_some_and(|v| v.to_bool().unwrap_or(false));
+        self.state.materials.borrow_mut().insert(
+            name,
+            MaterialChange {
+                wrap_lighting: n(1)?,
+                roughness: n(2)?,
+                glossy_image_lerp: n(3)?,
+                thickness: n(4)?,
+                edge: n(5)?,
+                edge_alpha: n(6)?,
+                opacity: n(7)?,
+                base_color: colour(8)?,
+                glossy_color: colour(9)?,
+                clearcoat_color: colour(10)?,
+                is_metal: boolean(11),
+                opacity_active: boolean(12),
+            },
+        );
+        Ok(Value::Empty)
+    }
+}
+
+/// What one `UpdateMaterial` call asked for.
+#[derive(Debug, Clone, Copy)]
+struct MaterialChange {
+    wrap_lighting: f32,
+    roughness: f32,
+    glossy_image_lerp: f32,
+    thickness: f32,
+    edge: f32,
+    edge_alpha: f32,
+    opacity: f32,
+    base_color: [f32; 3],
+    glossy_color: [f32; 3],
+    clearcoat_color: [f32; 3],
+    is_metal: bool,
+    opacity_active: bool,
 }
 
 /// `LoadValue(table, name)` — what the table saved last time, or "".

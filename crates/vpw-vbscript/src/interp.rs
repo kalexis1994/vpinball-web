@@ -494,8 +494,22 @@ impl Interpreter {
                 // `x = obj` stores the object's default value; `Set x = obj`
                 // stores the object. Getting this backwards is how a table ends
                 // up with a string where it wanted a reference.
-                let v = if *set { v } else { self.devalue(v)? };
-                self.assign_to(target, v)
+                //
+                // Only where the target is a *variable*, though. Assigning to
+                // something's property is a call — the value becomes an
+                // argument — and an argument is passed as it is. Dereferencing
+                // there is what broke the pattern half the modern tables are
+                // built on:
+                //
+                //     Public Property Let Object(a) : Set Slingshot = a : End Property
+                //     LS.Object = LeftSlingshot
+                //
+                // The property is a `Let`, so it takes a value; the value it
+                // is given is a table part, and the first thing it does is
+                // `Set` it. Turning that part into its default property on the
+                // way in leaves the `Set` with nothing to set, and The Getaway
+                // stopped at line 225 with "Object required".
+                self.assign_to(target, v, *set)
             }
 
             StmtKind::Call(e) => {
@@ -715,7 +729,32 @@ impl Interpreter {
 
     // -- assignment --------------------------------------------------------
 
-    fn assign_to(&self, target: &Expr, v: Value) -> Result<()> {
+    /// Writes a value into whatever the expression names, saying whether this
+    /// was a `Set`.
+    ///
+    /// The difference is where the dereference happens. `x = obj` stores the
+    /// object's *default property* and `Set x = obj` stores the object — but
+    /// that rule is about writing a **variable**, and assigning to a property
+    /// is not writing a variable, it is calling something with an argument.
+    /// An argument is passed as it is.
+    ///
+    /// Dereferencing there is what broke the pattern half the modern tables
+    /// are built on:
+    ///
+    /// ```vbs
+    /// Public Property Let Object(a) : Set Slingshot = a : End Property
+    /// LS.Object = LeftSlingshot
+    /// ```
+    ///
+    /// The property is a `Let`, so it takes a value; the value it is given is
+    /// a table part, and the first thing it does with it is `Set` it. Turning
+    /// that part into its default property on the way in leaves the `Set` with
+    /// nothing to set, and The Getaway stopped at its line 225 with "Object
+    /// required" before the table had drawn anything.
+    fn assign_to(&self, target: &Expr, v: Value, set: bool) -> Result<()> {
+        // Only a cell gets the dereference, and only the two places below
+        // write one.
+        let into_cell = |v: Value| if set { Ok(v) } else { self.devalue(v) };
         match target {
             Expr::Ident(name) => {
                 if self.consts.borrow().contains(name) {
@@ -733,7 +772,7 @@ impl Interpreter {
                     return Ok(());
                 }
                 let cell = self.lookup_or_declare_checked(name)?;
-                *cell.borrow_mut() = v;
+                *cell.borrow_mut() = into_cell(v)?;
                 Ok(())
             }
 
@@ -782,7 +821,7 @@ impl Interpreter {
                         match current {
                             Value::Array(a) => {
                                 let subs = ints(&subs)?;
-                                a.borrow_mut().set(&subs, v)
+                                a.borrow_mut().set(&subs, into_cell(v)?)
                             }
                             // An object with a parameterised property.
                             other if other.is_object() => self.set_member(&other, "", &subs, v),

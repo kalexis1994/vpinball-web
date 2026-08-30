@@ -259,6 +259,8 @@ pub struct Engine {
     /// that question is not worth walking three thousand shapes for.
     kickers: Vec<usize>,
     pub balls: Vec<Ball>,
+    /// The last number handed to a ball. See [`Ball::id`].
+    next_ball_id: u32,
     /// The zones that report. They do not collide with anything, so they do
     /// not go into the tree.
     triggers: Vec<Trigger>,
@@ -316,6 +318,7 @@ impl Engine {
         }
 
         Self {
+            next_ball_id: 0,
             time_ms: 0,
             shapes,
             tree: Quadtree::build(entries),
@@ -345,7 +348,10 @@ impl Engine {
         Vec3::new(0.0, r.sin() * strength, -r.cos() * strength)
     }
 
-    pub fn add_ball(&mut self, ball: Ball) -> usize {
+    pub fn add_ball(&mut self, mut ball: Ball) -> usize {
+        // Its own number, counting up and never reused. See [`Ball::id`].
+        self.next_ball_id += 1;
+        ball.id = self.next_ball_id;
         self.balls.push(ball);
         self.balls.len() - 1
     }

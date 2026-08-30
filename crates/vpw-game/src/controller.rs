@@ -458,8 +458,7 @@ impl Machine {
             Which::Detect => {
                 let det = vpw_ws::games::detect(set, &images).ok_or_else(|| {
                     format!(
-                        "'{set}' is not a set this emulator knows, and its zip \
-                         is not shaped like a Whitestar set"
+                        "'{set}' is not a set this emulator knows, and its zip                          is not shaped like a Whitestar set"
                     )
                 })?;
                 log::trace!("'{set}': read from the zip's own shape");

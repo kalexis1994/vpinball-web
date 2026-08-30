@@ -1215,3 +1215,45 @@ fn an_error_says_which_script_and_quotes_the_line() {
     // stack rather than as two claims on the same number.
     assert_eq!(e.line, Some(3), "{said}");
 }
+
+/// A `Property Let` is handed the object, not its default value.
+///
+/// `x = obj` stores the object's default property and `Set x = obj` stores the
+/// object — but that rule is about writing a *variable*. Assigning to a
+/// property is a call, and a call's argument is passed as it is.
+///
+/// Half the modern tables are built on the difference:
+///
+/// ```vbs
+/// Public Property Let Object(a) : Set Slingshot = a : End Property
+/// LS.Object = LeftSlingshot
+/// ```
+///
+/// The property is a `Let`, so it takes a value; the value is a table part,
+/// and the first thing it does with it is `Set` it. Dereference on the way in
+/// and the `Set` has nothing to set — The Getaway stopped at its line 225 with
+/// "Object required" before drawing anything.
+#[test]
+fn a_property_let_is_handed_the_object_itself() {
+    let src = "Class Holder
+       Public Kept
+       Public Property Let Object(a) : Set Kept = a : End Property
+       End Class
+       Class Thing : Public Tag : End Class
+       Dim t : Set t = New Thing : t.Tag = 7
+       Dim h : Set h = New Holder
+       h.Object = t
+       Dim got : got = h.Kept.Tag
+";
+    assert_eq!(num(src, "got"), 7.0);
+
+    // And a variable still dereferences, which is the other half of the rule:
+    // a class with no default property cannot be assigned without `Set`.
+    let e = fails(
+        "Class Thing : End Class
+Dim t : Set t = New Thing
+Dim v : v = t
+",
+    );
+    assert_eq!(e.number, 438, "{e}");
+}

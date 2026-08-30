@@ -24,6 +24,14 @@ pub const BALL_TRAIL: usize = 10;
 /// State of a ball.
 #[derive(Debug, Clone)]
 pub struct Ball {
+    /// A number of its own, handed out once and never reused.
+    ///
+    /// The original counts up for the life of the session and never gives one
+    /// back (`ball.cpp:22`), and the scripts that read it lean on exactly
+    /// that: a table's velocity tracker keeps an array indexed by ball id and
+    /// would mix two balls up if a drained one's number came round again.
+    /// Zero until [`crate::Engine::add_ball`] gives it one.
+    pub id: u32,
     pub pos: Vec3,
     pub vel: Vec3,
     /// The velocity it had a moment ago, kept only for the kicker.
@@ -81,6 +89,7 @@ pub struct Ball {
 impl Default for Ball {
     fn default() -> Self {
         Self {
+            id: 0,
             pos: Vec3::ZERO,
             vel: Vec3::ZERO,
             old_vel: Vec3::ZERO,

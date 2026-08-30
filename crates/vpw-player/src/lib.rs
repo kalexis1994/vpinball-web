@@ -2122,6 +2122,9 @@ pub fn load_table(bytes: &[u8]) -> Result<SceneStats, JsValue> {
         if let Err(e) = table.start() {
             log::error!("the table's Init failed: {e}");
         }
+        // Whatever the script rewrote with `UpdateMaterial`, before any of it
+        // goes to the GPU. See `vpw_game::Game::apply_material_changes`.
+        table.apply_material_changes(&mut scene);
         // No ball. On a ROM table the machine serves one when somebody puts a
         // coin in and presses start, and putting one in the lane before that
         // is a ball the game does not know about: it sits there through the
