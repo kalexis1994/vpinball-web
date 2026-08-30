@@ -41,6 +41,9 @@ pub struct Roms<'a> {
     pub system: System<'a>,
     /// The sound card's firmware, if the set carries a card this port knows.
     pub sound: Option<Sound<'a>>,
+    /// Which of the coin door's switches this board wires normally closed.
+    /// See [`crate::io::Io::inverted`].
+    pub inverted: u8,
 }
 
 /// The shape of a game's own ROM, which changed twice in five years.
@@ -116,15 +119,22 @@ pub enum Sound<'a> {
     },
 }
 
-/// The System 80B games whose sound card has the FM chip rather than the two
-/// square-wave ones.
+/// The last System 80B boards, which changed two things at once.
 ///
-/// The second and third cards carry ROMs of the same shape and differ only in
-/// which chip is soldered on, so nothing in a set says which it is. Hence the
-/// one list in this file, and it is short: five titles and their regional
-/// variants, from the machines `gts80games.c` builds on `gl_mGTS80BS3`.
+/// They have the **FM sound chip** where the boards before them have two
+/// square-wave ones — and nothing in a set says which, because both carry the
+/// same shaped ROMs. And they wired the **slam switch normally closed**, where
+/// every machine before them wired it open.
+///
+/// Those are two different facts about one board revision, which is why one
+/// list serves both: the games `gts80games.c` builds on `gl_mGTS80BS3` are
+/// exactly the games it passes `0x80` to as their inverted-switch mask. Five
+/// titles and their regional variants.
+///
+/// Getting the second of these wrong is not subtle. The machine puts
+/// `SLAM SWITCH CLOSED` on the glass and will not take a coin.
 #[rustfmt::skip]
-const FM_GAMES: [&str; 31] = [
+const LATE_80B: [&str; 31] = [
     "amaz3afp", "amazn3fp", "amazon3a", "amazonh3",
     "badgirl2", "badgirlf", "badgirlg", "badgirls", "badgrffp", "badgrgfp", "badgrlfp",
     "bighosfp", "bighouse", "bighousf", "bighousg", "bighsffp", "bighsgfp",
@@ -178,6 +188,7 @@ pub fn detect<'a>(set: &str, images: &'a [(String, Vec<u8>)]) -> Option<Roms<'a>
             game,
             system: System::Alphanumeric(system),
             sound,
+            inverted: inverted_switches(set),
         });
     }
 
@@ -188,7 +199,13 @@ pub fn detect<'a>(set: &str, images: &'a [(String, Vec<u8>)]) -> Option<Roms<'a>
             u3: named("u3", 4096)?,
         },
         sound,
+        inverted: inverted_switches(set),
     })
+}
+
+/// Which of the coin door's switches a board wires normally closed.
+pub fn inverted_switches(set: &str) -> u8 {
+    if LATE_80B.contains(&set) { 0x80 } else { 0x00 }
 }
 
 /// The game's own ROM, whichever shape it comes in.
@@ -245,7 +262,7 @@ fn sound_card<'a>(set: &str, images: &'a [(String, Vec<u8>)]) -> Option<Sound<'a
         let generation = if d_rom.1.len() > 0x2000 {
             // The bigger images are the later cards, and only a list can say
             // which of those two this is.
-            if FM_GAMES.contains(&set) {
+            if LATE_80B.contains(&set) {
                 crate::sound80b::Generation::Three
             } else {
                 crate::sound80b::Generation::Two

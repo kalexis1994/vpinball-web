@@ -46,13 +46,17 @@ fn a_control_word_is_announced_by_the_byte_before_it() {
 
 #[test]
 fn characters_fill_the_columns_in_order_and_wrap() {
+    // `O` comes back as `0`: the two are the same drawing on sixteen
+    // segments, and the digit wins because these displays spend their lives
+    // showing scores. Genesis relies on it — it writes its score with the
+    // code the chip calls `O`, because the chip's `0` is the slashed kind.
     let chip = spelling("BOUNTY HUNTER");
-    assert_eq!(chip.text(), "BOUNTY HUNTER       ");
+    assert_eq!(chip.text(), "B0UNTY HUNTER       ");
 
     // Twenty columns and twenty-one characters: the last one lands back at the
     // front, because the column counter is taken modulo the digit count.
     let chip = spelling("ABCDEFGHIJKLMNOPQRSTU");
-    assert_eq!(chip.text(), "UBCDEFGHIJKLMNOPQRST");
+    assert_eq!(chip.text(), "UBCDEFGHIJKLMN0PQR5T");
 }
 
 #[test]
@@ -213,8 +217,8 @@ fn the_two_strobes_go_to_the_two_rows() {
         }
     }
     let (top, bottom) = alpha.text();
-    assert_eq!(top.trim_end(), "TOP");
-    assert_eq!(bottom.trim_end(), "LOW");
+    assert_eq!(top.trim_end(), "T0P");
+    assert_eq!(bottom.trim_end(), "L0W");
 }
 
 /// A board built for an 80B has the alphanumeric screen and no BCD latches,
@@ -265,4 +269,80 @@ fn a_board_reports_whichever_display_it_has() {
     let (top, bottom) = alpha.text();
     assert_eq!(top.len(), 20);
     assert_eq!(bottom.len(), 20);
+}
+
+/// Found on Genesis, which draws its score as `$4F` with `$CF` where the
+/// thousands separators go. PinMAME masks that bit away and loses them.
+#[test]
+fn the_top_bit_hangs_a_comma_on_whatever_the_rest_draws() {
+    let plain = glyph(0x4F);
+    let with_comma = glyph(0xCF);
+    assert_eq!(plain.0, with_comma.0, "the same character either way");
+    assert_eq!(with_comma.1, plain.1 | seg::COMMA);
+    assert_eq!(plain.1 & seg::COMMA, 0);
+
+    // Which is how a score comes out: eight rings and two commas.
+    let chip = spelling("");
+    let mut chip = chip;
+    for code in [0x4F, 0xCF, 0x4F, 0x4F, 0xCF, 0x4F, 0x4F, 0x4F] {
+        chip.load(code);
+    }
+    assert_eq!(chip.text().trim_end(), "00000000");
+    let commas = chip
+        .segments()
+        .iter()
+        .filter(|s| *s & seg::COMMA != 0)
+        .count();
+    assert_eq!(commas, 2, "at the thousands and the millions");
+}
+
+/// The second processor is a slave: one start command starts them both, and a
+/// game only ever sends it once. Genesis left the bottom row halted until this
+/// was right.
+#[test]
+fn starting_the_first_processor_starts_the_second() {
+    let mut alpha = Alphanumeric::new();
+    let send = |alpha: &mut Alphanumeric, value: u8| {
+        alpha.ports(0x10, value & 0x0F);
+        alpha.ports(0x00, value & 0x0F);
+        alpha.ports(0x00, value >> 4);
+        alpha.ports(0x20, value >> 4);
+        alpha.ports(0x20, 0x00);
+        alpha.ports(0x20, 0x10); // the first processor only
+    };
+    assert!(!alpha.rows[0].running() && !alpha.rows[1].running());
+
+    send(&mut alpha, 0x01);
+    send(&mut alpha, 0x0E);
+    assert!(alpha.rows[0].running(), "the one that was told");
+    assert!(alpha.rows[1].running(), "and the slave beside it");
+}
+
+/// The last System 80B boards wired the slam switch normally closed, and a
+/// machine on the wrong side of it puts `SLAM SWITCH CLOSED` on the glass and
+/// refuses to take a coin. Found on Hot Shots.
+#[test]
+fn the_late_boards_read_the_slam_switch_the_other_way_up() {
+    use vpw_gts80::io::Io;
+
+    let mut early = Io::new();
+    assert_eq!(early.door_input(), 0xFF, "nobody is kicking it");
+    early.set_switch(-1, true);
+    assert_eq!(early.door_input(), 0x00, "and now somebody is");
+
+    let mut late = Io::new();
+    late.inverted = 0x80;
+    assert_eq!(
+        late.door_input(),
+        0x7F,
+        "the same machine, the other way up"
+    );
+    late.set_switch(-1, true);
+    assert_eq!(late.door_input(), 0x80);
+
+    // Which of the two a set is comes off its name, because nothing in the
+    // images says.
+    assert_eq!(vpw_gts80::games::inverted_switches("genesis"), 0x00);
+    assert_eq!(vpw_gts80::games::inverted_switches("hotshots"), 0x80);
+    assert_eq!(vpw_gts80::games::inverted_switches("icefever"), 0x00);
 }

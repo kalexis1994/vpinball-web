@@ -71,6 +71,16 @@ pub struct Io {
     /// the two relays above it.
     reported: u16,
 
+    /// Which of the coin door's switches are wired **normally closed**, as a
+    /// mask of column 0.
+    ///
+    /// Only one bit is ever used and only by the last System 80B boards: the
+    /// slam switch, which they wired the other way up from every machine
+    /// before them (`gts80games.c`, the last argument of `INITGAME`). A game
+    /// on the wrong side of this does not misbehave subtly — it puts
+    /// `SLAM SWITCH CLOSED` on the glass and refuses to do anything at all.
+    pub inverted: u8,
+
     /// The four banks of dip switches, as the operator set them.
     ///
     /// All thirty-two off to start with. MAME's own port has a scattering of
@@ -100,6 +110,7 @@ impl Io {
             live: 0,
             seen: 0,
             reported: 0,
+            inverted: 0,
             dips: [0; 4],
             sound_command: 0,
             sound_pending: false,
@@ -145,6 +156,19 @@ impl Io {
     /// switch, which is wired to RIOT 1's port A and to nothing else.
     pub fn slammed(&self) -> bool {
         self.switches[0] & SLAM != 0
+    }
+
+    /// What the coin door's own switches put on RIOT 1's port A.
+    ///
+    /// All ones for a machine nobody is kicking — except on the boards that
+    /// wired one of them normally closed, where that bit reads the other way
+    /// (`gts80.c:141`).
+    pub fn door_input(&self) -> u8 {
+        if self.slammed() {
+            self.inverted
+        } else {
+            self.inverted ^ 0xFF
+        }
     }
 
     /// Whether a lamp is lit, by the number a table uses.

@@ -132,10 +132,9 @@ impl System80 {
 
     /// Runs the RIOTs' timers for a number of CPU clocks.
     pub fn tick(&mut self, clocks: u32) {
-        // The slam switch reaches RIOT 1's port A, so it is put there before
-        // the chips look at their inputs. All ones is "not slammed", which is
-        // the state of a machine nobody is kicking.
-        self.riot[1].in_a = if self.io.slammed() { 0x00 } else { 0xFF };
+        // The coin door's own switches reach RIOT 1's port A, so they are put
+        // there before the chips look at their inputs.
+        self.riot[1].in_a = self.io.door_input();
         for riot in &mut self.riot {
             riot.tick(clocks);
         }
@@ -287,13 +286,7 @@ impl Bus for System80 {
             0x0100..=0x017F => self.riot[2].ram[usize::from(a - 0x0100)],
             // Two addresses in the hole above RIOT 2's RAM answer with the
             // slam switch. They are not a chip; they are a gate on the board.
-            0x01CB | 0x01E4 => {
-                if self.io.slammed() {
-                    0x00
-                } else {
-                    0xFF
-                }
-            }
+            0x01CB | 0x01E4 => self.io.door_input(),
             0x0200..=0x027F => {
                 self.refresh_switch_input();
                 self.riot[0].read(a)
@@ -479,6 +472,7 @@ impl Board {
                 Self::new_80b(roms.game.image(), system.to_vec())
             }
         };
+        board.mem.io.inverted = roms.inverted;
         if let Some(sound) = roms.sound {
             board.load_sound(sound, rate);
         }

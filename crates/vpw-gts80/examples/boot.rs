@@ -13,6 +13,7 @@
 use std::collections::HashMap;
 
 use vpw_gts80::Board;
+use vpw_gts80::games::{Sound, System};
 
 /// The clock: 3.579545 MHz divided by four (`gts80.c:708`).
 const CLOCK: u32 = 894_886;
@@ -30,16 +31,39 @@ fn main() {
         println!("  {name:<16} {} bytes", roms[*name].len());
     }
 
-    let (game, u2, u3) = pick(&roms);
+    // The set name is what tells the second System 80B sound card from the
+    // third, and the directory is named for the set.
+    let set = std::path::Path::new(&path)
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_lowercase();
+    let images: Vec<(String, Vec<u8>)> = names
+        .iter()
+        .map(|n| ((*n).clone(), roms[*n].clone()))
+        .collect();
+    let detected = vpw_gts80::games::detect(&set, &images).expect("not a System 80 set");
+
     println!(
-        "\ngame {} bytes, system {} + {} bytes",
-        game.len(),
-        u2.len(),
-        u3.len()
+        "\n{}, {}",
+        match detected.system {
+            System::Bcd { .. } => "System 80 or 80A, with BCD displays",
+            System::Alphanumeric(_) => "System 80B, with alphanumeric displays",
+        },
+        match detected.sound {
+            Some(Sound::Piggyback(_)) => "the 1983 piggyback sound card".to_string(),
+            Some(Sound::Card { .. }) => "the 1980 sound card".to_string(),
+            Some(Sound::Speech { .. }) => "the Sound & Speech board".to_string(),
+            Some(Sound::Card80B { generation, .. }) => format!("an 80B sound card, {generation:?}"),
+            None => "no sound card this port knows".to_string(),
+        }
     );
 
-    let mut board = Board::new(game, u2, u3);
+    let mut board = Board::from_roms(&detected, 48_000);
     println!("reset to ${:04X}", board.cpu.pc);
+    if let Some(card) = &board.sound {
+        println!("sound clocked at {} Hz", card.clock());
+    }
 
     // Somewhere for the ROM to find its switches: everything open is a machine
     // sitting on the floor with nobody at it.
@@ -120,6 +144,10 @@ fn main() {
         );
         println!("    top         [{top}]");
         println!("    bottom      [{bottom}]");
+        for (i, row) in alpha.rows.iter().enumerate() {
+            let codes: Vec<String> = row.codes().iter().map(|c| format!("{c:02X}")).collect();
+            println!("    codes {i}     {}", codes.join(" "));
+        }
     }
 
     // Where the time went, which is the quickest way to see a machine stuck in
@@ -141,32 +169,6 @@ fn glyph(segments: u8) -> char {
         None if segments == 0 => ' ',
         None => '?',
     }
-}
-
-/// Picks the three ROMs out of a set by their sizes and names.
-///
-/// A System 80 set is a 2 KB game ROM and two 4 KB system ROMs, and the
-/// system pair is shared by every game of a generation — which is why they are
-/// named for the generation (`u2_80a.bin`) and the game ROM for the game's own
-/// number (`695.cpu`).
-fn pick(roms: &HashMap<String, Vec<u8>>) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
-    let find = |want: &dyn Fn(&str, &[u8]) -> bool| -> Option<Vec<u8>> {
-        let mut names: Vec<&String> = roms.keys().collect();
-        names.sort();
-        names
-            .into_iter()
-            .find(|n| want(&n.to_lowercase(), &roms[*n]))
-            .map(|n| roms[n].clone())
-    };
-
-    let game = find(&|n: &str, b: &[u8]| b.len() == 2048 && !n.contains("snd"))
-        .expect("no 2 KB game ROM in the set");
-    let u2 = find(&|n: &str, b: &[u8]| b.len() == 4096 && n.contains("u2"))
-        .or_else(|| find(&|_, b: &[u8]| b.len() == 4096))
-        .expect("no 4 KB system ROM");
-    let u3 =
-        find(&|n: &str, b: &[u8]| b.len() == 4096 && n.contains("u3")).expect("no U3 system ROM");
-    (game, u2, u3)
 }
 
 /// Reads a ROM set out of a directory.

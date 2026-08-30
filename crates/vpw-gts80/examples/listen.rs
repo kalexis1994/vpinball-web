@@ -2,13 +2,18 @@
 //! the sound card made to a WAV.
 //!
 //! ```text
-//! cargo run -p vpw-gts80 --example listen -- <rom directory> [out.wav]
+//! cargo run -p vpw-gts80 --example listen -- <rom directory> [out.wav] [trough...]
 //! ```
 //!
 //! The ROMs are copyrighted firmware and are not in the repository; point this
-//! at a directory holding an unpacked set. The switch numbers below are Ice
-//! Fever's, because a machine will not start a game without a ball where it
-//! can find one, and where that is depends on the table.
+//! at a directory holding an unpacked set.
+//!
+//! The coin and start buttons are the same on every one of these machines —
+//! `sys80.vbs` names them, and every System 80 table loads that file. What is
+//! *not* the same is where the balls sit: a machine will not start a game
+//! without one where it can find it, and which switch that is depends on the
+//! table. Ice Fever's is 67 and it is the default; Genesis wants 55 and 74.
+//! They come off the table's own script, from its `bsTrough.InitSw` line.
 
 use std::path::PathBuf;
 
@@ -18,17 +23,24 @@ use vpw_gts80::games::Sound;
 /// The rate the player's mixer runs at.
 const RATE: u32 = 48_000;
 
-/// `bsTrough.InitSw 0,67,…` in Ice Fever's own script.
-const OUTHOLE: i32 = 67;
+/// Where Ice Fever keeps its ball, for when nobody says otherwise.
+const DEFAULT_TROUGH: [i32; 1] = [67];
 /// The third coin chute, which gives a credit for one coin on a board whose
-/// memory is still blank.
+/// memory is still blank. `sys80.vbs:26`.
 const COIN: i32 = 37;
+/// `sys80.vbs:27`.
 const START: i32 = 47;
 
 fn main() {
     let mut args = std::env::args().skip(1);
     let dir = PathBuf::from(args.next().expect("a rom directory"));
-    let wav_path = args.next();
+    let wav_path = args.next().filter(|p| p != "-");
+    let trough: Vec<i32> = args.filter_map(|a| a.parse().ok()).collect();
+    let trough: &[i32] = if trough.is_empty() {
+        &DEFAULT_TROUGH
+    } else {
+        &trough
+    };
 
     let mut images = Vec::new();
     for entry in std::fs::read_dir(&dir).expect("the directory will not open") {
@@ -93,7 +105,9 @@ fn main() {
     board.run_seconds(3.0);
     take(&mut board, &mut wav, "attract");
 
-    board.mem.io.set_switch(OUTHOLE, true);
+    for &switch in trough {
+        board.mem.io.set_switch(switch, true);
+    }
     board.run_seconds(0.5);
     for _ in 0..3 {
         board.mem.io.set_switch(COIN, true);
@@ -108,6 +122,17 @@ fn main() {
     board.mem.io.set_switch(START, false);
     board.run_seconds(3.0);
     take(&mut board, &mut wav, "start");
+
+    // The one line that says whether any of this worked: the game-on relay,
+    // which a table reads as solenoid 10 and without which no flipper moves.
+    println!(
+        "       game on: {}",
+        if board.mem.io.solenoid_on(10) {
+            "yes"
+        } else {
+            "no"
+        }
+    );
 
     let (_, made) = board.sound_stats();
     println!(

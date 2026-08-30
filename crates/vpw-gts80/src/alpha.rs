@@ -167,11 +167,24 @@ const FONT: &[(char, u16)] = &[
 /// | `$20`–`$5F` | plain ASCII, space to underscore |
 /// | `$60`–`$7F` | the test patterns, which light segments one at a time |
 ///
+/// and **bit 7 is a comma** on top of any of them. Genesis draws its score as
+/// `$4F` with `$CF` at the thousands, which is where that was found: PinMAME
+/// masks the bit away and loses the separators.
+///
 /// The character comes back beside the segments because it is worth keeping:
 /// a host that wants to *read* the display should not have to work backwards
 /// from the strokes, and two characters can draw the same thing.
 pub fn glyph(code: u8) -> (char, u16) {
+    // The top bit hangs a comma on whatever the other seven draw.
+    let comma = if code & 0x80 != 0 { COMMA } else { 0 };
     let code = code & 0x7F;
+    let (c, bits) = plain(code);
+    (c, bits | comma)
+}
+
+/// The seven-bit part of a code: the character it draws and the strokes it is
+/// drawn with.
+fn plain(code: u8) -> (char, u16) {
     match code {
         0x00 | 0x01 => (' ', 0),
         // Ten digits three times over, once for each piece of punctuation the
@@ -195,6 +208,22 @@ pub fn glyph(code: u8) -> (char, u16) {
             (c, segments(c))
         }
     }
+}
+
+/// What a set of strokes reads as.
+///
+/// The punctuation is ignored: it is not part of the glyph. Where two
+/// characters draw the same thing — `0` and `O`, `5` and `S` — the digit wins,
+/// because these displays spend their lives showing scores. That is the same
+/// rule the rest of this port reads its displays by.
+pub fn reading(strokes: u16) -> char {
+    let glyph = strokes & !(COMMA | DOT);
+    if glyph == 0 {
+        return ' ';
+    }
+    FONT.iter()
+        .find(|&&(_, bits)| bits == glyph)
+        .map_or('?', |&(c, _)| c)
 }
 
 /// The strokes a character is drawn with, or nothing if the font has no such
@@ -285,7 +314,6 @@ impl Rockwell10939 {
             0x07 => self.digit_cycle = 64,
             // Cursor control, which no Gottlieb uses.
             0x08..=0x0A => {}
-            // Start the refresh, which also starts the slave next to it.
             0x0E => self.halted = false,
             // Six bits of value under a two-bit opcode, so the register
             // holds nought to sixty-three slots out of the digit's own count.
@@ -303,6 +331,11 @@ impl Rockwell10939 {
         !self.halted
     }
 
+    /// Starts it, which is what the master beside it does to the slave.
+    pub fn start(&mut self) {
+        self.halted = false;
+    }
+
     /// How brightly it is lighting the row, nought to one.
     ///
     /// The chip gives each character a slot of `digit_cycle` clocks and lights
@@ -315,17 +348,25 @@ impl Rockwell10939 {
         }
     }
 
+    /// The raw codes the game wrote, for whoever is working out why a display
+    /// says something unexpected.
+    pub fn codes(&self) -> &[u8] {
+        &self.codes[..self.width()]
+    }
+
     /// The row as characters.
+    ///
+    /// Read off the **segments** rather than off the codes, because the two do
+    /// not always agree and the segments are what somebody standing at the
+    /// machine sees. Genesis draws its score with `$4F`, which the chip's
+    /// character set calls `O` — its `0` at `$30` is the slashed kind, and no
+    /// programmer wants that in a score. On the glass it is a ring, and a ring
+    /// in a score is a nought.
     pub fn text(&self) -> String {
         self.codes
             .iter()
             .take(self.width())
-            .map(|&code| match glyph(code).0 {
-                // The test patterns are not letters and should not be read as
-                // any.
-                '\u{0}' => '?',
-                c => c,
-            })
+            .map(|&code| reading(glyph(code).1))
             .collect()
     }
 
@@ -390,6 +431,12 @@ impl Alphanumeric {
             }
         }
         self.last_b = b;
+
+        // The second processor is a slave: it is the *first* one being told to
+        // start that starts them both, and a game only ever says it once.
+        if self.rows[0].running() && !self.rows[1].running() {
+            self.rows[1].start();
+        }
     }
 
     /// The two rows as text.
