@@ -309,14 +309,6 @@ fn moving_primitives(vpx: &VPX, out: &mut Vec<AnimatedPart>) {
         let Some(mesh) = crate::geometry::primitive_part(p) else {
             continue;
         };
-        // A baked table's lightmaps are marked dynamic like everything else it
-        // replaced, and they are not parts: see
-        // [`crate::geometry::is_lightmap`]. Ninety-six of them on Circus, each
-        // costing a bind group and a uniform buffer at load and a draw every
-        // frame, to paint the machine black.
-        if mesh.lightmap {
-            continue;
-        }
         // The whole placement is rebuilt from the numbers each frame, so
         // neither half of it belongs in `base` or `local`.
         out.push(AnimatedPart {
@@ -458,7 +450,7 @@ fn bumper_rings(vpx: &VPX, shapes: &[Shape], out: &mut Vec<AnimatedPart>) {
             clamp: false,
             scenery: false,
             kind: MeshKind::Builtin,
-            lightmap: false,
+            additive: None,
         }) else {
             continue;
         };

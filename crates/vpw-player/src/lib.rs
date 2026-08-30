@@ -754,6 +754,34 @@ fn sync(table: &mut Game, renderer: &mut TableRenderer, dt_ms: f32) {
     let Some(dynamic) = renderer.dynamic_mut() else {
         return;
     };
+
+    // The layers of light a baked table carries, each added in proportion to
+    // how bright its lamp is right now. Resolved through the table's lamps and
+    // not the renderer's: the lamps a bake has swallowed are switched
+    // invisible in the file, so they are not lights this renderer carries, and
+    // the script is the only place their state still lives. See
+    // [`vpw_table::geometry::Additive`].
+    //
+    // Collected first because reading the table and writing the layers cannot
+    // borrow at once; a table with no layers collects nothing.
+    let levels: Vec<(usize, f32)> = dynamic
+        .layer_lights()
+        .map(|(i, name)| {
+            let level = match name.and_then(|n| table.items().get(n)) {
+                // `light_level` already folds the switch into the dimmer: it
+                // is zero with the lamp off, whatever the dimmer says.
+                Some(lamp) => lamp.light_level() as f32,
+                // A layer tied to no lamp, or to one the table does not have,
+                // is simply always on — which is what the original does with a
+                // link that goes nowhere.
+                None => 1.0,
+            };
+            (i, level)
+        })
+        .collect();
+    for (i, level) in levels {
+        dynamic.set_layer_level(&queue, i, level);
+    }
     for i in 0..table.parts().len() {
         // Through the table rather than off the part: a primitive is placed by
         // the script, and only the table knows what the script has written.

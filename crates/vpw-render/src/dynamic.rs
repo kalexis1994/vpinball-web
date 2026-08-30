@@ -55,6 +55,25 @@ impl GpuModel {
     }
 }
 
+/// What a piece that is **light** needs remembering between frames.
+///
+/// See [`vpw_table::geometry::Additive`]. The layer is added in proportion to
+/// how bright its lamp is right now against how bright that lamp is at full
+/// power, so its material is rewritten whenever the lamp moves — and only
+/// then.
+struct LightLayer {
+    /// The uniform holding the material, to write the new brightness into.
+    uniform: wgpu::Buffer,
+    /// The lamp's name as the file gives it, until [`DynamicParts::link_lights`]
+    /// turns it into an index.
+    name: Option<String>,
+    color: [f32; 3],
+    /// The layer's own alpha, before the lamp is taken into account.
+    alpha: f32,
+    /// What was last written, so a still frame writes nothing.
+    written: f32,
+}
+
 /// One moving piece: a range of indices, a material and a matrix.
 struct Part {
     first_index: u32,
@@ -74,6 +93,8 @@ struct Part {
     /// and into the GPU process. The lights already skip an unchanged write
     /// (`Lights::set_state`); this is the same thing for the parts.
     written: Mat4,
+    /// Set when this piece is light rather than a thing. See [`Layer`].
+    layer: Option<LightLayer>,
 }
 
 /// Everything that moves, ready to draw.
@@ -148,7 +169,8 @@ impl DynamicParts {
                              material: Option<&Material>,
                              image: Option<&vpw_table::geometry::Image>,
                              transform: Mat4,
-                             visible: bool| {
+                             visible: bool|
+         -> (Part, wgpu::Buffer) {
             let slot = crate::scene::material_slot_cached(
                 device,
                 queue,
@@ -168,28 +190,33 @@ impl DynamicParts {
                 contents: bytemuck::bytes_of(&GpuModel::new(transform)),
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             });
-            Part {
-                first_index,
-                index_count,
-                written: transform,
-                material: slot.bind_group,
-                model: device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("vpw-model-bg"),
-                    layout: &pipeline.model_layout,
-                    entries: &[wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: model_buffer.as_entire_binding(),
-                    }],
-                }),
-                model_buffer,
-                transparent,
-                visible,
-            }
+            let model = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("vpw-model-bg"),
+                layout: &pipeline.model_layout,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: model_buffer.as_entire_binding(),
+                }],
+            });
+            (
+                Part {
+                    first_index,
+                    index_count,
+                    written: transform,
+                    material: slot.bind_group,
+                    model,
+                    model_buffer,
+                    transparent,
+                    visible,
+                    layer: None,
+                },
+                slot.uniform,
+            )
         };
 
         for part in animated {
             let (first_index, index_count) = push_mesh(&part.mesh, &mut vertices, &mut indices);
-            parts.push(make_part(
+            let (mut part_made, uniform) = make_part(
                 device,
                 first_index,
                 index_count,
@@ -197,7 +224,26 @@ impl DynamicParts {
                 scene.image(&part.mesh.image),
                 part.mesh.transform,
                 true,
-            ));
+            );
+            // A piece that is light rather than a thing: its material is not a
+            // surface at all, and its brightness follows a lamp. The slot's
+            // uniform is overwritten rather than the group rebuilt, because it
+            // will be overwritten again on the next frame the lamp moves.
+            if let Some(a) = &part.mesh.additive {
+                queue.write_buffer(
+                    &uniform,
+                    0,
+                    bytemuck::bytes_of(&crate::scene::additive_material(a.color, a.alpha)),
+                );
+                part_made.layer = Some(LightLayer {
+                    uniform: uniform.clone(),
+                    name: a.light.clone(),
+                    color: a.color,
+                    alpha: a.alpha,
+                    written: f32::NAN,
+                });
+            }
+            parts.push(part_made);
         }
 
         let first_ball = parts.len();
@@ -223,15 +269,18 @@ impl DynamicParts {
                 .unwrap_or_else(vpw_table::ball::scratches),
         );
         for _ in 0..MAX_BALLS {
-            parts.push(make_part(
-                device,
-                ball_first,
-                ball_count,
-                Some(ball_material),
-                Some(&decal),
-                Mat4::IDENTITY,
-                false,
-            ));
+            parts.push(
+                make_part(
+                    device,
+                    ball_first,
+                    ball_count,
+                    Some(ball_material),
+                    Some(&decal),
+                    Mat4::IDENTITY,
+                    false,
+                )
+                .0,
+            );
         }
 
         // And a shadow slot behind every ball slot: a soft dark disc
@@ -243,15 +292,18 @@ impl DynamicParts {
         let shadow_material = vpw_table::ball::shadow_material();
         let shadow_image = vpw_table::ball::shadow_image();
         for _ in 0..MAX_BALLS {
-            parts.push(make_part(
-                device,
-                shadow_first,
-                shadow_count,
-                Some(&shadow_material),
-                Some(&shadow_image),
-                Mat4::IDENTITY,
-                false,
-            ));
+            parts.push(
+                make_part(
+                    device,
+                    shadow_first,
+                    shadow_count,
+                    Some(&shadow_material),
+                    Some(&shadow_image),
+                    Mat4::IDENTITY,
+                    false,
+                )
+                .0,
+            );
         }
 
         Self {
@@ -339,7 +391,73 @@ impl DynamicParts {
             .any(|p| p.visible && p.transparent == transparent && p.index_count > 0)
     }
 
-    /// Emits the draws for one of the two passes. Group 0 has to be bound
+    /// The lamp each additive layer belongs to, by the part's index.
+    ///
+    /// Resolved by the caller against the *table's* lamps and not the
+    /// renderer's, for the reason a bake exists at all: the lamps whose light
+    /// has been baked into these layers are switched **invisible** in the file
+    /// — their bulbs and halos are already painted into the bake — and an
+    /// invisible light is not one this renderer carries. Its state is still
+    /// live in the script, which is the only place left to ask. The flashers
+    /// resolve their own light-map link the same way.
+    pub fn layer_lights(&self) -> impl Iterator<Item = (usize, Option<&str>)> {
+        self.parts
+            .iter()
+            .enumerate()
+            .filter_map(|(i, p)| p.layer.as_ref().map(|l| (i, l.name.as_deref())))
+    }
+
+    /// How much of layer `index` to add: 0 for a lamp that is off, 1 for one at
+    /// full power, and the fraction in between while it fades.
+    ///
+    /// The original's `m_currentIntensity / (m_intensity * m_intensity_scale)`
+    /// (`primitive.cpp:1080`). Writes nothing when the lamp has not moved,
+    /// which on a table with hundreds of lamps and a handful changing is
+    /// nearly every layer, every frame.
+    pub fn set_layer_level(&mut self, queue: &wgpu::Queue, index: usize, level: f32) {
+        let Some(part) = self.parts.get_mut(index) else {
+            return;
+        };
+        let Some(layer) = &mut part.layer else { return };
+        let alpha = layer.alpha * level.clamp(0.0, 1.0);
+        if (alpha - layer.written).abs() < 1.0 / 512.0 {
+            return;
+        }
+        layer.written = alpha;
+        queue.write_buffer(
+            &layer.uniform,
+            0,
+            bytemuck::bytes_of(&crate::scene::additive_material(layer.color, alpha)),
+        );
+        // A layer with nothing left to add is not drawn at all
+        // (`primitive.cpp:1088`).
+        part.visible = alpha > 0.0;
+    }
+
+    /// Whether anything is light rather than a thing.
+    pub fn any_additive(&self) -> bool {
+        self.parts.iter().any(|p| p.visible && p.layer.is_some())
+    }
+
+    /// Emits the draws for the additive pass: the pieces that are light. Group
+    /// 0 and the additive pipeline have to be bound already.
+    pub fn draw_additive(&self, pass: &mut wgpu::RenderPass<'_>) {
+        if !self.any_additive() {
+            return;
+        }
+        pass.set_vertex_buffer(0, self.vertices.slice(..));
+        pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
+        for p in &self.parts {
+            if !p.visible || p.layer.is_none() || p.index_count == 0 {
+                continue;
+            }
+            pass.set_bind_group(1, &p.material, &[]);
+            pass.set_bind_group(2, &p.model, &[]);
+            pass.draw_indexed(p.first_index..p.first_index + p.index_count, 0, 0..1);
+        }
+    }
+
+    /// Emits the draws for one of the two lit passes. Group 0 has to be bound
     /// already; the pipeline too.
     pub fn draw(&self, pass: &mut wgpu::RenderPass<'_>, transparent: bool) {
         if !self.any(transparent) {
@@ -348,7 +466,9 @@ impl DynamicParts {
         pass.set_vertex_buffer(0, self.vertices.slice(..));
         pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
         for p in &self.parts {
-            if !p.visible || p.transparent != transparent || p.index_count == 0 {
+            // A layer of light is drawn by `draw_additive` and nowhere else.
+            if !p.visible || p.layer.is_some() || p.transparent != transparent || p.index_count == 0
+            {
                 continue;
             }
             pass.set_bind_group(1, &p.material, &[]);

@@ -163,7 +163,7 @@ fn test_playfield(b: Bounds) -> Mesh {
         clamp: false,
         scenery: false,
         kind: MeshKind::Playfield,
-        lightmap: false,
+        additive: None,
     }
 }
 

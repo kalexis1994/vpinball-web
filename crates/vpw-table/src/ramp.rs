@@ -331,7 +331,7 @@ fn strip(
         clamp: !world_uv,
         scenery: false,
         kind: MeshKind::Ramp,
-        lightmap: false,
+        additive: None,
     }
 }
 
@@ -386,7 +386,7 @@ fn wires(ramp: &Ramp, c: &Outline) -> Vec<Mesh> {
                 clamp: false,
                 scenery: false,
                 kind: MeshKind::Ramp,
-                lightmap: false,
+                additive: None,
             })
         })
         .collect()

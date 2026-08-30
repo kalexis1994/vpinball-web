@@ -75,7 +75,7 @@ fn floor_scene() -> Scene {
         clamp: false,
         scenery: false,
         kind: MeshKind::Playfield,
-        lightmap: false,
+        additive: None,
     };
 
     Scene {
@@ -346,5 +346,136 @@ fn a_table_piece_is_drawn_from_its_own_matrix() {
     assert!(
         rest_centre.0 < moved_centre.0 - 20.0,
         "the piece's matrix does not move it: {rest_centre:?} vs {moved_centre:?}"
+    );
+}
+
+/// A layer of light: a copy of some geometry that is **added** to what is
+/// already drawn, in proportion to how bright its lamp is.
+///
+/// See `vpw_table::geometry::Additive`. Drawn as ordinary geometry instead,
+/// this square would be an opaque black patch on the floor rather than a
+/// brightening of it — which is exactly the bug it exists to prevent.
+fn light_layer(name: &str, lamp: Option<&str>) -> AnimatedPart {
+    let half = 200.0;
+    let v = |x: f32, y: f32| Vertex {
+        pos: [x, y, 1.0],
+        normal: [0.0, 0.0, 1.0],
+        uv: [0.5, 0.5],
+    };
+    AnimatedPart {
+        mesh: Mesh {
+            name: name.into(),
+            vertices: vec![
+                v(-half, -half),
+                v(half, -half),
+                v(half, half),
+                v(-half, half),
+            ],
+            indices: vec![0, 1, 2, 0, 2, 3],
+            transform: Mat4::IDENTITY,
+            image: String::new(),
+            material: String::new(),
+            visible: true,
+            clamp: false,
+            scenery: false,
+            kind: MeshKind::Primitive,
+            additive: Some(vpw_table::geometry::Additive {
+                color: [1.0, 1.0, 1.0],
+                alpha: 1.0,
+                light: lamp.map(str::to_string),
+            }),
+        },
+        base: Mat4::IDENTITY,
+        local: Mat4::IDENTITY,
+        anim: Animation::Fixed,
+    }
+}
+
+#[test]
+fn a_layer_of_light_adds_to_the_table_rather_than_covering_it() {
+    let Some(mut held) = gpu() else { return };
+    let gpu = &mut *held;
+    let scene = floor_scene();
+    let uploaded = gpu.upload(&scene);
+    let camera = top_down();
+
+    let parts = [light_layer("LM_test", Some("gi_001"))];
+    gpu.upload_dynamic(&scene, &parts);
+
+    // Its lamp is off, so there is nothing to add and nothing is drawn.
+    gpu.dynamic
+        .as_mut()
+        .unwrap()
+        .set_layer_level(&gpu.queue, 0, 0.0);
+    let dark = gpu.render(&uploaded, &camera);
+
+    // And on.
+    gpu.dynamic
+        .as_mut()
+        .unwrap()
+        .set_layer_level(&gpu.queue, 0, 1.0);
+    let lit = gpu.render(&uploaded, &camera);
+
+    let px = changed(&dark, &lit);
+    assert!(
+        px.len() > 200,
+        "the layer barely changed the image: {} pixels",
+        px.len()
+    );
+
+    // Added, not laid over: every pixel it touched got *brighter*. An opaque
+    // black copy of the floor would fail here, and that is the whole point.
+    let brighter = dark
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(lit.as_chunks::<4>().0)
+        .filter(|(a, b)| (0..3).any(|c| b[c] > a[c]))
+        .count();
+    let darker = dark
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(lit.as_chunks::<4>().0)
+        .filter(|(a, b)| (0..3).any(|c| b[c] + 8 < a[c]))
+        .count();
+    assert!(brighter > 200, "only {brighter} pixels got brighter");
+    assert_eq!(
+        darker, 0,
+        "{darker} pixels got darker under a layer of light"
+    );
+}
+
+/// Half as bright a lamp puts half as much light on the table.
+#[test]
+fn a_layer_follows_its_lamp() {
+    let Some(mut held) = gpu() else { return };
+    let gpu = &mut *held;
+    let scene = floor_scene();
+    let uploaded = gpu.upload(&scene);
+    let camera = top_down();
+
+    let parts = [light_layer("LM_test", Some("gi_001"))];
+    gpu.upload_dynamic(&scene, &parts);
+
+    let level = |gpu: &mut vpw_render::offscreen::Offscreen, v: f32| {
+        gpu.dynamic
+            .as_mut()
+            .unwrap()
+            .set_layer_level(&gpu.queue, 0, v);
+        let img = gpu.render(&uploaded, &camera);
+        // The middle of the square, well inside it.
+        let i = ((H / 2 * W) + W / 2) as usize * 4;
+        f32::from(img[i]) + f32::from(img[i + 1]) + f32::from(img[i + 2])
+    };
+
+    let off = level(gpu, 0.0);
+    let half = level(gpu, 0.5);
+    let full = level(gpu, 1.0);
+
+    assert!(half > off, "half a lamp added nothing: {off} -> {half}");
+    assert!(
+        full > half,
+        "a full lamp was no brighter than half: {half} -> {full}"
     );
 }

@@ -24,6 +24,11 @@ pub struct TablePipeline {
     /// — is shared.
     pub dynamic_opaque: wgpu::RenderPipeline,
     pub dynamic_blended: wgpu::RenderPipeline,
+    /// For the pieces that are **light** rather than things: added to what is
+    /// already drawn, writing no depth and culling nothing, exactly as the
+    /// original does for a primitive with Additive Blend
+    /// (`primitive.cpp:1166`). See [`vpw_table::geometry::Additive`].
+    pub dynamic_additive: wgpu::RenderPipeline,
     pub frame_layout: wgpu::BindGroupLayout,
     /// The camera on its own, without the environment or the transmitted-light
     /// buffer. The light halos want only this, and binding them the full frame
@@ -409,6 +414,26 @@ impl TablePipeline {
                 &dynamic_shader,
                 &dynamic_layout,
                 Some(wgpu::BlendState::ALPHA_BLENDING),
+                false,
+                None,
+            ),
+            dynamic_additive: make_with(
+                "vpw-dynamic-additive",
+                &dynamic_shader,
+                &dynamic_layout,
+                // Source added to destination, both at full weight. The colour
+                // has already been multiplied by its alpha on the Rust side —
+                // the original does the same
+                // (`color.x * color.w, …`, `primitive.cpp:1170`) — so there is
+                // nothing left for the blend to weigh.
+                Some(wgpu::BlendState {
+                    color: wgpu::BlendComponent {
+                        src_factor: wgpu::BlendFactor::One,
+                        dst_factor: wgpu::BlendFactor::One,
+                        operation: wgpu::BlendOperation::Add,
+                    },
+                    alpha: wgpu::BlendComponent::REPLACE,
+                }),
                 false,
                 None,
             ),

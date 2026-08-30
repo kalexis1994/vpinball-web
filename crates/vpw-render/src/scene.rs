@@ -295,14 +295,13 @@ impl GpuScene {
         layout: &wgpu::BindGroupLayout,
         scene: &Scene,
     ) -> Self {
-        // A baked table's lightmaps are the one thing here that is not a piece
-        // of the table: they hold light, to be *added* on top of the bake, and
-        // there is no additive pass to add them in. Drawn as ordinary geometry
-        // they bury the machine. See [`vpw_table::geometry::is_lightmap`].
+        // An additive layer is drawn by the dynamic path, which is the only
+        // one with somewhere to put a per-frame intensity. See
+        // [`crate::dynamic::DynamicParts`].
         let visible: Vec<&Mesh> = scene
             .meshes
             .iter()
-            .filter(|m| m.visible && !m.lightmap)
+            .filter(|m| m.visible && m.additive.is_none())
             .collect();
         let mut redrawn: HashMap<String, wgpu::Texture> = HashMap::new();
         // One copy of each picture across every batch. See [`TextureCache`].
@@ -520,6 +519,11 @@ pub struct MaterialSlot {
     /// at again, and holding on to it would be holding a table's worth of
     /// textures for nothing.
     pub redrawn: Option<wgpu::Texture>,
+    /// The uniform the bind group points at. Kept so a caller whose material
+    /// changes while the table runs can rewrite it in place rather than
+    /// rebuild the group — which is every additive layer, sixty times a
+    /// second. See [`crate::dynamic::DynamicParts::relight`].
+    pub uniform: wgpu::Buffer,
 }
 
 /// The sampler most of the table shares.
@@ -670,10 +674,11 @@ pub fn material_slot_cached(
     let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("vpw-material"),
         contents: bytemuck::bytes_of(&data),
-        usage: wgpu::BufferUsages::UNIFORM,
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
     });
 
     MaterialSlot {
+        uniform: uniform.clone(),
         view: view.clone(),
         bind_group: device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("vpw-material-bg"),
@@ -719,6 +724,20 @@ pub fn white_texture(device: &wgpu::Device, queue: &wgpu::Queue) -> wgpu::Textur
         &[255, 255, 255, 255],
     );
     tex.create_view(&wgpu::TextureViewDescriptor::default())
+}
+
+/// The material of a layer that is added rather than lit.
+///
+/// Nothing about a surface applies: it is not rough, it does not reflect, it
+/// has no clearcoat. All the shader needs is the colour to multiply the texture
+/// by — already carrying the intensity, as the original does
+/// (`primitive.cpp:1170`) — and the flag that sends it down the unshaded
+/// branch.
+pub fn additive_material(color: [f32; 3], alpha: f32) -> GpuMaterial {
+    let mut data = GpuMaterial::from_inputs(&Default::default(), true, -1.0);
+    data.base_color = [color[0] * alpha, color[1] * alpha, color[2] * alpha, alpha];
+    data.extra[3] = 4.0;
+    data
 }
 
 pub(crate) fn upload_texture(

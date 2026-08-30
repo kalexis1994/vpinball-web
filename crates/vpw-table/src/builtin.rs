@@ -166,7 +166,7 @@ fn place(
         clamp: false,
         scenery: false,
         kind,
-        lightmap: false,
+        additive: None,
     })
 }
 

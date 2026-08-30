@@ -70,30 +70,49 @@ pub struct Mesh {
     /// the real one.
     pub clamp: bool,
     pub kind: MeshKind,
-    /// Whether this is a **lightmap** from a baked table rather than a piece of
-    /// the table. See [`is_lightmap`].
-    pub lightmap: bool,
+    /// Set when the part is drawn by **adding** it to what is already there
+    /// rather than by lighting it. See [`Additive`].
+    pub additive: Option<Additive>,
+}
+
+/// A part that is light rather than a thing: it is *added* to the picture,
+/// unlit, and writes no depth (`primitive.cpp:1166`).
+///
+/// A `.vpx` marks it with the primitive's **Additive Blend** flag, which is a
+/// switch any table may throw and not a convention of any one tool. What throws
+/// it in bulk is a bake: the Virtual Lighting Mod takes a table into Blender,
+/// bakes it, and hands back the machine as a few `BM_*` meshes plus one `LM_*`
+/// copy of the geometry **per lamp**, holding that lamp's light and nothing
+/// else. Circus is ninety-six of them.
+///
+/// Drawing one as ordinary geometry is not a small error: a lightmap is black
+/// everywhere its lamp does not reach, so it buries what it was meant to
+/// brighten.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Additive {
+    /// The colour the texture is multiplied by, from the primitive's `Color`.
+    ///
+    /// A layer whose colour is black adds nothing and the original skips it
+    /// outright (`primitive.cpp:1088`).
+    pub color: [f32; 3],
+    /// How much of it to add, 0..1, from the primitive's `Alpha`.
+    pub alpha: f32,
+    /// The lamp this layer belongs to, if it belongs to one.
+    ///
+    /// This is what makes a bake *animate*: the layer is added in proportion
+    /// to how bright that lamp is right now against how bright it is at full
+    /// power (`primitive.cpp:1078-1085`). Without it a bake is a photograph
+    /// with every lamp lit at once.
+    pub light: Option<String>,
 }
 
 /// Whether a primitive is one of a baked table's lightmaps.
 ///
-/// The Virtual Lighting Mod is a tool that bakes a table in Blender and puts
-/// the result back into the `.vpx`: the whole machine becomes a handful of
-/// `BM_*` meshes textured from a `VLM.Nestmap*` atlas, and every lamp gets its
-/// own `LM_*` copy of the geometry it touches, holding that lamp's *light* and
-/// nothing else. The original draws an `LM_` mesh **added** on top of the bake,
-/// scaled by how bright the script says the lamp is; the table's script drives
-/// that through `BlendDisableLighting` sixty times a second.
-///
-/// A port with no additive pass cannot draw them, and drawing them anyway is
-/// far worse than leaving them out: a lightmap is black everywhere its lamp
-/// does not reach, so ninety-six opaque copies of the table go on top of the
-/// table and bury it. Circus is 354,000 triangles of that over 158,000
-/// triangles of machine.
-///
-/// Both halves are checked. The name is VLM's convention and nothing else, but
-/// a table is free to call a part whatever it likes; the atlas is the thing
-/// only a bake has.
+/// Kept for what reads a table's shape rather than draws it: a lightmap is not
+/// a piece of the machine, so it has no place in the collision, the bounds or
+/// a bake of our own. What *draws* asks [`Mesh::additive`] instead, because the
+/// flag that decides how a part is drawn is the file's own Additive Blend and
+/// not anybody's naming.
 pub fn is_lightmap(name: &str, image: &str) -> bool {
     name.starts_with("LM_") && image.starts_with("VLM.")
 }
@@ -639,7 +658,14 @@ impl Scene {
         let mut lo = Vec3::splat(f32::MAX);
         let mut hi = Vec3::splat(f32::MIN);
         let mut any = false;
-        for mesh in self.meshes.iter().filter(|m| m.visible && !m.lightmap) {
+        // An additive layer is light and not shape: it is a copy of geometry
+        // that is already here, and counting it would be counting the table
+        // twice.
+        for mesh in self
+            .meshes
+            .iter()
+            .filter(|m| m.visible && m.additive.is_none())
+        {
             if let Some(b) = mesh.bounds() {
                 lo = lo.min(b.min);
                 hi = hi.max(b.max);
@@ -1093,7 +1119,7 @@ fn playfield_quad(b: Bounds, image: &str, material: &str) -> Mesh {
         clamp: false,
         scenery: false,
         kind: MeshKind::Playfield,
-        lightmap: false,
+        additive: None,
     }
 }
 
@@ -1105,6 +1131,27 @@ fn playfield_quad(b: Bounds, image: &str, material: &str) -> Mesh {
 /// resting pose.
 pub fn primitive_part(p: &Primitive) -> Option<Mesh> {
     primitive_mesh(p)
+}
+
+/// What the primitive says about being added rather than lit.
+fn additive(p: &Primitive) -> Option<Additive> {
+    if !p.add_blend.unwrap_or(false) {
+        return None;
+    }
+    let c = p.color.as_ref();
+    let color = c.map_or([1.0; 3], |c| {
+        [
+            f32::from(c.r) / 255.0,
+            f32::from(c.g) / 255.0,
+            f32::from(c.b) / 255.0,
+        ]
+    });
+    Some(Additive {
+        color,
+        // A `.vpx` keeps it as a percentage.
+        alpha: p.alpha.unwrap_or(100.0) / 100.0,
+        light: p.light_map.clone().filter(|n| !n.is_empty()),
+    })
 }
 
 fn primitive_mesh(p: &Primitive) -> Option<Mesh> {
@@ -1138,7 +1185,7 @@ fn primitive_mesh(p: &Primitive) -> Option<Mesh> {
         clamp: false,
         scenery: false,
         kind: MeshKind::Primitive,
-        lightmap: is_lightmap(&p.name, &p.image),
+        additive: additive(p),
     })
 }
 

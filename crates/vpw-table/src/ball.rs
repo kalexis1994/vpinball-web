@@ -41,7 +41,7 @@ pub fn mesh() -> Mesh {
         clamp: false,
         scenery: false,
         kind: MeshKind::Builtin,
-        lightmap: false,
+        additive: None,
     }
 }
 
@@ -94,7 +94,7 @@ pub fn shadow_mesh() -> Mesh {
         clamp: false,
         scenery: false,
         kind: MeshKind::Builtin,
-        lightmap: false,
+        additive: None,
     }
 }
 

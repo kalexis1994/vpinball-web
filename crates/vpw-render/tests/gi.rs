@@ -57,7 +57,7 @@ fn scene_with(state: f32, name: &str, wall: bool) -> Scene {
         clamp: false,
         scenery: false,
         kind: MeshKind::Playfield,
-        lightmap: false,
+        additive: None,
     };
     let c = TABLE / 2.0;
     // The shape is tiny on purpose: what this measures is the *illumination*
@@ -121,7 +121,7 @@ fn scene_with(state: f32, name: &str, wall: bool) -> Scene {
             clamp: false,
             scenery: false,
             kind: MeshKind::Wall,
-            lightmap: false,
+            additive: None,
         });
     }
 
@@ -277,7 +277,7 @@ fn one_bounce_carries_light_into_the_shadow() {
             clamp: false,
             scenery: false,
             kind: MeshKind::Wall,
-            lightmap: false,
+            additive: None,
         }
     };
     // The fence: below the lamp at z = 30, so it shadows the floor but not
@@ -331,7 +331,7 @@ fn the_indirect_map_is_smooth_where_the_light_is() {
         clamp: false,
         scenery: false,
         kind: MeshKind::Wall,
-        lightmap: false,
+        additive: None,
     });
     let groups = gi_groups(&scene);
     let bake = bake_gi_set(&scene, &groups, 16);
@@ -450,7 +450,7 @@ fn a_metal_wall_mirrors_the_baked_field() {
         clamp: false,
         scenery: false,
         kind: MeshKind::Wall,
-        lightmap: false,
+        additive: None,
     });
 
     let mut camera = Camera::framing(

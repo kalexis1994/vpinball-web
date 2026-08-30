@@ -63,7 +63,7 @@ fn floor_scene() -> Scene {
         clamp: false,
         scenery: false,
         kind: MeshKind::Playfield,
-        lightmap: false,
+        additive: None,
     };
     Scene {
         view: vpw_table::geometry::AuthoredView::default(),

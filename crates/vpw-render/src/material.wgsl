@@ -349,6 +349,16 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
         return vec4<f32>(texel.rgb * 2.0, texel.a);
     }
 
+    // An additive layer: a copy of some geometry that carries a lamp's light
+    // and nothing else, to be added to what is already drawn. Unlit, because
+    // the lighting is what is painted into it; and multiplied by the colour,
+    // whose alpha is how bright that lamp is *right now* against how bright it
+    // is at full power. The original's `SHADER_TECHNIQUE_unshaded_with_texture`
+    // with `staticColor_Alpha` (`primitive.cpp:1166-1173`).
+    if (material.extra.w > 3.5 && material.extra.w < 4.5) {
+        return vec4<f32>(texel.rgb * material.base_color.rgb, material.base_color.a);
+    }
+
     // The head's artwork: also its own light — a sheet with tubes behind it —
     // but a printed one rather than a panel of plasma, so it is barely lifted
     // instead of doubled. The lighting that belongs on it is already painted

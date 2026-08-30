@@ -128,6 +128,15 @@ pub fn draw_reflection(
         pass.set_pipeline(&pipeline.dynamic_blended);
         d.draw(&mut pass, true);
     }
+
+    // The layers of light a baked table carries: added on top of the machine
+    // once the machine is drawn, before the halos and the flashers, which is
+    // where the original puts them too. See
+    // [`vpw_table::geometry::Additive`].
+    if let Some(d) = dynamic.filter(|d| d.any_additive()) {
+        pass.set_pipeline(&pipeline.dynamic_additive);
+        d.draw_additive(&mut pass);
+    }
 }
 
 /// Draws the whole scene: the opaque ones first, then the transparent ones.
@@ -251,6 +260,15 @@ pub fn draw_full(
     if let Some(d) = dynamic.filter(|d| d.any(true)) {
         pass.set_pipeline(&pipeline.dynamic_blended);
         d.draw(&mut pass, true);
+    }
+
+    // The layers of light a baked table carries: added on top of the machine
+    // once the machine is drawn, before the halos and the flashers, which is
+    // where the original puts them too. See
+    // [`vpw_table::geometry::Additive`].
+    if let Some(d) = dynamic.filter(|d| d.any_additive()) {
+        pass.set_pipeline(&pipeline.dynamic_additive);
+        d.draw_additive(&mut pass);
     }
 
     // The lights go last: they add on top of what is already drawn.

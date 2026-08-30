@@ -179,4 +179,23 @@ fn main() {
         peak = peak.max(out.iter().fold(0.0f32, |a, b| a.max(b.abs())));
     }
     println!("-- mixer peak over a second: {peak:.4} --");
+
+    // The same questions again, now that the table has been running: a lamp
+    // that fades up takes a second or two to get there.
+    for (i, expr) in std::env::args().skip(2).enumerate() {
+        if expr.contains(' ') && !expr.contains('=') {
+            continue;
+        }
+        let name = format!("__after{i}");
+        if game
+            .script()
+            .load(&format!("Dim {name} : {name} = {expr}"))
+            .is_ok()
+        {
+            println!(
+                "after a second: {expr} = {:?}",
+                game.script().get_global(&name)
+            );
+        }
+    }
 }

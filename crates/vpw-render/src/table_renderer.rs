@@ -487,7 +487,7 @@ impl TableRenderer {
             .upload(&self.gpu.device, &self.gpu.queue, &self.pipeline, scene);
         self.flashers
             .upload(&self.gpu.device, &self.gpu.queue, scene);
-        self.dynamic = Some(DynamicParts::upload(
+        let dynamic = DynamicParts::upload(
             &self.gpu.device,
             &self.gpu.queue,
             &self.pipeline,
@@ -495,7 +495,8 @@ impl TableRenderer {
             animated,
             &vpw_table::ball::mesh(),
             &vpw_table::ball::material(),
-        ));
+        );
+        self.dynamic = Some(dynamic);
         self.scene = Some(gpu_scene);
         self.invalidate_flat();
     }
