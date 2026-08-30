@@ -2047,6 +2047,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "vpw-m6502"
+version = "0.1.0"
+dependencies = [
+ "vpw-bus",
+]
+
+[[package]]
 name = "vpw-m6800"
 version = "0.1.0"
 dependencies = [
