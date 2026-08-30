@@ -1179,6 +1179,15 @@ impl Interpreter {
             let slots: Vec<Slot> = args.iter().map(|a| slot(a.clone())).collect();
             return self.invoke(p, &slots, Some(inst.clone()));
         }
+        // No name at all: the instance is being used where a value is wanted,
+        // or called outright — `Set d = (new DropTarget)(a, b, c)`. What runs
+        // is whichever member the class marked `Public Default`.
+        if name.is_empty()
+            && let Some(p) = inst.def.members.iter().find(|p| p.is_default)
+        {
+            let slots: Vec<Slot> = args.iter().map(|a| slot(a.clone())).collect();
+            return self.invoke(p, &slots, Some(inst.clone()));
+        }
         if let Some(cell) = inst.field(name) {
             let v = read(&cell);
             if args.is_empty() {
@@ -1336,11 +1345,23 @@ impl Interpreter {
     }
 
     /// The same, but honouring `Option Explicit`.
+    ///
+    /// With one exception, and it is not a loophole. The host's own globals are
+    /// declared by the host, not by the script, so a table assigning to one has
+    /// declared nothing and broken no rule:
+    ///
+    /// ```vbscript
+    /// Sub SetRoomBrightness(lvl, lvlVR)
+    ///     DisableStaticPreRendering = true
+    /// ```
+    ///
+    /// Refusing that is refusing a name the script never had to declare in the
+    /// first place, and the table stops on its first line of set-up.
     fn lookup_or_declare_checked(&self, name: &str) -> Result<Slot> {
         if let Some(s) = self.lookup(name) {
             return Ok(s);
         }
-        if *self.option_explicit.borrow() {
+        if *self.option_explicit.borrow() && self.host_global(name).is_none() {
             return Err(Error::undefined_variable(name));
         }
         Ok(self.declare(name, Value::Empty))

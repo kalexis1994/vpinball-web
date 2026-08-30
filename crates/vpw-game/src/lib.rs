@@ -1494,6 +1494,13 @@ fn vp_global(name: &str) -> Option<Value> {
         "version" => Value::Long(10_800),
 
         // Where it is being played. On a screen, never in a cabinet.
+        // Renderer settings a table writes and this port has no equivalent
+        // for. They are here so that *writing* one is allowed at all: under
+        // `Option Explicit` a name the host has never heard of cannot be
+        // assigned, and Circus opens its room-brightness routine by setting
+        // this one. Nothing reads them back — there is no static pre-render
+        // here to disable.
+        "disablestaticprerendering" => Value::Bool(false),
         "showdt" | "showdesktop" => Value::Bool(true),
         "showfss" => Value::Bool(false),
         "renderingmode" => Value::Long(0),
