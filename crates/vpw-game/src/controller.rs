@@ -502,7 +502,7 @@ impl Machine {
                 // for the game and two of 4 KB named U2 and U3. Ice Fever came
                 // through the Whitestar path before this and was booted as one,
                 // which cost it its display and its sound and told nobody why.
-                if let Some(roms) = vpw_gts80::games::detect(&images) {
+                if let Some(roms) = vpw_gts80::games::detect(set, &images) {
                     log::trace!("'{set}': read as a System 80 from its own shape");
                     self.load_gts80(&roms, cmos);
                 } else {

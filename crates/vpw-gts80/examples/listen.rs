@@ -41,7 +41,14 @@ fn main() {
         images.push((name, std::fs::read(&path).expect("a file will not open")));
     }
 
-    let roms = vpw_gts80::games::detect(&images).expect("not a System 80 set");
+    // The set name is only used to tell two of the System 80B sound cards
+    // apart, so the directory's own name will do.
+    let set = dir
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_lowercase();
+    let roms = vpw_gts80::games::detect(&set, &images).expect("not a System 80 set");
     println!(
         "sound  {}",
         match roms.sound {
@@ -55,6 +62,11 @@ fn main() {
                 "sound & speech board, {} + {} bytes and a Votrax",
                 first.len(),
                 second.len()
+            ),
+            Some(Sound::Card80B { generation, y, d }) => format!(
+                "System 80B card, {generation:?}: {} bytes of music and {} of converter",
+                y.0.len() + y.1.map_or(0, <[u8]>::len),
+                d.len()
             ),
             None => "no card this port knows; the machine will be quiet".to_string(),
         }

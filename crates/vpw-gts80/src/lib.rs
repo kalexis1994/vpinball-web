@@ -31,9 +31,9 @@
 //! 80B by the one thing that changed underneath: one 8 KB system ROM where the
 //! 80A has two of 4 KB.
 //!
-//! Not here: the **80B sound boards**, which are a different card again in
-//! three generations — two more processors with an AY-8913 or a YM2151 — so an
-//! 80B set plays silently unless it carries one of the older cards.
+//! The **80B sound cards**, which are a different card again in three
+//! generations: two more processors apiece, with a pair of AY-3-8913s and a
+//! speech chip, or the same pair alone, or a YM2151. See [`sound80b`].
 //!
 //! # The memory map (`gts80.c:505-517`)
 //!
@@ -71,9 +71,11 @@ pub mod display;
 pub mod games;
 pub mod io;
 pub mod sound;
+pub mod sound80b;
 pub mod speech;
 pub mod votrax;
 
 pub use board::{Board, Generation, System80};
 pub use sound::SoundBoard;
+pub use sound80b::SoundCard80B;
 pub use speech::SpeechBoard;

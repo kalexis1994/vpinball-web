@@ -34,6 +34,7 @@ mod cvsd;
 mod dac;
 mod dcblock;
 pub mod mixer;
+pub mod sp0250;
 mod ym2151;
 
 pub use ay8910::Ay8910;
@@ -42,6 +43,7 @@ pub use cvsd::Cvsd;
 pub use dac::{Dac, SILENCE};
 pub use dcblock::DcBlocker;
 pub use mixer::{Mixer, Play};
+pub use sp0250::Sp0250;
 pub use ym2151::{LfoWave, Ym2151};
 
 /// Decides when to take a sample while the CPU clock runs.

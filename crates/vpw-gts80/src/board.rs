@@ -8,6 +8,7 @@ use crate::alpha::Alphanumeric;
 use crate::display::Displays;
 use crate::io::Io;
 use crate::sound::SoundBoard;
+use crate::sound80b::SoundCard80B;
 use crate::speech::SpeechBoard;
 
 /// How many bytes of battery-backed RAM the board has.
@@ -344,6 +345,25 @@ impl Bus for System80 {
     }
 }
 
+/// Lays a processor's ROM images out in its sixty-four kilobytes.
+///
+/// They stack downwards from the top, in the order given: an 8 KB image alone
+/// lands at `$E000`, a 32 KB one at `$8000`, and a second 8 KB one goes below
+/// the first at `$C000`. The vectors are at the top and the images have to
+/// reach them, which is what decides all three.
+fn stacked(images: &[&[u8]]) -> Vec<u8> {
+    let mut space = vec![0u8; 0x10000];
+    let mut top = 0x10000usize;
+    for image in images {
+        if image.is_empty() || image.len() > top {
+            continue;
+        }
+        top -= image.len();
+        space[top..top + image.len()].copy_from_slice(image);
+    }
+    space
+}
+
 fn byte(rom: &[u8], at: usize) -> u8 {
     rom.get(at).copied().unwrap_or(0xFF)
 }
@@ -372,6 +392,9 @@ pub enum Audio {
     Card(Box<SoundBoard>),
     /// The Sound & Speech board. See [`crate::speech`].
     Speech(Box<SpeechBoard>),
+    /// One of the three System 80B cards, which are two processors apiece.
+    /// See [`crate::sound80b`].
+    Card80B(Box<SoundCard80B>),
 }
 
 impl Audio {
@@ -380,6 +403,7 @@ impl Audio {
         match self {
             Self::Card(c) => c.card().clock(),
             Self::Speech(_) => crate::speech::CLOCK,
+            Self::Card80B(c) => c.generation().clock(),
         }
     }
 
@@ -388,6 +412,7 @@ impl Audio {
         match self {
             Self::Card(c) => c.command(value),
             Self::Speech(c) => c.command(value),
+            Self::Card80B(c) => c.command(value),
         }
     }
 
@@ -396,6 +421,7 @@ impl Audio {
         match self {
             Self::Card(c) => c.run(clocks),
             Self::Speech(c) => c.run(clocks),
+            Self::Card80B(c) => c.run(clocks),
         }
     }
 
@@ -404,6 +430,7 @@ impl Audio {
         match self {
             Self::Card(c) => c.take_audio_at(rate),
             Self::Speech(c) => c.take_audio_at(rate),
+            Self::Card80B(c) => c.take_audio_at(rate),
         }
     }
 
@@ -412,6 +439,7 @@ impl Audio {
         match self {
             Self::Card(c) => c.produced(),
             Self::Speech(c) => c.produced(),
+            Self::Card80B(c) => c.produced(),
         }
     }
 }
@@ -469,6 +497,14 @@ impl Board {
                 )),
                 crate::games::Sound::Speech { first, second } => {
                     Audio::Speech(Box::new(SpeechBoard::new(first, second, rate)))
+                }
+                crate::games::Sound::Card80B { generation, y, d } => {
+                    Audio::Card80B(Box::new(SoundCard80B::new(
+                        generation,
+                        stacked(&[y.0, y.1.unwrap_or(&[])]),
+                        stacked(&[d]),
+                        rate,
+                    )))
                 }
             });
     }

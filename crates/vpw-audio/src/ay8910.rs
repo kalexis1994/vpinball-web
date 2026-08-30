@@ -123,7 +123,7 @@ impl Ay8910 {
         let value = match reg {
             1 | 3 | 5 | 13 => value & 0x0F,
             6 => value & 0x1F,
-            8 | 9 | 10 => value & 0x1F,
+            8..=10 => value & 0x1F,
             _ => value,
         };
         self.regs[reg] = value;
@@ -417,6 +417,6 @@ mod tests {
                 chip.noise & 1
             })
             .collect();
-        assert!(first.iter().any(|b| *b == 0) && first.iter().any(|b| *b == 1));
+        assert!(first.contains(&0) && first.contains(&1));
     }
 }
