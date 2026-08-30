@@ -1307,3 +1307,58 @@ fn a_class_can_have_a_default_member() {
         a = x.Sum";
     assert_eq!(num(src, "a"), 7.0);
 }
+
+/// A `Const` overwrites a name that already exists, and a `Dim` does not.
+///
+/// The difference matters because the two mean different things. `Dim` is a
+/// promise that a name exists, so declaring one twice must leave what it holds
+/// alone. A constant is not a promise, it is a value.
+///
+/// Visual Pinball's own `core.vbs` opens with
+///
+/// ```vbscript
+/// Dim BSize: If IsEmpty(Eval("BallSize")) = true Then BSize = 25 Else BSize = BallSize/2
+/// ```
+///
+/// and it is loaded **before** the table it is for. Asking whether `BallSize`
+/// is empty creates it empty — which is what VBScript does with an undeclared
+/// name — and the table's own `Const BallSize = 50` then had nowhere to put
+/// fifty. Circus divides by it sixty times a second.
+#[test]
+fn a_constant_overwrites_a_name_that_a_read_created() {
+    let i = Interpreter::default();
+    let number = |i: &Interpreter, name: &str| {
+        i.get_global(name)
+            .unwrap_or_else(|| panic!("'{name}' was never defined"))
+            .to_number()
+            .expect("a number")
+    };
+
+    // The library, loaded first, asks whether the table has said anything.
+    i.load("Dim seen: seen = IsEmpty(Eval(\"BallSize\"))")
+        .expect("the library loads");
+    assert!(
+        i.get_global("seen")
+            .expect("seen")
+            .to_bool()
+            .expect("a bool"),
+        "the table has not been loaded yet"
+    );
+
+    // Then the table, which says so. Before this fix the read above had left
+    // an empty name behind and fifty had nowhere to go.
+    i.load(
+        "Const BallSize = 50
+Dim half: half = BallSize / 2",
+    )
+    .expect("the table loads");
+    assert_eq!(number(&i, "half"), 25.0);
+
+    // And a `Dim` of a name that already holds something leaves it alone.
+    i.load(
+        "Dim BallSize
+Dim kept: kept = BallSize",
+    )
+    .expect("a redundant Dim is not an error");
+    assert_eq!(number(&i, "kept"), 50.0);
+}

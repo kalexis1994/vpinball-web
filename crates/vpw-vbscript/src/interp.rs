@@ -313,7 +313,7 @@ impl Interpreter {
                         // do it again in order.
                         if let Ok(v) = self.eval(e) {
                             self.consts.borrow_mut().assign(name, v.clone());
-                            self.declare(name, v);
+                            self.define(name, v);
                         }
                     }
                 }
@@ -484,7 +484,7 @@ impl Interpreter {
                 for (name, e) in items {
                     let v = self.eval(e)?;
                     self.consts.borrow_mut().assign(name, v.clone());
-                    self.declare(name, v);
+                    self.define(name, v);
                 }
                 Ok(())
             }
@@ -1336,6 +1336,33 @@ impl Interpreter {
         match self.frames.borrow_mut().last_mut() {
             Some(f) => f.locals.declare(name, v),
             None => self.globals.borrow_mut().declare(name, v),
+        }
+    }
+
+    /// Declares a name **with its value**, overwriting one that is already
+    /// there.
+    ///
+    /// Which is the whole difference from [`Self::declare`], and it is the
+    /// difference between `Dim` and `Const`. `Dim` is a promise that a name
+    /// exists, so declaring one twice must not disturb what it holds. A
+    /// constant is not a promise, it is a value, and it wins over whatever was
+    /// standing in the name before it.
+    ///
+    /// That is not a hypothetical. `core.vbs` opens with
+    ///
+    /// ```vbscript
+    /// Dim BSize: If IsEmpty(Eval("BallSize")) = true Then BSize = 25 Else BSize = BallSize/2
+    /// ```
+    ///
+    /// and it is loaded before the table it is for. Asking whether `BallSize`
+    /// is empty *creates* it empty — which is what VBScript does with an
+    /// undeclared name — and the table's own `Const BallSize = 50` then had
+    /// nowhere to put fifty. Circus divides by it, and got a division by zero
+    /// sixty times a second.
+    fn define(&self, name: &str, v: Value) {
+        match self.frames.borrow_mut().last_mut() {
+            Some(f) => f.locals.assign(name, v),
+            None => self.globals.borrow_mut().assign(name, v),
         }
     }
 
