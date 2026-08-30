@@ -1,12 +1,16 @@
 //! Recognising a System 80 ROM set by its shape.
 //!
 //! There is almost no table of games here and there does not need to be one.
-//! Every System 80 set is the same three ROMs: a **2 KB game ROM** named for
-//! the game's own number, and **two 4 KB system ROMs** shared by every machine
-//! of the generation and named for it. Ice Fever's set is `695.cpu`,
-//! `u2_80a.bin` and `u3_80a.bin`, and so is every other 80A game's but for the
-//! first name. A **System 80B** is the same idea with one 8 KB system ROM
-//! where those two were.
+//! Nearly every System 80 set is the same three ROMs: a **2 KB game ROM**
+//! named for the game's own number, and **two 4 KB system ROMs** shared by
+//! every machine of the generation and named for it. Ice Fever's set is
+//! `695.cpu`, `u2_80a.bin` and `u3_80a.bin`, and so is every other 80A game's
+//! but for the first name.
+//!
+//! The two ends of the family are the exceptions, and both are still a shape:
+//! the **1980 games** carry two 512-byte PROMs where that one ROM goes —
+//! `653-1.cpu` and `653-2.cpu` — and a **System 80B** has one 8 KB system ROM
+//! where the two 4 KB ones were.
 //!
 //! That shape is distinctive enough to recognise on its own, which is worth
 //! more than a list: a list is right about the games somebody typed in and
@@ -30,14 +34,52 @@
 /// The ROMs a System 80 needs, borrowed from the set.
 #[derive(Debug, Clone, Copy)]
 pub struct Roms<'a> {
-    /// The game's own ROM. Empty on the System 80B sets that hold the whole
-    /// game in the 8 KB image instead.
-    pub game: &'a [u8],
+    /// The game's own ROM, in whichever shape the set carries it.
+    pub game: Game<'a>,
     /// The system ROM: two 4 KB images on a System 80 or 80A, one of 8 KB on
     /// an 80B. Either way it lands at `$2000`.
     pub system: System<'a>,
     /// The sound card's firmware, if the set carries a card this port knows.
     pub sound: Option<Sound<'a>>,
+}
+
+/// The shape of a game's own ROM, which changed twice in five years.
+#[derive(Debug, Clone, Copy)]
+pub enum Game<'a> {
+    /// One image filling the 2 KB window at `$1000`, which is most of them —
+    /// and 4 KB on the System 80B sets that bank it.
+    One(&'a [u8]),
+    /// Two 512-byte PROMs, which is how the first System 80 games came:
+    /// `653-1.cpu` and `653-2.cpu`, and the window holds the pair of them
+    /// twice over.
+    Two(&'a [u8], &'a [u8]),
+    /// None at all, on the System 80B sets whose whole game is in the 8 KB
+    /// system image.
+    Missing,
+}
+
+impl Game<'_> {
+    /// The 2 KB the board sees at `$1000`.
+    ///
+    /// A single image is already that. A pair of PROMs is not: the board
+    /// decodes only enough of the address to tell them apart, so the window
+    /// holds the first, then the second, and then both again
+    /// (`gts80.h:204`). Assembling it here means the memory map does not have
+    /// to know which kind of set it came from.
+    pub fn image(&self) -> Vec<u8> {
+        match *self {
+            Game::One(rom) => rom.to_vec(),
+            Game::Two(first, second) => {
+                let mut out = Vec::with_capacity(0x800);
+                for _ in 0..2 {
+                    out.extend_from_slice(first);
+                    out.extend_from_slice(second);
+                }
+                out
+            }
+            Game::Missing => Vec::new(),
+        }
+    }
 }
 
 /// Which generation a set is, told by the shape of its system ROM.
@@ -129,21 +171,54 @@ pub fn detect<'a>(set: &str, images: &'a [(String, Vec<u8>)]) -> Option<Roms<'a>
     // A System 80B: one 8 KB system image, and a game ROM of 2 KB or 4 KB
     // beside it — or none at all on the sets whose whole game is in the 8 KB.
     if let Some(system) = of_size(8192) {
+        let game = of_size(2048)
+            .or_else(|| of_size(4096))
+            .map_or(Game::Missing, Game::One);
         return Some(Roms {
-            game: of_size(2048).or_else(|| of_size(4096)).unwrap_or(&[]),
+            game,
             system: System::Alphanumeric(system),
             sound,
         });
     }
 
     Some(Roms {
-        game: of_size(2048)?,
+        game: game_rom(images)?,
         system: System::Bcd {
             u2: named("u2", 4096)?,
             u3: named("u3", 4096)?,
         },
         sound,
     })
+}
+
+/// The game's own ROM, whichever shape it comes in.
+///
+/// One 2 KB image on almost every machine. The first System 80 games — Spider
+/// Man, Circus, Counterforce and their neighbours from 1980 — instead carry
+/// **two 512-byte PROMs**, which is a smaller part in a cheaper socket and a
+/// set that looks like nothing else.
+fn game_rom(images: &[(String, Vec<u8>)]) -> Option<Game<'_>> {
+    let of_size = |size: usize| {
+        images
+            .iter()
+            .find(|(name, data)| data.len() == size && !is_sound(name))
+            .map(|(_, data)| data.as_slice())
+    };
+    if let Some(rom) = of_size(2048) {
+        return Some(Game::One(rom));
+    }
+
+    // In name order: Gottlieb numbers them `-1` and `-2`, and which is which
+    // decides where the processor lands when it follows its own reset vector.
+    let mut proms: Vec<&(String, Vec<u8>)> = images
+        .iter()
+        .filter(|(name, data)| data.len() == 512 && !is_sound(name))
+        .collect();
+    proms.sort_by_key(|(name, _)| name.to_ascii_lowercase());
+    match proms.as_slice() {
+        [first, second, ..] => Some(Game::Two(first.1.as_slice(), second.1.as_slice())),
+        _ => None,
+    }
 }
 
 /// Which sound card the set carries, if it is one this port knows.

@@ -233,3 +233,70 @@ fn the_displays_latch_on_a_rising_strobe_and_write_where_the_select_points() {
     assert_eq!(lit, 1, "one digit, where the select pointed");
     assert_eq!(mem.displays().expect("a BCD board").number(0, 0, 16), 7);
 }
+
+/// The first System 80 games did not have a 2 KB game ROM: they came with
+/// **two 512-byte PROMs**, and the board decodes so little of the address that
+/// the window holds the pair of them twice over.
+#[test]
+fn the_earliest_sets_carry_two_proms_where_the_rest_have_one_rom() {
+    use vpw_gts80::games::{Game, System};
+
+    let images = [
+        ("653-1.cpu".to_string(), vec![0xAAu8; 512]),
+        ("653-2.cpu".to_string(), vec![0xBBu8; 512]),
+        ("u2_80.bin".to_string(), vec![0x11u8; 4096]),
+        ("u3_80.bin".to_string(), vec![0x22u8; 4096]),
+        ("653.snd".to_string(), vec![0x33u8; 1024]),
+        ("6530sy80.bin".to_string(), vec![0x44u8; 1024]),
+    ];
+    let roms = vpw_gts80::games::detect("spidermn", &images).expect("a System 80 set");
+
+    // In name order, because which PROM is which decides where the processor
+    // lands when it follows its own reset vector.
+    let Game::Two(first, second) = roms.game else {
+        panic!("expected two PROMs, got {:?}", roms.game);
+    };
+    assert_eq!(first[0], 0xAA);
+    assert_eq!(second[0], 0xBB);
+    assert!(matches!(roms.system, System::Bcd { .. }));
+
+    // And the window is the pair, then the pair again.
+    let image = roms.game.image();
+    assert_eq!(image.len(), 0x800);
+    assert_eq!(image[0x000], 0xAA);
+    assert_eq!(image[0x200], 0xBB);
+    assert_eq!(image[0x400], 0xAA);
+    assert_eq!(image[0x600], 0xBB);
+
+    // Which is what the board reads at `$1000`, all four times over.
+    let mut mem = System80::new(image, vec![0x11; 4096], vec![0x22; 4096]);
+    assert_eq!(mem.read(0x1000), 0xAA);
+    assert_eq!(mem.read(0x1200), 0xBB);
+    assert_eq!(mem.read(0x1400), 0xAA);
+    assert_eq!(mem.read(0x1600), 0xBB);
+    // And again wherever the missing address lines repeat the map.
+    assert_eq!(mem.read(0x5200), 0xBB);
+    assert_eq!(mem.read(0xD600), 0xBB);
+}
+
+/// The 1980 sound card comes with those sets, and until now nothing could
+/// reach it: every set that carries one also carries two PROMs.
+#[test]
+fn the_earliest_sets_are_the_ones_with_the_1980_sound_card() {
+    use vpw_gts80::games::Sound;
+
+    let images = [
+        ("652-1.cpu".to_string(), vec![0xAAu8; 512]),
+        ("652-2.cpu".to_string(), vec![0xBBu8; 512]),
+        ("u2_80.bin".to_string(), vec![0x11u8; 4096]),
+        ("u3_80.bin".to_string(), vec![0x22u8; 4096]),
+        ("652.snd".to_string(), vec![0x33u8; 1024]),
+        ("6530sy80.bin".to_string(), vec![0x44u8; 1024]),
+    ];
+    let roms = vpw_gts80::games::detect("panthera", &images).expect("a System 80 set");
+    let Some(Sound::Card { rom, system }) = roms.sound else {
+        panic!("expected the 1980 sound card, got {:?}", roms.sound);
+    };
+    assert_eq!(rom[0], 0x33, "the game's own samples");
+    assert_eq!(system[0], 0x44, "and the 6530's code beside them");
+}

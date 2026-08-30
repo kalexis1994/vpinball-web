@@ -45,7 +45,7 @@
 //! | `$0200` | `$027F` | RIOT 0 registers |
 //! | `$0280` | `$02FF` | RIOT 1 registers |
 //! | `$0300` | `$037F` | RIOT 2 registers |
-//! | `$1000` | `$17FF` | the game ROM |
+//! | `$1000` | `$17FF` | the game ROM, or two 512-byte PROMs twice over |
 //! | `$1800` | `$1FFF` | 256 bytes of battery RAM, mirrored eight times |
 //! | `$2000` | `$2FFF` | system ROM U2 |
 //! | `$3000` | `$3FFF` | system ROM U3 |

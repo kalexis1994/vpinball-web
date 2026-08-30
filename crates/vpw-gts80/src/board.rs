@@ -473,10 +473,10 @@ impl Board {
     pub fn from_roms(roms: &crate::games::Roms<'_>, rate: u32) -> Self {
         let mut board = match roms.system {
             crate::games::System::Bcd { u2, u3 } => {
-                Self::new(roms.game.to_vec(), u2.to_vec(), u3.to_vec())
+                Self::new(roms.game.image(), u2.to_vec(), u3.to_vec())
             }
             crate::games::System::Alphanumeric(system) => {
-                Self::new_80b(roms.game.to_vec(), system.to_vec())
+                Self::new_80b(roms.game.image(), system.to_vec())
             }
         };
         if let Some(sound) = roms.sound {
