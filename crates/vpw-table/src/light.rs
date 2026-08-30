@@ -88,6 +88,12 @@ impl From<&vpin::vpx::gameitem::light::Fader> for Fader {
 /// A light that is on, ready to draw.
 #[derive(Debug, Clone)]
 pub struct Light {
+    /// Whether this lamp belongs to the room the machine stands in rather than
+    /// to the machine. See [`crate::geometry::Mesh::scenery`]: it is the same
+    /// answer for the same reason, and the views that leave the room out have
+    /// to leave its lamps out with it or they hang in the air as bare halos
+    /// over a playfield lit by nothing.
+    pub scenery: bool,
     pub name: String,
     /// The outline, already triangulated, in world space.
     pub vertices: Vec<[f32; 3]>,
@@ -375,6 +381,7 @@ pub fn build(l: &vpin::vpx::gameitem::light::Light, surface_z: f32, site: &Site)
     };
 
     Some(Light {
+        scenery: false,
         name: l.name.clone(),
         vertices: flat.iter().map(|p| [p.x, p.y, halo_z]).collect(),
         indices,

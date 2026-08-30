@@ -66,6 +66,7 @@ fn floor_with_lamp() -> Scene {
 
     let lamp = 60.0;
     let light = Light {
+        scenery: false,
         name: "Lamp".into(),
         vertices: vec![
             [-lamp, -lamp, 1.0],

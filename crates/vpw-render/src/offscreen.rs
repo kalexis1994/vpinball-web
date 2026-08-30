@@ -40,6 +40,9 @@ pub struct Offscreen {
     hdr: wgpu::TextureFormat,
     hdr_usages: wgpu::TextureUsages,
     samples: u32,
+    /// Whether the room a table stands in is being drawn, which decides
+    /// whether its own lamps are lit. See `vpw_table::light::Light::scenery`.
+    pub room: bool,
     /// The flat engine, for photograph-harness parity with the browser.
     /// `None` until [`Offscreen::flat_on`]. See [`crate::flat`].
     flat: Option<crate::flat::Flat>,
@@ -135,6 +138,7 @@ impl Offscreen {
             hdr,
             hdr_usages,
             samples,
+            room: false,
             flat: None,
         })
     }
@@ -399,7 +403,10 @@ impl Offscreen {
         filter: impl Fn(&crate::scene::Batch) -> bool,
     ) {
         // The frame's light lists, before any pass records.
-        self.lights.prepare(&self.device, &self.queue, None);
+        // The harness draws whatever it is told to; the room's lamps come
+        // with the room, which the caller filters by batch.
+        self.lights
+            .prepare(&self.device, &self.queue, None, self.room);
         // The aspect is the output's; the pixel sizes are the scene
         // buffers', which the render scale may have shrunk — exactly as
         // `TableRenderer::render` divides them.

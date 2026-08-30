@@ -863,6 +863,15 @@ pub fn extract(vpx: &VPX) -> Scene {
                 m.scenery = true;
             }
         }
+        // And its lamps, by the same line. A room's ceiling lights are up
+        // there with its ceiling, and a view that leaves the ceiling out has
+        // to leave them out too or they hang in the air as bare halos over a
+        // playfield they are not lighting.
+        for l in &mut lights {
+            if l.center.z > floor {
+                l.scenery = true;
+            }
+        }
         meshes.push(head.mesh());
         meshes.push(head.display_mesh());
     }

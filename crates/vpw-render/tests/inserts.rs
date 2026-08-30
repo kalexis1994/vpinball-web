@@ -94,6 +94,7 @@ fn scene(image: &str, image_mode: bool, surface_image: &str, state: f32) -> Scen
         [c - half, c + half],
     ];
     let light = Light {
+        scenery: false,
         name: "Insert".into(),
         vertices: corners.iter().map(|p| [p[0], p[1], 1.0]).collect(),
         indices: vec![0, 1, 2, 0, 2, 3],

@@ -179,6 +179,14 @@ impl View {
     }
 }
 
+/// How much sky the front view leaves over the machine's crown, as a fraction
+/// of the head's own height.
+///
+/// Enough to read as a photograph of a machine rather than a machine pressed
+/// against the ceiling, and little enough that the machine still fills the
+/// frame.
+const HEAD_ROOM: f32 = 0.10;
+
 /// How high above the playfield the overhead view stops looking, in VPU.
 ///
 /// Visual Pinball's own upper window border, which is what a cabinet's glass
@@ -290,20 +298,25 @@ impl Camera {
         let authored = authored.filter(|_| matches!(view, View::Front | View::Cabinet));
         let (mut min, mut max) = playfield;
         if view.shows_backbox() {
-            // What must fit is the head *up to its display*, not its crown:
-            // the strip above the display is blank cabinet, and demanding it
-            // on screen is what kept the whole machine small on a wide
-            // window. On a portrait screen the width binds instead and the
-            // crown comes back into shot on its own; nothing is lost there.
-            // Half of the blank strip above the display, not all of it. Taking
-            // all of it frames the machine with the display's own top edge
-            // exactly on the edge of the screen, and on a squat window — where
-            // the width binds and the machine is tall — that is a score cut in
-            // half. Half the strip leaves the display a margin of its own
-            // height above it and still buys most of the closer stance.
-            let trim = vpw_table::backbox::DISPLAY_AREA[1] * 0.5;
+            // The whole head, crown and all, and a little sky over it.
+            //
+            // This used to frame up to the *display* and let the blank strip
+            // above it crop, on the reasoning that blank cabinet is not worth
+            // screen. It buys less than it costs: the machine ends up with its
+            // backglass jammed against the top edge, and on a squat window —
+            // where the width binds and the machine is tall — the display
+            // itself starts going with it. A photograph of a machine has air
+            // above the machine.
+            // Only for the view that photographs the machine. The cabinet
+            // view is framed by its author's own numbers, and adding sky to
+            // those is second-guessing them.
+            let head_room = if matches!(view, View::Front) {
+                (backbox.1.z - backbox.0.z) * HEAD_ROOM
+            } else {
+                0.0
+            };
             let mut head_max = backbox.1;
-            head_max.z -= (backbox.1.z - backbox.0.z) * trim;
+            head_max.z += head_room;
             min = min.min(backbox.0);
             max = max.max(head_max);
         }

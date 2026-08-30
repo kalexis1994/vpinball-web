@@ -531,6 +531,7 @@ fn main() {
         std::env::var("VPW_VIEW").ok().as_deref(),
         Some("cabinet") | Some("gabinete")
     );
+    gpu.room = room;
     let pixels = gpu.render_filtered(&gpu_scene, &camera, |b| {
         if !room && b.scenery {
             return false;

@@ -841,7 +841,7 @@ fn fs_keep_depth(in : VsOut) -> @location(0) vec4<f32> {
             let baked = self.baked.as_ref().expect("plan just built it");
 
             // The dark photograph, and the depth the live pass will restore.
-            lights.prepare(device, queue, Some(&zeros));
+            lights.prepare(device, queue, Some(&zeros), false);
             pipeline.set_frame(
                 queue,
                 camera_vp,
@@ -936,7 +936,7 @@ fn fs_keep_depth(in : VsOut) -> @location(0) vec4<f32> {
             let mut levels = zeros.clone();
             levels[layer.light] = lights.full_level(layer.light);
 
-            lights.prepare(device, queue, Some(&levels));
+            lights.prepare(device, queue, Some(&levels), false);
             pipeline.set_frame(
                 queue,
                 camera_vp,

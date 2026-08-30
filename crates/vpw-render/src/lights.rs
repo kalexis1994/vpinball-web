@@ -73,6 +73,9 @@ pub struct Light {
     lamp: vpw_table::light::Lamp,
     /// Whether this one blends as a bulb rather than as a flat additive disc.
     bulb: bool,
+    /// Whether it belongs to the room the machine stands in rather than to the
+    /// machine. See [`vpw_table::light::Light::scenery`].
+    scenery: bool,
     /// `TRMS`. Zero keeps the lamp out of the transmitted-light pass entirely
     /// (`light.cpp:600`).
     transmission: f32,
@@ -778,6 +781,7 @@ impl Lights {
                         base_color2: l.color2,
                         lamp,
                         bulb: l.is_bulb,
+                        scenery: l.scenery,
                         transmission: l.transmission_scale,
                         blinking: l.blinking,
                         full: l.intensity,
@@ -840,7 +844,13 @@ impl Lights {
     /// `levels` overrides what every lamp says it is showing — the flat bake
     /// photographs the table with levels of its own choosing, and the real
     /// ones come back on the next prepared frame.
-    pub fn prepare(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, levels: Option<&[f32]>) {
+    pub fn prepare(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        levels: Option<&[f32]>,
+        room: bool,
+    ) {
         self.segments.clear();
         self.transmitted_range = (0, 0);
         if self.lights.is_empty() {
@@ -887,6 +897,13 @@ impl Lights {
         }
 
         let level = |i: usize, l: &Light| {
+            // A lamp belonging to a room nobody is inside is off, which is the
+            // cheapest way to say "not drawn and not lighting anything": it
+            // falls out of every list below on the test each of them already
+            // makes.
+            if l.scenery && !room {
+                return 0.0;
+            }
             levels
                 .and_then(|v| v.get(i).copied())
                 .unwrap_or_else(|| l.lamp.level())

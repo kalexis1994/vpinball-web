@@ -76,6 +76,7 @@ fn one_bright_light(intensity: f32, alpha: f32) -> Scene {
 
     let lamp = 60.0;
     let light = Light {
+        scenery: false,
         name: "Lamp".into(),
         vertices: vec![
             [-lamp, -lamp, 1.0],

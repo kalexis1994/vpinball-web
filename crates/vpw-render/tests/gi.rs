@@ -68,6 +68,7 @@ fn scene_with(state: f32, name: &str, wall: bool) -> Scene {
         [c - 5.0, c + 5.0],
     ];
     let bulb = Light {
+        scenery: false,
         name: name.into(),
         vertices: corners.iter().map(|p| [p[0], p[1], 30.0]).collect(),
         indices: vec![0, 1, 2, 0, 2, 3],

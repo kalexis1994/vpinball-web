@@ -814,7 +814,11 @@ impl TableRenderer {
         // The frame's light lists, before any pass records. In the flat
         // path the bake above may have prepared a forced view; this puts the
         // live levels back.
-        self.lights.prepare(&self.gpu.device, &self.gpu.queue, None);
+        // The room's own lamps only when the room is drawn — which is the
+        // one view that stands you inside it. See `Mesh::scenery`.
+        let room = matches!(self.view, crate::camera::View::Cabinet);
+        self.lights
+            .prepare(&self.gpu.device, &self.gpu.queue, None, room);
         let gi = self.lights.gi_sources(crate::scene::MAX_GI_BULBS);
         self.pipeline.set_frame(
             &self.gpu.queue,
