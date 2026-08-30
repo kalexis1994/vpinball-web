@@ -48,14 +48,29 @@ const BCD_TO_SEGMENTS: [Segments; 16] = [
 const REORDER: [usize; 16] = [8, 0, 1, 15, 9, 10, 11, 12, 13, 14, 2, 3, 4, 5, 6, 7];
 
 /// The three banks a System 80 drives.
+///
+/// # Why there are two copies of everything
+///
+/// The display is multiplexed: one position of sixteen is lit at a time, the
+/// board blanks it before it moves on, and the eye does the rest. Keeping only
+/// what is lit *now* keeps one digit and fifteen blanks, which is what the
+/// tube would look like to a camera with a fast enough shutter and is not what
+/// anybody means by a score.
+///
+/// So the segments are accumulated over a whole refresh and handed over as a
+/// frame — `segments[pos].w |= …` and a `memset` every other vertical blank
+/// (`gts80.c:269` and `:104`). What a host reads is the last complete sweep,
+/// which is a score.
 #[derive(Debug, Clone)]
 pub struct Displays {
-    /// Sixteen positions per bank, as segments.
+    /// Sixteen positions per bank, as segments: the last complete sweep.
     ///
     /// Bank 0 and bank 1 are the four player scores — six digits each on a
     /// System 80, seven on an 80A — and bank 2 is the ball-and-credit strip
     /// along the bottom.
     pub digits: [[Segments; 16]; 3],
+    /// The sweep in progress.
+    frame: [[Segments; 16]; 3],
 
     /// The three latches, as last loaded.
     latch: [Segments; 3],
@@ -73,6 +88,7 @@ impl Displays {
     pub fn new() -> Self {
         Self {
             digits: [[0; 16]; 3],
+            frame: [[0; 16]; 3],
             latch: [0; 3],
             last_a: 0,
         }
@@ -95,11 +111,16 @@ impl Displays {
 
         let select = usize::from(a & 0x0F);
         let pos = REORDER[15 - select];
-        self.digits[0][pos] = self.latch[0];
-        self.digits[1][pos] = self.latch[1];
+        self.frame[0][pos] |= self.latch[0];
+        self.frame[1][pos] |= self.latch[1];
         // The status strip is not reordered: it is wired straight through, and
         // counted from the other end.
-        self.digits[2][15 - select] = self.latch[2];
+        self.frame[2][15 - select] |= self.latch[2];
+    }
+
+    /// Closes one sweep: what has been lit becomes what is shown.
+    pub(crate) fn sweep(&mut self) {
+        self.digits = std::mem::take(&mut self.frame);
     }
 
     /// Reads a bank back as the number it is showing, for whoever wants the
@@ -107,6 +128,23 @@ impl Displays {
     ///
     /// Blank digits are skipped rather than read as zero, which is what makes
     /// a six-digit display showing `  1230` come back as 1230.
+    /// One bank as text, sixteen characters, blanks for blanks.
+    ///
+    /// For a host that wants to *show* the score rather than know it — a
+    /// diagnostic panel, a log line. A position showing something that is not
+    /// a digit comes out as `?`, because on the glass it is something, and a
+    /// space would say the display was dark when it is not.
+    pub fn text(&self, bank: usize) -> String {
+        self.digits[bank]
+            .iter()
+            .map(|s| match digit_of(*s) {
+                Some(d) => char::from(b'0' + d),
+                None if *s == 0 => ' ',
+                None => '?',
+            })
+            .collect()
+    }
+
     pub fn number(&self, bank: usize, from: usize, len: usize) -> u64 {
         let mut out = 0u64;
         for i in from..(from + len).min(16) {

@@ -39,6 +39,15 @@
 //! | `$2000` | `$2FFF` | system ROM U2 |
 //! | `$3000` | `$3FFF` | system ROM U3 |
 //!
+//! # One trap worth reading before anything else
+//!
+//! Gottlieb wired its switch matrix with the rows and columns the other way
+//! round from everybody else, so a switch number does **not** decompose into
+//! the strobe and return you would expect. `sys80.vbs` says the start button
+//! is 47 and the first coin is 17, and both are on the same return line. The
+//! conversion is in [`io`], and getting it wrong gives you a machine that
+//! boots, counts and lights up, and that nobody can put a coin in.
+//!
 //! Address lines 14 and 15 are not connected, so the whole map repeats four
 //! times through the 64 KB. That is not a curiosity to be tidied away: the
 //! **stack lives at `$0100`**, which is RIOT 2's RAM, and the CPU's vectors
@@ -47,6 +56,7 @@
 
 pub mod board;
 pub mod display;
+pub mod games;
 pub mod io;
 
 pub use board::{Board, System80};

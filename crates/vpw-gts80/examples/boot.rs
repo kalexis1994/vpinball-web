@@ -89,7 +89,7 @@ fn main() {
         board.mem.io.game_on(),
         board.mem.io.tilted()
     );
-    println!("  solenoids    {:#011b}", board.mem.io.solenoids);
+    println!("  solenoids    {:#011b}", board.mem.io.solenoids());
     println!(
         "  sound        last command {:#04X}",
         board.mem.io.sound_command

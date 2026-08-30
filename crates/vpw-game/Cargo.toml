@@ -12,6 +12,7 @@ vpw-vbscript = { version = "0.1.0", path = "../vpw-vbscript" }
 vpin = "0.27.0"
 log = "0.4"
 vpw-s11 = { version = "0.1.0", path = "../vpw-s11" }
+vpw-gts80 = { version = "0.1.0", path = "../vpw-gts80" }
 vpw-ws = { version = "0.1.0", path = "../vpw-ws" }
 # For the DEFLATE inside a ROM zip. Pure Rust, so it builds for wasm, and
 # decompression is exactly the kind of thing not to hand-roll.

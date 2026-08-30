@@ -2037,6 +2037,7 @@ dependencies = [
  "pollster",
  "vpin",
  "vpw-audio",
+ "vpw-gts80",
  "vpw-math",
  "vpw-physics",
  "vpw-render",

@@ -33,9 +33,14 @@ pub struct System80 {
     pub io: Io,
     pub displays: Displays,
 
-    /// Whether the slam switch is open, which is the state a machine that is
-    /// not being kicked reports.
-    pub slam_ok: bool,
+    /// Clocks left before the next vertical blank, and how many have gone by.
+    ///
+    /// A System 80 has no video and no vertical blank; PinMAME hangs its
+    /// housekeeping off the emulated one anyway, and the periods it chose are
+    /// what tables are written against. Sixty a second, and the solenoid sweep
+    /// every fourth (`gts80.c:34`).
+    to_vblank: i32,
+    vblanks: u32,
 }
 
 impl System80 {
@@ -49,7 +54,8 @@ impl System80 {
             nvram: [0; NVRAM],
             io: Io::new(),
             displays: Displays::new(),
-            slam_ok: true,
+            to_vblank: VBLANK_CLOCKS,
+            vblanks: 0,
         }
     }
 
@@ -66,9 +72,21 @@ impl System80 {
         // The slam switch reaches RIOT 1's port A, so it is put there before
         // the chips look at their inputs. All ones is "not slammed", which is
         // the state of a machine nobody is kicking.
-        self.riot[1].in_a = if self.slam_ok { 0xFF } else { 0x00 };
+        self.riot[1].in_a = if self.io.slammed() { 0x00 } else { 0xFF };
         for riot in &mut self.riot {
             riot.tick(clocks);
+        }
+
+        self.to_vblank -= i32::try_from(clocks).unwrap_or(i32::MAX);
+        while self.to_vblank <= 0 {
+            self.to_vblank += VBLANK_CLOCKS;
+            self.vblanks = self.vblanks.wrapping_add(1);
+            if self.vblanks.is_multiple_of(SOLENOID_SWEEP) {
+                self.io.sweep();
+            }
+            if self.vblanks.is_multiple_of(DISPLAY_SWEEP) {
+                self.displays.sweep();
+            }
         }
     }
 
@@ -110,15 +128,13 @@ impl System80 {
         if data & 0x80 != 0 {
             solenoids |= 0x100;
         }
-        // Pulses accumulate until whoever is watching takes them: a coil that
-        // fires and releases between two looks still happened.
-        self.io.solenoids |= solenoids;
+        self.io.drive_solenoids(solenoids);
 
         // The sound command shares the port. Four bits of it, with a fifth
         // taken from a lamp latch, which is how a board with sixteen sounds
         // came to have thirty-two.
         let command = if data & 0x10 != 0 { data & 0x0F } else { 0 };
-        let high = u8::from(self.io.lamps[1] & 0x02 != 0) << 4;
+        let high = u8::from(self.io.lamps[2] & 0x02 != 0) << 4;
         let full = high | command;
         if full != self.io.sound_command {
             self.io.sound_command = full;
@@ -132,11 +148,13 @@ impl System80 {
     /// Latch zero is not a lamp at all: its bits are the game-on and tilt
     /// relays.
     fn lamps_written(&mut self, written: u8) {
-        let column = usize::from(written >> 4);
-        if column == 0 || column > crate::io::LAMP_COLUMNS {
+        // The latches are selected from 1 to 12 and counted here from 0, which
+        // is the numbering everything downstream uses: column 0 is the relays.
+        let selected = usize::from(written >> 4);
+        if selected == 0 || selected > crate::io::LAMP_COLUMNS {
             return;
         }
-        self.io.lamps[column - 1] = written & 0x0F;
+        self.io.lamps[selected - 1] = written & 0x0F;
     }
 }
 
@@ -153,10 +171,10 @@ impl Bus for System80 {
             // Two addresses in the hole above RIOT 2's RAM answer with the
             // slam switch. They are not a chip; they are a gate on the board.
             0x01CB | 0x01E4 => {
-                if self.slam_ok {
-                    0xFF
-                } else {
+                if self.io.slammed() {
                     0x00
+                } else {
+                    0xFF
                 }
             }
             0x0200..=0x027F => {
@@ -244,4 +262,47 @@ impl Board {
             spent += self.step();
         }
     }
+
+    /// Runs for a stretch of wall-clock time.
+    pub fn run_seconds(&mut self, seconds: f64) {
+        self.run((f64::from(CLOCK) * seconds.max(0.0)) as u32);
+    }
+
+    /// The battery-backed RAM, which is what a host keeps between sessions.
+    pub fn cmos(&self) -> &[u8] {
+        &self.mem.nvram
+    }
+
+    /// Puts a previous session's memory back.
+    pub fn restore_cmos(&mut self, bytes: &[u8]) {
+        let n = bytes.len().min(NVRAM);
+        self.mem.nvram[..n].copy_from_slice(&bytes[..n]);
+    }
+
+    /// The score displays, as segment words a host can draw.
+    ///
+    /// The two player banks, sixteen positions each — which is exactly the two
+    /// rows of sixteen a score panel already has. The ball-and-credit strip is
+    /// a third bank with nowhere to go on that panel and is left out rather
+    /// than crammed in; it is `mem.displays.digits[2]` for whoever wants it.
+    pub fn segments(&self) -> Vec<u16> {
+        self.mem.displays.digits[0]
+            .iter()
+            .chain(self.mem.displays.digits[1].iter())
+            .map(|s| u16::from(*s))
+            .collect()
+    }
 }
+
+/// The CPU clock: 3.579545 MHz divided by four (`gts80.c:708`).
+pub const CLOCK: u32 = 894_886;
+
+/// Clocks between two of PinMAME's vertical blanks, at sixty a second.
+const VBLANK_CLOCKS: i32 = (CLOCK / 60) as i32;
+
+/// How many of those the solenoid sweep spans (`GTS80_SOLSMOOTH`).
+const SOLENOID_SWEEP: u32 = 4;
+
+/// And the display's, which is quicker because a score that lags is worse than
+/// one that flickers (`GTS80_DISPLAYSMOOTH`).
+const DISPLAY_SWEEP: u32 = 2;

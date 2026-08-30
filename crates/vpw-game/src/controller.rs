@@ -170,9 +170,20 @@ fn lamp_number(i: usize) -> u8 {
 /// matrix on a board of its own. What they share is what a table's script asks
 /// for — lamps, switches, coils — so that is what this offers and the rest
 /// answers for the family that has it.
+/// The one button behind a System 80's coin door, `swTest` (`sys80.vbs:23`).
+///
+/// A number in the ordinary switch matrix, because that is where its whole
+/// coin door lives: unlike a System 11, nothing on this board is wired
+/// straight to the CPU. There is no second button — a System 80 is set up by
+/// holding this one and watching the display, so the player's *advance* key
+/// has nothing to press.
+const GTS80_SELF_TEST: i32 = 7;
+
 enum Hardware {
     S11(Box<System11>),
     Whitestar(Box<vpw_ws::Whitestar>),
+    /// Gottlieb's System 80: a 6502 and three RIOTs. See [`vpw_gts80`].
+    Gts80(Box<vpw_gts80::Board>),
 }
 
 impl Hardware {
@@ -184,6 +195,7 @@ impl Hardware {
             Self::Whitestar(b) => {
                 b.run_seconds(seconds);
             }
+            Self::Gts80(b) => b.run_seconds(seconds),
         }
     }
 
@@ -194,6 +206,9 @@ impl Hardware {
             // its own firmware out of the game's ROMs, and its output comes
             // out at its rate rather than ours. See [`vpw_ws::sound`].
             Self::Whitestar(b) => b.take_audio_at(vpw_s11::DEFAULT_AUDIO_RATE),
+            // The sound board is a second 6502 on a card of its own and is not
+            // here yet. Silence, and the game plays.
+            Self::Gts80(_) => Vec::new(),
         }
     }
 
@@ -203,6 +218,7 @@ impl Hardware {
             // never a separate one to be missing.
             Self::S11(_) => (true, 0),
             Self::Whitestar(b) => b.sound_stats(),
+            Self::Gts80(_) => (false, 0),
         }
     }
 
@@ -210,6 +226,7 @@ impl Hardware {
         match self {
             Self::S11(b) => b.cmos().to_vec(),
             Self::Whitestar(b) => b.board.ram().to_vec(),
+            Self::Gts80(b) => b.cmos().to_vec(),
         }
     }
 
@@ -217,6 +234,7 @@ impl Hardware {
         match self {
             Self::S11(b) => b.lamp_lit(number),
             Self::Whitestar(b) => b.board.lamps.is_lit(number),
+            Self::Gts80(b) => b.mem.io.lamp_lit(usize::from(number)),
         }
     }
 
@@ -228,6 +246,9 @@ impl Hardware {
             // *because of* Lord of the Rings, whose modes flicker their lamps
             // as part of the artwork.
             Self::Whitestar(b) => f32::from(u8::from(b.board.lamps.is_lit(number))),
+            // A System 80's lamps are latched rather than strobed, so there is
+            // nothing to smooth: what the latch holds is what is on.
+            Self::Gts80(b) => f32::from(u8::from(b.mem.io.lamp_lit(usize::from(number)))),
         }
     }
 
@@ -239,6 +260,7 @@ impl Hardware {
         match self {
             Self::S11(b) => u8::try_from(number).is_ok_and(|n| b.switch_closed(n)),
             Self::Whitestar(b) => b.board.switches.is_closed(number),
+            Self::Gts80(b) => b.mem.io.switch_closed(number),
         }
     }
 
@@ -246,6 +268,10 @@ impl Hardware {
         match self {
             Self::S11(b) => u8::try_from(number).is_ok_and(|n| b.set_switch(n, closed)),
             Self::Whitestar(b) => b.board.switches.set(number, closed),
+            Self::Gts80(b) => {
+                b.mem.io.set_switch(number, closed);
+                true
+            }
         }
     }
 
@@ -267,6 +293,10 @@ impl Hardware {
         match self {
             Self::S11(_) => Door::of(number),
             Self::Whitestar(_) => None,
+            // A System 80 numbers its switches by position — 34 is column 3,
+            // row 4 — and its coin door is column 0 of that same matrix. There
+            // is nothing off to the side to route to.
+            Self::Gts80(_) => None,
         }
     }
 
@@ -274,6 +304,7 @@ impl Hardware {
         match self {
             Self::S11(b) => b.solenoids_active(),
             Self::Whitestar(b) => b.board.solenoids.live(),
+            Self::Gts80(b) => u32::from(b.mem.io.live),
         }
     }
 
@@ -281,6 +312,7 @@ impl Hardware {
         match self {
             Self::S11(b) => b.solenoid_fired(number),
             Self::Whitestar(b) => b.board.solenoids.is_on(number),
+            Self::Gts80(b) => b.mem.io.solenoid_on(number),
         }
     }
 
@@ -292,6 +324,8 @@ impl Hardware {
             // A Whitestar's are switches with numbers, not board inputs of
             // their own. See [`Hardware::set_diagnostic_up`].
             Self::Whitestar(b) => b.board.switches.is_closed(vpw_ws::io::SW_RED),
+            // And a System 80's is a number in its ordinary matrix.
+            Self::Gts80(b) => b.mem.io.switch_closed(GTS80_SELF_TEST),
         }
     }
 
@@ -299,6 +333,8 @@ impl Hardware {
         match self {
             Self::S11(b) => b.board.diagnostic_advance,
             Self::Whitestar(b) => b.board.switches.is_closed(vpw_ws::io::SW_BLACK),
+            // Nothing to press: see [`GTS80_SELF_TEST`].
+            Self::Gts80(_) => false,
         }
     }
 
@@ -319,6 +355,7 @@ impl Hardware {
             Self::Whitestar(b) => {
                 b.board.switches.set(vpw_ws::io::SW_RED, closed);
             }
+            Self::Gts80(b) => b.mem.io.set_switch(GTS80_SELF_TEST, closed),
         }
     }
 
@@ -331,6 +368,7 @@ impl Hardware {
             Self::Whitestar(b) => {
                 b.board.switches.set(vpw_ws::io::SW_BLACK, closed);
             }
+            Self::Gts80(_) => {}
         }
     }
 
@@ -344,6 +382,9 @@ impl Hardware {
         match self {
             Self::S11(_) => Vec::new(),
             Self::Whitestar(b) => vec![f32::from(u8::from(b.board.gi_relay))],
+            // A System 80's general illumination is not switched: it is on
+            // whenever the machine is.
+            Self::Gts80(_) => Vec::new(),
         }
     }
 
@@ -354,12 +395,14 @@ impl Hardware {
             // The filtered picture, not the raw pair of bits: a viewer wants
             // what the eye sees. See `vpw_ws::dmd::Pwm`.
             Self::Whitestar(b) => b.dmd_luminance(),
+            Self::Gts80(_) => None,
         }
     }
 
     fn segments(&self) -> Vec<u16> {
         match self {
             Self::S11(b) => b.segments(),
+            Self::Gts80(b) => b.segments(),
             // A Whitestar's score is a dot matrix driven by a second processor,
             // which is not here. An empty answer is the honest one: the script
             // asks what changed and nothing has.
@@ -456,13 +499,23 @@ impl Machine {
                 self.load_whitestar(det, cmos)?;
             }
             Which::Detect => {
-                let det = vpw_ws::games::detect(set, &images).ok_or_else(|| {
-                    format!(
-                        "'{set}' is not a set this emulator knows, and its zip                          is not shaped like a Whitestar set"
-                    )
-                })?;
-                log::trace!("'{set}': read from the zip's own shape");
-                self.load_whitestar(det, cmos)?;
+                // A System 80 first, because its shape is unmistakable and the
+                // Whitestar guess below is not: three ROMs, one of 2 KB named
+                // for the game and two of 4 KB named U2 and U3. Ice Fever came
+                // through the Whitestar path before this and was booted as one,
+                // which cost it its display and its sound and told nobody why.
+                if let Some(roms) = vpw_gts80::games::detect(&images) {
+                    log::trace!("'{set}': read as a System 80 from its own shape");
+                    self.load_gts80(&roms, cmos);
+                } else {
+                    let det = vpw_ws::games::detect(set, &images).ok_or_else(|| {
+                        format!(
+                            "'{set}' is not a set this emulator knows, and its zip                              is not shaped like a Whitestar set"
+                        )
+                    })?;
+                    log::trace!("'{set}': read from the zip's own shape");
+                    self.load_whitestar(det, cmos)?;
+                }
             }
         }
 
@@ -474,6 +527,20 @@ impl Machine {
         *self.seen_segments.borrow_mut() = [0; SEGMENTS];
         self.seen_gi.borrow_mut().clear();
         Ok(())
+    }
+
+    /// Gottlieb's System 80. See [`vpw_gts80`].
+    ///
+    /// The simplest of the three to build: there is no wiring table to consult
+    /// and no display or sound board to hand images to, because a System 80
+    /// has neither. Three ROMs go in and the machine is the machine.
+    fn load_gts80(&self, roms: &vpw_gts80::games::Roms<'_>, cmos: Option<&[u8]>) {
+        let mut board =
+            vpw_gts80::Board::new(roms.game.to_vec(), roms.u2.to_vec(), roms.u3.to_vec());
+        if let Some(saved) = cmos {
+            board.restore_cmos(saved);
+        }
+        *self.board.borrow_mut() = Hardware::Gts80(Box::new(board));
     }
 
     /// Sega and Stern's Whitestar. See [`vpw_ws`].
@@ -663,7 +730,7 @@ impl Machine {
             }
             // A Whitestar has no PIAs at all. Nothing to report and nothing
             // that reads this cares which board it is talking to.
-            Hardware::Whitestar(_) => (0, 0),
+            Hardware::Whitestar(_) | Hardware::Gts80(_) => (0, 0),
         }
     }
 
@@ -684,6 +751,13 @@ impl Machine {
                 let m = b.board.lamps.matrix();
                 [m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7]]
             }
+            // Twelve latches of four rather than eight columns of eight, so
+            // the first eight go across and the rest are not shown. What reads
+            // this is the diagnostic view, which was drawn for a System 11.
+            Hardware::Gts80(b) => {
+                let l = &b.mem.io.lamps;
+                [l[0], l[1], l[2], l[3], l[4], l[5], l[6], l[7]]
+            }
         }
     }
 
@@ -692,6 +766,7 @@ impl Machine {
         match &*self.board.borrow() {
             Hardware::S11(b) => b.board.lamp_drive(),
             Hardware::Whitestar(b) => ((b.board.lamps.column() & 0xff) as u8, b.board.lamps.rows()),
+            Hardware::Gts80(b) => (0, b.mem.riot[2].port_b_output()),
         }
     }
 
@@ -753,8 +828,9 @@ impl Machine {
         match &*self.board.borrow() {
             Hardware::S11(b) => b.board.solenoids.special_enabled(),
             // A Whitestar drives all thirty-two of its coils directly; there is
-            // no special bank and nothing to enable.
-            Hardware::Whitestar(_) => false,
+            // no special bank and nothing to enable. Nor does a System 80,
+            // whose nine coils are two enabled banks and a spare pin.
+            Hardware::Whitestar(_) | Hardware::Gts80(_) => false,
         }
     }
 
@@ -777,6 +853,10 @@ impl Machine {
         match &*self.board.borrow() {
             Hardware::S11(b) => b.board.solenoids.special_enabled(),
             Hardware::Whitestar(b) => b.board.fast_flip_addr.is_none() || b.board.fast_flips(),
+            // And a System 80 has the plainest wire of the three: the game-on
+            // relay, latch zero of the lamp board, which drops between balls
+            // and on a tilt and takes the flippers with it.
+            Hardware::Gts80(b) => b.mem.io.game_on(),
         }
     }
 
@@ -833,6 +913,10 @@ impl Machine {
             Hardware::S11(b) => (b.upper_display(), b.lower_display()),
             // The dot matrix is a board of its own and is not here yet.
             Hardware::Whitestar(_) => (String::new(), String::new()),
+            // Two banks of sixteen: players one and two on top, three and four
+            // below. The ball-and-credit strip is a third bank with no row to
+            // put it in here.
+            Hardware::Gts80(b) => (b.mem.displays.text(0), b.mem.displays.text(1)),
         }
     }
 
@@ -863,6 +947,7 @@ impl Machine {
         match &*self.board.borrow() {
             Hardware::S11(b) => b.board.sound_latch(),
             Hardware::Whitestar(b) => b.board.sound_latch,
+            Hardware::Gts80(b) => b.mem.io.sound_command,
         }
     }
 
