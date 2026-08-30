@@ -329,7 +329,7 @@ pub struct Item {
     pub timer: Timer,
     /// Where the part was placed and how big it is. Only a primitive has these
     /// as separate numbers; everything else keeps the defaults and never asks.
-    position: Vec3,
+    position: Cell<Vec3>,
     size: Vec3,
     /// How hard the ball has to arrive for a hit to count, along the collision
     /// normal (`THRS`).
@@ -379,7 +379,7 @@ impl Item {
     /// For naming a fault a player describes by position: VPX's y grows toward
     /// the player, so the bottom left of a table is small x and large y.
     pub fn position(&self) -> Vec3 {
-        self.position
+        self.position.get()
     }
 
     pub fn placement(&self) -> [f32; 9] {
@@ -392,7 +392,7 @@ impl Item {
     /// nothing has moved lands exactly where it was baked.
     pub fn placement_matrix(&self) -> vpw_math::Mat4 {
         vpw_table::geometry::primitive_transform_from_fields(
-            self.position,
+            self.position.get(),
             self.size,
             self.visual.rot_and_tra.get(),
         )
@@ -503,6 +503,18 @@ impl Object for Item {
         match specific {
             Ok(v) => Ok(v),
             Err(e) => {
+                // Where the part is, for every kind that does not keep its
+                // own. A flasher tracks a position the script moves and
+                // answers from that; a primitive, a bumper or a light answers
+                // from where the file put it.
+                //
+                // Circus measures its slingshot between two primitives and
+                // divides by the distance (`PSlope`, line 2194), so two parts
+                // that both answer zero are a division by zero on every
+                // slingshot hit.
+                if let Some(v) = self.position_get(&lower) {
+                    return Ok(v);
+                }
                 // Accepted rather than refused, for the reason in the module
                 // note: a real Visual Pinball part has every member, so
                 // answering "no such member" is the less faithful of the two
@@ -534,7 +546,7 @@ impl Object for Item {
             Kind::Plunger => self.plunger_set(&lower, &value),
             _ => Err(Error::no_such_member(name)),
         };
-        if specific.is_err() {
+        if specific.is_err() && !self.position_set(&lower, &value)? {
             self.remember(&lower, value);
         }
         Ok(())
@@ -542,6 +554,48 @@ impl Object for Item {
 }
 
 impl Item {
+    /// `X`, `Y` and `Z`: where the part sits, as the file places it.
+    ///
+    /// `None` for any other name. Only reached for a kind that does not answer
+    /// these itself — see [`Object::get`] on this type.
+    fn position_get(&self, name: &str) -> Option<Value> {
+        let at = self.position.get();
+        match name {
+            "x" => Some(Value::Double(at.x.into())),
+            "y" => Some(Value::Double(at.y.into())),
+            "z" => Some(Value::Double(at.z.into())),
+            _ => None,
+        }
+    }
+
+    /// Moves the part, as far as it can be moved.
+    ///
+    /// For a primitive that is the whole of it: [`Self::placement_matrix`]
+    /// builds from this, so the piece is drawn where the script put it. For a
+    /// part the physics owns, the collision shape stays where it was authored
+    /// — the same half-measure `RotX` on a bumper already is, and better than
+    /// a script writing a position that then reads back as the old one.
+    ///
+    /// Answers whether the name was one of the three.
+    fn position_set(&self, name: &str, value: &Value) -> Result<bool> {
+        // The name first. Reaching for the number before knowing whether this
+        // is even a position turns every unmodelled member a script writes a
+        // *string* to into a type mismatch, which is a table that no longer
+        // loads.
+        if !matches!(name, "x" | "y" | "z") {
+            return Ok(false);
+        }
+        let mut at = self.position.get();
+        let n = value.to_number()? as f32;
+        match name {
+            "x" => at.x = n,
+            "y" => at.y = n,
+            _ => at.z = n,
+        }
+        self.position.set(at);
+        Ok(true)
+    }
+
     /// A member we do not model, as it was last written.
     fn remembered(&self, name: &str) -> Value {
         self.visual
@@ -630,6 +684,7 @@ impl Item {
                 self.set_collidable(on && !v.dropped.get());
             }
             "isdropped" => self.set_dropped(value.to_bool()?),
+
             "enabled" if self.kind == Kind::Timer => {
                 self.timer.enabled.set(value.to_bool()?);
                 self.timer.due_ms.set(f64::NAN);
@@ -866,6 +921,27 @@ impl Item {
                 "friction" => Some(Value::Double(f.material.friction.into())),
                 "length" => Some(Value::Double(f.flipper_radius.into())),
                 "enabled" => Some(Value::Bool(true)),
+                // The six a table retunes, which is most of what a modern
+                // table's flipper block does. Reading one that is not here
+                // does not fail — it comes back `Empty`, which is zero — and
+                // Circus divides by `LeftFlipper.Return` on every key release
+                // (`Flipper.eostorque = EOST * EOSReturn / FReturn`).
+                "return" => Some(Value::Double(f.return_ratio.into())),
+                "rampup" => Some(Value::Double(f.ramp_up.into())),
+                "eostorque" => Some(Value::Double(f.torque_damping.into())),
+                // Degrees to the script, radians inside. The `.vpx` stores
+                // degrees and the original converts on the way in; the same
+                // conversion has to happen on the way back out or a table that
+                // reads the angle, does arithmetic on it and writes it back
+                // multiplies it by fifty-seven.
+                "eostorqueangle" => Some(Value::Double(f.torque_damping_angle.to_degrees().into())),
+                "scatter" => Some(Value::Double(f.material.scatter.to_degrees().into())),
+                // Mass is not stored; the moment of inertia is, and it is the
+                // mass of a bar turning about one end
+                // (`FlipperMover::GetMass`, `hitflipper.cpp`).
+                "mass" => Some(Value::Double(
+                    (3.0 * f.inertia / (f.flipper_radius * f.flipper_radius)).into(),
+                )),
                 _ => None,
             },
             _ => None,
@@ -905,6 +981,17 @@ impl Item {
             "strength" => f.strength = value.to_number()? as f32,
             "elasticity" => f.material.elasticity = value.to_number()? as f32,
             "friction" => f.material.friction = value.to_number()? as f32,
+            "return" => f.return_ratio = value.to_number()? as f32,
+            "rampup" => f.ramp_up = value.to_number()? as f32,
+            "eostorque" => f.torque_damping = value.to_number()? as f32,
+            "eostorqueangle" => {
+                f.torque_damping_angle = (value.to_number()? as f32).to_radians();
+            }
+            "scatter" => f.material.scatter = (value.to_number()? as f32).to_radians(),
+            "mass" => {
+                let m = value.to_number()? as f32;
+                f.inertia = m * f.flipper_radius * f.flipper_radius / 3.0;
+            }
             "endangle" => f.angle_end = (value.to_number()? as f32).to_radians(),
             "startangle" => f.angle_start = (value.to_number()? as f32).to_radians(),
             // The two the script uses to drive it directly.
@@ -1463,7 +1550,7 @@ impl Items {
                 shapes: collision.shapes_of(index).collect(),
                 trigger,
                 timer: item_timer(item),
-                position: item_position(item),
+                position: Cell::new(item_position(item)),
                 size: item_size(item),
                 hit_event,
                 threshold,
@@ -1745,11 +1832,34 @@ fn item_placement(item: &vpin::vpx::gameitem::GameItemEnum) -> [f32; 9] {
     }
 }
 
+/// Where a part sits, for every kind that has a single place to sit.
+///
+/// Not only primitives. A script reads `X` and `Y` off anything it can name —
+/// most often to work out where something is *relative* to something else, and
+/// two parts that both answer zero are in the same place. Circus measures its
+/// slingshot between two primitives and divides by the distance
+/// (`PSlope`, line 2194); with both ends at the origin that is a division by
+/// zero on every slingshot hit.
+///
+/// A wall, a ramp or a rubber is a run of points with no centre, and those
+/// stay at the origin because there is no better answer.
 fn item_position(item: &vpin::vpx::gameitem::GameItemEnum) -> Vec3 {
+    use vpin::vpx::gameitem::GameItemEnum as G;
+    let flat = |c: &vpin::vpx::gameitem::vertex2d::Vertex2D| Vec3::new(c.x, c.y, 0.0);
     match item {
-        vpin::vpx::gameitem::GameItemEnum::Primitive(p) => {
-            Vec3::new(p.position.x, p.position.y, p.position.z)
-        }
+        G::Primitive(p) => Vec3::new(p.position.x, p.position.y, p.position.z),
+        G::HitTarget(h) => Vec3::new(h.position.x, h.position.y, h.position.z),
+        G::Bumper(b) => flat(&b.center),
+        G::Flipper(f) => flat(&f.center),
+        G::Gate(g) => flat(&g.center),
+        G::Kicker(k) => flat(&k.center),
+        G::Light(l) => flat(&l.center),
+        G::Plunger(p) => flat(&p.center),
+        G::Spinner(s) => flat(&s.center),
+        G::Trigger(t) => flat(&t.center),
+        G::Decal(d) => flat(&d.center),
+        G::Timer(t) => flat(&t.center),
+        G::LightSequencer(l) => flat(&l.center),
         _ => Vec3::ZERO,
     }
 }

@@ -399,3 +399,89 @@ GetMaterial \"no such material\", a",
     );
     assert!(r.is_err(), "it should have refused");
 }
+
+/// The six numbers a modern table's flipper block reads and writes back.
+///
+/// Every one of them used to answer `Empty`, which is zero, and Circus divides
+/// by one of them on every key release:
+/// `Flipper.eostorque = EOST * EOSReturn / FReturn`.
+#[test]
+fn a_script_reads_the_numbers_a_flipper_is_tuned_by() {
+    let Some(l) = load() else { return };
+    let read = |expr: &str| {
+        let name = expr.replace('.', "_");
+        l.game
+            .script()
+            .load(&format!("Dim {name} : {name} = {expr}"))
+            .unwrap_or_else(|e| panic!("{expr}: {e}"));
+        l.game.script().get_global(&name).unwrap()
+    };
+
+    for m in ["Return", "RampUp", "EOSTorque", "EOSTorqueAngle", "Mass"] {
+        let v = read(&format!("LeftFlipper.{m}"));
+        let n = v
+            .to_number()
+            .unwrap_or_else(|_| panic!("{m} is not a number"));
+        assert!(
+            n > 0.0,
+            "LeftFlipper.{m} came back {n}, which divides badly"
+        );
+    }
+
+    // And what goes in comes back out, in the same units. The angle is the one
+    // that matters: it is degrees to a script and radians inside.
+    l.game
+        .script()
+        .load("LeftFlipper.EOSTorqueAngle = 6 : Dim back : back = LeftFlipper.EOSTorqueAngle")
+        .unwrap();
+    let back = l
+        .game
+        .script()
+        .get_global("back")
+        .unwrap()
+        .to_number()
+        .unwrap();
+    assert!(
+        (back - 6.0).abs() < 1e-3,
+        "the angle came back as {back}, not 6"
+    );
+}
+
+/// Where a part is, which a table uses to measure one part against another.
+#[test]
+fn a_script_can_ask_a_part_where_it_is() {
+    let Some(l) = load() else { return };
+    // Some named part that is not at the origin — a real table has many.
+    let named: Vec<String> = l
+        .game
+        .items()
+        .iter()
+        .map(|p| p.name.to_string())
+        .take(400)
+        .collect();
+    let mut placed = 0;
+    for name in &named {
+        // A name with a space or a bracket in it is not one a script can say.
+        if !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') || name.is_empty() {
+            continue;
+        }
+        let var = format!("__p_{name}");
+        if l.game
+            .script()
+            .load(&format!("Dim {var} : {var} = {name}.X"))
+            .is_err()
+        {
+            continue;
+        }
+        if l.game
+            .script()
+            .get_global(&var)
+            .and_then(|v| v.to_number().ok())
+            .unwrap_or(0.0)
+            != 0.0
+        {
+            placed += 1;
+        }
+    }
+    assert!(placed > 0, "not one part on the table knew where it was");
+}
