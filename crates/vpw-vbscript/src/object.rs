@@ -59,6 +59,36 @@ pub trait Object {
         self.get(name, args)
     }
 
+    /// Calls a method that answers by **writing into its arguments**.
+    ///
+    /// `ByRef` is not only how VBScript passes things cheaply. For a few of the
+    /// player's own methods it is the only way an answer comes back at all:
+    ///
+    /// ```vbscript
+    /// GetMaterial "Rubber", w, r, g, t, e, ea, o, b, gl, cc, im, oa, el, ef, f, sa
+    /// ```
+    ///
+    /// returns nothing and fills sixteen variables, which is how a table saves
+    /// a material before it tints it and how it puts the material back
+    /// afterwards.
+    ///
+    /// `None` — the default — means this member does not do that, and the
+    /// interpreter dispatches it the ordinary way. `Some` means the member has
+    /// written whatever it wants into `args`, and the interpreter copies each
+    /// one back into the expression it came from. Arguments that are not
+    /// something a script could assign to — a literal, a sum — are left where
+    /// they are, which is what the real engine does with a temporary.
+    ///
+    /// The reason this exists rather than the interpreter simply handing over
+    /// the caller's cells: an object here is reached re-entrantly and holds no
+    /// borrow across a call, and lending it a `RefCell` that the script can
+    /// also reach is how a table deadlocks. Copy in, write, copy out — which
+    /// is also, exactly, what the `VARIANT*` out-parameters being modelled do.
+    fn call_out(&self, name: &str, args: &mut [Value]) -> Option<Result<Value>> {
+        let _ = (name, args);
+        None
+    }
+
     /// The value the object stands for when it lands in an expression.
     ///
     /// In COM this is the `DISPID_VALUE` member. Most objects do not have one,

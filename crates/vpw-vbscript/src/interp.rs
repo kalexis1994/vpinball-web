@@ -967,12 +967,18 @@ impl Interpreter {
         match base {
             Expr::Member { base: b, name } => {
                 let obj = self.eval(b)?;
-                let a = self.eval_args(args)?;
+                let mut a = self.eval_args(args)?;
+                if let Some(v) = self.write_back(&obj, name, args, &mut a) {
+                    return v;
+                }
                 return self.get_member(&obj, name, &a);
             }
             Expr::WithMember { name } => {
                 let obj = self.current_with()?;
-                let a = self.eval_args(args)?;
+                let mut a = self.eval_args(args)?;
+                if let Some(v) = self.write_back(&obj, name, args, &mut a) {
+                    return v;
+                }
                 return self.get_member(&obj, name, &a);
             }
             _ => {}
@@ -998,7 +1004,10 @@ impl Interpreter {
                         return self.invoke(&p, &slots, self.current_me());
                     }
                     v if v.is_object() => {
-                        let a = self.eval_args(args)?;
+                        let mut a = self.eval_args(args)?;
+                        if let Some(r) = self.write_back(&v, "", args, &mut a) {
+                            return r;
+                        }
                         return self.get_member(&v, "", &a);
                     }
                     // Anything else: fall through to the procedure lookup
@@ -1021,12 +1030,17 @@ impl Interpreter {
                 return self.invoke(&p, &slots, self.current_me());
             }
             // Then a builtin.
-            let a = self.eval_args(args)?;
+            let mut a = self.eval_args(args)?;
             if let Some(v) = self.call_builtin(name, &a)? {
                 return Ok(v);
             }
-            // Then something the host owns.
+            // Then something the host owns. This is the road `GetMaterial x,
+            // a, b, …` comes down: a global of the host's, reached through its
+            // default member, with sixteen variables to fill.
             if let Some(v) = self.host_global(name) {
+                if let Some(r) = self.write_back(&v, "", args, &mut a) {
+                    return r;
+                }
                 return self.get_member(&v, "", &a);
             }
             return Err(Error::undefined_procedure(name));
@@ -1078,12 +1092,18 @@ impl Interpreter {
         if let Expr::Index { base, args } = e {
             if let Expr::Member { base: b, name } = &**base {
                 let obj = self.eval(b)?;
-                let a = self.eval_args(args)?;
+                let mut a = self.eval_args(args)?;
+                if let Some(v) = self.write_back(&obj, name, args, &mut a) {
+                    return v;
+                }
                 return self.call_member(&obj, name, &a);
             }
             if let Expr::WithMember { name } = &**base {
                 let obj = self.current_with()?;
-                let a = self.eval_args(args)?;
+                let mut a = self.eval_args(args)?;
+                if let Some(v) = self.write_back(&obj, name, args, &mut a) {
+                    return v;
+                }
                 return self.call_member(&obj, name, &a);
             }
         }
@@ -1099,6 +1119,44 @@ impl Interpreter {
                 Some(e) => self.eval(e),
             })
             .collect()
+    }
+
+    /// Offers a call to a host object that answers by writing into its
+    /// arguments, and copies what it wrote back to the caller.
+    ///
+    /// `None` means the object did not want the call on those terms and the
+    /// caller should dispatch it the ordinary way — with the same `values`,
+    /// which is why they are evaluated by the caller and lent here. Evaluating
+    /// them twice would run their side effects twice.
+    ///
+    /// What comes back is written to each argument that a script could have
+    /// assigned to. Anything else — a literal, a sum, a call — is skipped: it
+    /// has nowhere to be written, exactly as when a script passes one to a
+    /// `ByRef` parameter.
+    fn write_back(
+        &self,
+        obj: &Value,
+        name: &str,
+        args: &[Arg],
+        values: &mut [Value],
+    ) -> Option<Result<Value>> {
+        let Value::Object(o) = obj else {
+            return None;
+        };
+        let answer = o.call_out(name, values)?;
+        if answer.is_err() {
+            return Some(answer);
+        }
+        for (a, v) in args.iter().zip(values.iter()) {
+            let Some(e) = a else { continue };
+            if !assignable(e) {
+                continue;
+            }
+            if let Err(e) = self.assign_to(e, v.clone(), v.is_object()) {
+                return Some(Err(e));
+            }
+        }
+        Some(answer)
     }
 
     /// Evaluates arguments for a call, keeping `ByRef` ones aliased.
@@ -1170,15 +1228,6 @@ impl Interpreter {
         }) {
             let slots: Vec<Slot> = args.iter().map(|a| slot(a.clone())).collect();
             return self.invoke(&p, &slots, Some(inst.clone()));
-        }
-        // No name at all: the instance is being used where a value is wanted,
-        // or called outright — `Set d = (new DropTarget)(a, b, c)`. What runs
-        // is whichever member the class marked `Public Default`.
-        if name.is_empty()
-            && let Some(p) = inst.def.members.iter().find(|p| p.is_default)
-        {
-            let slots: Vec<Slot> = args.iter().map(|a| slot(a.clone())).collect();
-            return self.invoke(p, &slots, Some(inst.clone()));
         }
         // No name at all: the instance is being used where a value is wanted,
         // or called outright — `Set d = (new DropTarget)(a, b, c)`. What runs
@@ -1759,4 +1808,17 @@ impl Interpreter {
         *self.last_rnd.borrow_mut() = r;
         r
     }
+}
+
+/// Whether an expression is something a script could have assigned to, and so
+/// somewhere a `ByRef` answer can be written.
+///
+/// A bare name, a member, a subscript. Not a literal and not anything
+/// computed: `GetMaterial "Rubber", 0, x + 1` has two arguments with nowhere
+/// to put an answer, and the real engine quietly writes into a temporary.
+fn assignable(e: &Expr) -> bool {
+    matches!(
+        e,
+        Expr::Ident(_) | Expr::Member { .. } | Expr::WithMember { .. } | Expr::Index { .. }
+    )
 }

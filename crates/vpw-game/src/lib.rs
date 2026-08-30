@@ -355,6 +355,11 @@ pub struct GameState {
     pub tints: RefCell<HashMap<String, [f32; 3]>>,
     /// Materials the script rewrote with `UpdateMaterial`, by folded name.
     materials: RefCell<HashMap<String, MaterialChange>>,
+    /// Every material as the table's author left it, by folded name. What
+    /// `GetMaterial` answers with, once the script's own changes are laid over
+    /// it. Taken at load, before a line of script has run, because that is the
+    /// only moment it is still true.
+    authored: HashMap<String, Authored>,
 }
 
 impl GameState {
@@ -381,6 +386,39 @@ impl Game {
         resources: Resources,
     ) -> Result<Self, VbError> {
         let g = &vpx.gamedata;
+        // Before anything: what every material *was*. `apply_material_changes`
+        // writes into this same scene later, so read now or not at all.
+        let authored: HashMap<String, Authored> = scene
+            .materials
+            .iter()
+            .map(|m| {
+                let (elasticity, elasticity_falloff, friction, scatter_angle) =
+                    vpw_table::physics::material_physics(vpx, &m.name).unwrap_or_default();
+                (
+                    m.name.to_lowercase(),
+                    Authored {
+                        look: MaterialChange {
+                            wrap_lighting: m.wrap_lighting,
+                            roughness: m.roughness,
+                            glossy_image_lerp: m.glossy_image_lerp,
+                            thickness: m.thickness,
+                            edge: m.edge,
+                            edge_alpha: m.edge_alpha,
+                            opacity: m.opacity,
+                            base_color: m.base_color,
+                            glossy_color: m.glossy_color,
+                            clearcoat_color: m.clearcoat_color,
+                            is_metal: m.is_metal,
+                            opacity_active: m.opacity_active,
+                        },
+                        elasticity,
+                        elasticity_falloff,
+                        friction,
+                        scatter_angle,
+                    },
+                )
+            })
+            .collect();
         let collision = vpw_table::physics::build_with_owners(vpx);
 
         // The table's own slope and its own gravity, not the maximum and a
@@ -447,6 +485,7 @@ impl Game {
             controller: RefCell::new(None),
             values: RefCell::new(HashMap::new()),
             materials: RefCell::new(HashMap::new()),
+            authored,
         });
 
         // Filled after the state exists, because a collection holds the same
@@ -1817,7 +1856,16 @@ impl TableHost {
             // does not, which is worth having on its own; what it costs is the
             // room-brightness feature a few tables build on top, which will
             // save a colour of nothing and tint towards it.
-            "getmaterial" => Some(Value::Object(Rc::new(crate::controller::Chainable))),
+            "getmaterial" => Some(Value::Object(Rc::new(GetMaterial {
+                state: self.state.clone(),
+                physics_only: false,
+            }))),
+            // Four of the sixteen, for a table that only wants to know how
+            // bouncy something is (`ScriptGlobalTable.cpp:815`).
+            "getmaterialphysics" => Some(Value::Object(Rc::new(GetMaterial {
+                state: self.state.clone(),
+                physics_only: true,
+            }))),
             // The same idea with one argument instead of sixteen: repaint a
             // material and leave everything else about it alone
             // (`ScriptGlobalTable.cpp:757`). A table uses it to tint its
@@ -2337,6 +2385,131 @@ struct MaterialChange {
     clearcoat_color: [f32; 3],
     is_metal: bool,
     opacity_active: bool,
+}
+
+/// A material as the table's author left it: the twelve numbers that describe
+/// how it looks and the four that describe how it bounces.
+#[derive(Debug, Clone, Copy)]
+struct Authored {
+    look: MaterialChange,
+    elasticity: f32,
+    elasticity_falloff: f32,
+    friction: f32,
+    /// In **degrees**, which is the unit a script reads and writes.
+    scatter_angle: f32,
+}
+
+/// `GetMaterial(name, …)` and `GetMaterialPhysics(name, …)`: the read half of
+/// the material pair (`ScriptGlobalTable.cpp:759` and `:815`).
+///
+/// Both answer entirely through by-reference arguments — sixteen of them, or
+/// four — and return nothing at all. See [`Object::call_out`], which exists
+/// for this.
+///
+/// A table uses it in one shape, over and over: save a material, tint it,
+/// and put it back when the light comes down.
+///
+/// ```vbscript
+/// GetMaterial "Plastics", w, r, gil, t, e, ea, o, b, g, cc, im, oa, el, ef, f, sa
+/// UpdateMaterial "Plastics", w, r, gil, t, e, ea, o, Dim(b, 0.4), g, cc, im, oa
+/// ```
+///
+/// Without the first line the second one writes zeros, and the room goes
+/// black instead of dim. That is the whole reason this is here.
+struct GetMaterial {
+    state: Rc<GameState>,
+    physics_only: bool,
+}
+
+impl GetMaterial {
+    /// Writes the answers into `args`, which the interpreter then copies back
+    /// into the caller's variables.
+    ///
+    /// Only as many as the script actually passed: a table that wants four of
+    /// the sixteen passes four, and reaching past them would be writing into
+    /// nothing.
+    fn fill(&self, args: &mut [Value]) -> VbResult<Value> {
+        let Some(first) = args.first() else {
+            return Err(VbError::invalid_call());
+        };
+        let name = first.to_str()?.to_lowercase();
+        let Some(m) = self.state.authored.get(&name) else {
+            // The original looks the name up, finds the dummy material, and
+            // returns `E_FAIL` — a table asking about a material it does not
+            // have is a table with a typo in it, and saying so is kinder than
+            // handing back a plausible-looking nothing.
+            return Err(VbError::new(
+                5,
+                format!("no material named '{}'", first.to_str()?),
+            ));
+        };
+
+        // What the script has done to it since. The same order as
+        // [`Game::apply_material_changes`]: a repaint goes on first, a
+        // wholesale rewrite wins over it.
+        let mut look = m.look;
+        if let Some(tint) = self.state.tints.borrow().get(&name) {
+            look.base_color = *tint;
+        }
+        if let Some(change) = self.state.materials.borrow().get(&name) {
+            look = *change;
+        }
+
+        let out: Vec<Value> = if self.physics_only {
+            vec![
+                Value::from_number(f64::from(m.elasticity)),
+                Value::from_number(f64::from(m.elasticity_falloff)),
+                Value::from_number(f64::from(m.friction)),
+                Value::from_number(f64::from(m.scatter_angle)),
+            ]
+        } else {
+            vec![
+                Value::from_number(f64::from(look.wrap_lighting)),
+                Value::from_number(f64::from(look.roughness)),
+                Value::from_number(f64::from(look.glossy_image_lerp)),
+                Value::from_number(f64::from(look.thickness)),
+                Value::from_number(f64::from(look.edge)),
+                Value::from_number(f64::from(look.edge_alpha)),
+                Value::from_number(f64::from(look.opacity)),
+                Value::Long(pack(look.base_color)),
+                Value::Long(pack(look.glossy_color)),
+                Value::Long(pack(look.clearcoat_color)),
+                Value::Bool(look.is_metal),
+                Value::Bool(look.opacity_active),
+                Value::from_number(f64::from(m.elasticity)),
+                Value::from_number(f64::from(m.elasticity_falloff)),
+                Value::from_number(f64::from(m.friction)),
+                Value::from_number(f64::from(m.scatter_angle)),
+            ]
+        };
+        for (slot, v) in args[1..].iter_mut().zip(out) {
+            *slot = v;
+        }
+        Ok(Value::Empty)
+    }
+}
+
+impl Object for GetMaterial {
+    fn type_name(&self) -> &'static str {
+        "GetMaterial"
+    }
+
+    fn call_out(&self, _name: &str, args: &mut [Value]) -> Option<VbResult<Value>> {
+        Some(self.fill(args))
+    }
+
+    /// Reached only if something calls it without offering the arguments back
+    /// — there is nowhere to put an answer, so there is no answer.
+    fn get(&self, _name: &str, _args: &[Value]) -> VbResult<Value> {
+        Ok(Value::Empty)
+    }
+}
+
+/// Three channels back into the long a script reads a colour as: `0x00BBGGRR`,
+/// which is red in the low byte however it is usually said aloud.
+fn pack(c: [f32; 3]) -> i32 {
+    let byte = |v: f32| ((v.clamp(0.0, 1.0) * 255.0).round() as u32) & 0xff;
+    (byte(c[0]) | (byte(c[1]) << 8) | (byte(c[2]) << 16)) as i32
 }
 
 /// `MaterialColor(name, colour)`: repaint one material and change nothing

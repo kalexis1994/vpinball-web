@@ -333,3 +333,69 @@ fn the_clock_a_script_reads_actually_runs() {
         "PreciseGameTime is in seconds: {precise} against {millis} ms"
     );
 }
+
+/// The shape every room-brightness routine is built on: save a material,
+/// change it, put it back.
+///
+/// `GetMaterial` answers only through by-reference arguments, and for a long
+/// time it answered nothing at all — so the `UpdateMaterial` that follows it
+/// wrote sixteen zeros and the table went black instead of dim. The proof that
+/// it works is that the numbers survive the round trip.
+#[test]
+fn a_script_can_save_a_material_and_put_it_back() {
+    let Some(l) = load() else { return };
+    let name = l
+        .scene
+        .materials
+        .first()
+        .map(|m| m.name.clone())
+        .expect("a real table has materials");
+
+    l.game
+        .script()
+        .load(&format!(
+            "Dim w, r, g, t, e, ea, o, b, gl, cc, im, oa, el, ef, f, sa
+             GetMaterial \"{name}\", w, r, g, t, e, ea, o, b, gl, cc, im, oa, el, ef, f, sa
+             Dim before : before = b
+             UpdateMaterial \"{name}\", w, r, g, t, e, ea, o, b, gl, cc, im, oa
+             GetMaterial \"{name}\", w, r, g, t, e, ea, o, b, gl, cc, im, oa, el, ef, f, sa"
+        ))
+        .expect("the round trip should run");
+
+    let n = |v: &str| {
+        l.game
+            .script()
+            .get_global(v)
+            .unwrap_or_else(|| panic!("'{v}' was never set"))
+            .to_number()
+            .unwrap()
+    };
+
+    // The colour came back as a number, and writing it back and reading it
+    // again did not move it.
+    assert_eq!(n("b"), n("before"), "the base colour did not survive");
+    // A colour is an OLE long: three bytes, red lowest.
+    assert!(
+        (0.0..=16_777_215.0).contains(&n("b")),
+        "{} is not a colour",
+        n("b")
+    );
+    // And the rest are the numbers a material is made of, not sixteen zeros
+    // — at least one of them has to be something.
+    let any = ["w", "r", "g", "t", "e", "ea", "o", "el", "ef", "f", "sa"]
+        .iter()
+        .any(|v| n(v) != 0.0);
+    assert!(any, "every value came back zero, which is the old bug");
+}
+
+/// A material the table does not have is a typo, and the original says so
+/// rather than handing back a plausible nothing.
+#[test]
+fn asking_for_a_material_that_is_not_there_fails() {
+    let Some(l) = load() else { return };
+    let r = l.game.script().load(
+        "Dim a
+GetMaterial \"no such material\", a",
+    );
+    assert!(r.is_err(), "it should have refused");
+}

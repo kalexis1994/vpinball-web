@@ -797,10 +797,30 @@ impl Object for Flipper {
     }
 }
 
+/// Answers the way `GetMaterial` does: through its arguments, returning
+/// nothing.
+struct Fills;
+
+impl Object for Fills {
+    fn type_name(&self) -> &'static str {
+        "Fills"
+    }
+    fn call_out(&self, _name: &str, args: &mut [Value]) -> Option<Result<Value>> {
+        // Everything after the first argument, counting up from ten.
+        for (i, a) in args.iter_mut().skip(1).enumerate() {
+            *a = Value::Long(10 + i as i32);
+        }
+        Some(Ok(Value::Empty))
+    }
+}
+
 impl Host for TestHost {
     fn global(&self, name: &str) -> Option<Value> {
         if name.eq_ignore_ascii_case("LeftFlipper") {
             return Some(Value::Object(self.flipper.clone()));
+        }
+        if name.eq_ignore_ascii_case("Fills") {
+            return Some(Value::Object(Rc::new(Fills)));
         }
         None
     }
@@ -1400,4 +1420,66 @@ fn the_table_clock_is_not_the_wall_clock() {
     let (i, _) = with_host();
     i.load("Dim t: t = Timer").unwrap();
     assert_eq!(i.get_global("t").unwrap().to_number().unwrap(), 1234.5);
+}
+
+/// A host method whose answer comes back through its arguments, which is the
+/// only way `GetMaterial` answers at all.
+#[test]
+fn a_host_method_writes_back_to_its_arguments() {
+    let (i, _) = with_host();
+    i.load(
+        "Dim a, b, c
+Fills \"x\", a, b, c",
+    )
+    .unwrap();
+    assert_eq!(i.get_global("a").unwrap().to_number().unwrap(), 10.0);
+    assert_eq!(i.get_global("b").unwrap().to_number().unwrap(), 11.0);
+    assert_eq!(i.get_global("c").unwrap().to_number().unwrap(), 12.0);
+}
+
+/// Only as far as the script reached: three arguments, three answers.
+#[test]
+fn a_write_back_stops_where_the_arguments_do() {
+    let (i, _) = with_host();
+    i.load(
+        "Dim a
+Fills \"x\", a",
+    )
+    .unwrap();
+    assert_eq!(i.get_global("a").unwrap().to_number().unwrap(), 10.0);
+}
+
+/// An argument with nowhere to put an answer is left alone rather than being
+/// an error, which is what the real engine does with a temporary.
+#[test]
+fn a_write_back_skips_what_cannot_be_assigned_to() {
+    let (i, _) = with_host();
+    i.load(
+        "Dim a, b
+a = 1
+Fills \"x\", a + 1, b",
+    )
+    .unwrap();
+    // `a + 1` was a temporary and `a` is untouched; `b` got the second answer.
+    assert_eq!(i.get_global("a").unwrap().to_number().unwrap(), 1.0);
+    assert_eq!(i.get_global("b").unwrap().to_number().unwrap(), 11.0);
+}
+
+/// Into an array element, which a table uses to save a set of materials in a
+/// loop.
+#[test]
+fn a_write_back_reaches_an_array_element() {
+    let (i, _) = with_host();
+    i.load(
+        "Dim a(3)
+Fills \"x\", a(0), a(1)",
+    )
+    .unwrap();
+    let arr = i.get_global("a").unwrap();
+    let vpw_vbscript::Value::Array(arr) = arr else {
+        panic!("expected an array");
+    };
+    let read = |n: i32| arr.borrow().get(&[n]).unwrap().to_number().unwrap();
+    assert_eq!(read(0), 10.0);
+    assert_eq!(read(1), 11.0);
 }

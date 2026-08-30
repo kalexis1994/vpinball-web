@@ -46,6 +46,40 @@ fn material(
     find_material(vpx, material_name.unwrap_or(""))
 }
 
+/// The physics a named material was authored with, in the units a *script*
+/// reads and writes: degrees for the scatter, not radians.
+///
+/// `None` when the table has no material by that name, which is the answer
+/// `GetMaterialPhysics` needs — the original compares the lookup against the
+/// dummy material and fails (`ScriptGlobalTable.cpp:822`) rather than handing
+/// back the table's defaults. Those defaults are right for a *piece* that
+/// names no material, which is what [`find_material`] is for, and wrong for a
+/// script asking about a material by name.
+pub fn material_physics(vpx: &VPX, name: &str) -> Option<(f32, f32, f32, f32)> {
+    if let Some(modern) = &vpx.gamedata.materials
+        && let Some(m) = modern.iter().find(|m| m.name.eq_ignore_ascii_case(name))
+    {
+        return Some((
+            m.elasticity,
+            m.elasticity_falloff,
+            m.friction,
+            m.scatter_angle,
+        ));
+    }
+    let old = vpx.gamedata.materials_physics_old.as_ref()?;
+    old.iter()
+        .zip(vpx.gamedata.materials_old.iter())
+        .find(|(_, n)| n.name.eq_ignore_ascii_case(name))
+        .map(|(m, _)| {
+            (
+                m.elasticity,
+                m.elasticity_falloff,
+                m.friction,
+                m.scatter_angle,
+            )
+        })
+}
+
 /// Looks up a physics material by name, case-insensitively.
 fn find_material(vpx: &VPX, name: &str) -> PhysMaterial {
     if let Some(modern) = &vpx.gamedata.materials
