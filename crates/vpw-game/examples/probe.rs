@@ -220,6 +220,105 @@ fn main() {
         game.machine().is_running()
     );
 
+    // PROBE_PLAY=1 plays the table: let the board finish booting, put a coin
+    // in, press start, pull the plunger, and listen.
+    //
+    // This is the test the bench harness cannot do. A System 80 says nothing
+    // in attract; its sounds belong to game events, and a game event is a ball
+    // hitting something. Closing switches by hand at a machine with no ball in
+    // it is not the same thing and never was.
+    if std::env::var("PROBE_PLAY").is_ok() {
+        let frames = |game: &mut Game, n: u32| {
+            for _ in 0..n {
+                for _ in 0..17 {
+                    game.step();
+                }
+                game.new_frame();
+            }
+        };
+        let press = |game: &mut Game, key: &str| {
+            game.key(key, true);
+            game.key(key, false);
+        };
+
+        // The board is not awake at two seconds and is by fifteen.
+        frames(&mut game, 60 * 25);
+        let say = |game: &Game, when: &str| {
+            let (top, bottom) = game.machine().displays();
+            println!(
+                "-- {when}: rom {} , game on {} , display [{}] [{}] --",
+                game.machine().is_running(),
+                game.machine().flippers_enabled(),
+                top.trim_end(),
+                bottom.trim_end()
+            );
+        };
+        say(&game, "after 25s");
+        // A ball where the machine can find it. Without one a System 80 will
+        // not start a game however many coins it is given — the table's own
+        // trough switch is closed by a ball resting in it, and there is no
+        // ball until the game serves one, which is the circle this breaks.
+        let _ = game.script().load("Controller.Switch(67) = 1");
+        frames(&mut game, 60);
+        press(&mut game, "Digit5");
+        frames(&mut game, 120);
+        // Does a switch written through the controller come back?
+        let _ = game
+            .script()
+            .load("Dim __sw : __sw = Controller.Switch(67)");
+        println!(
+            "-- the trough switch reads back as {:?} --",
+            game.script().get_global("__sw")
+        );
+        say(&game, "after the coin");
+        // And again straight at the machine, going round the script. If this
+        // starts a game and the key did not, the break is between the two.
+        if game.machine().flippers_enabled() {
+            // already on
+        } else {
+            // Coin 37 and start 47, which is what `sys80.vbs` calls them and
+            // what the bench harness uses.
+            for _ in 0..3 {
+                let _ = game.script().load("Controller.Switch(37) = 1");
+                frames(&mut game, 12);
+                let _ = game.script().load("Controller.Switch(37) = 0");
+                frames(&mut game, 24);
+            }
+            say(&game, "after three coins");
+            let _ = game.script().load("Controller.Switch(47) = 1");
+            frames(&mut game, 18);
+            let _ = game.script().load("Controller.Switch(47) = 0");
+            frames(&mut game, 120);
+            say(&game, "after start");
+        }
+        press(&mut game, "Digit1");
+        frames(&mut game, 180);
+        say(&game, "after start");
+        // A ball to play with, and the plunger to send it up.
+        game.new_ball();
+        frames(&mut game, 60);
+        press(&mut game, "Space");
+
+        let mut heard: Vec<u8> = Vec::new();
+        let mut loud = 0.0f32;
+        let mut out = vec![0.0f32; 1024];
+        for _ in 0..60 * 30 {
+            for _ in 0..17 {
+                game.step();
+            }
+            game.new_frame();
+            game.render_audio(&mut out);
+            loud = loud.max(out.iter().fold(0.0f32, |a, b| a.max(b.abs())));
+            let c = game.machine().sound_latch();
+            if c != 0 && !heard.contains(&c) {
+                heard.push(c);
+            }
+        }
+        println!("-- played 30s: commands heard {heard:02x?}, loudest {loud:.4} --");
+        let (_, made) = game.machine().sound_stats();
+        println!("-- the card made {made} samples --");
+    }
+
     // The same questions again, now that the table has been running: a lamp
     // that fades up takes a second or two to get there.
     for (i, expr) in std::env::args().skip(2).enumerate() {

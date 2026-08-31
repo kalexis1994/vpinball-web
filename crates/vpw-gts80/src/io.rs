@@ -83,12 +83,23 @@ pub struct Io {
 
     /// The four banks of dip switches, as the operator set them.
     ///
-    /// All thirty-two off to start with. MAME's own port has a scattering of
-    /// them on, but VPinMAME — which is what every table here is written
-    /// against — reads them from its per-game settings and defaults those to
-    /// zero (`core.c:2351`), so zero is what a table author has been looking
-    /// at. The machine plays either way; what changes is how many coins a
-    /// credit costs on each of the three chutes.
+    /// The settings a System 80 leaves the factory with, which is what the
+    /// reference ships (`gts80.h`, `GTS80_DIPS`): S2, S9, S10, S16, S17, S18,
+    /// S20, S21, S23, S24 and the whole of S25–S32.
+    ///
+    /// These used to be thirty-two zeros, on the reasoning that VPinMAME
+    /// defaults its per-game settings that way and that the only thing a dip
+    /// changes is how many coins a credit costs. The second half of that was
+    /// wrong, and expensively: **with every switch off, Circus plays a whole
+    /// game in silence.** The board never raises the sound strobe — bit 4 of
+    /// the port it shares with the solenoids, the only bit of that port the
+    /// firmware never touched — and the card is never asked for anything. Set
+    /// them as the factory did and the same game sends command 0x05 and the
+    /// card plays.
+    ///
+    /// Which is worth remembering the shape of: the machine booted, lit its
+    /// displays, took a coin, started a game and ran a ball, and was silent,
+    /// and nothing in the sound path was wrong.
     pub dips: [u8; 4],
 
     /// The last command written to the sound board, and whether it is new.
@@ -116,7 +127,9 @@ impl Io {
             seen: 0,
             reported: 0,
             inverted: 0,
-            dips: [0; 4],
+            // S1-S8, S9-S16, S17-S24, S25-S32, each bank the way the port
+            // reads it. See the field.
+            dips: [0x02, 0x83, 0xDB, 0xFF],
             sound_command: 0,
             sound_port_seen: 0,
             sound_pending: false,
