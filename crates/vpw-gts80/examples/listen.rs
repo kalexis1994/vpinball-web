@@ -166,6 +166,11 @@ fn main() {
     }
     take(&mut board, &mut wav, "start");
     println!("       commands heard: {heard:02x?}");
+    println!(
+        "       every bit ever put on that port: {:#04x}, direction now {:#04x}",
+        board.mem.io.sound_port_seen,
+        board.mem.riot[2].ddr_a()
+    );
 
     // The one line that says whether any of this worked: the game-on relay,
     // which a table reads as solenoid 10 and without which no flipper moves.

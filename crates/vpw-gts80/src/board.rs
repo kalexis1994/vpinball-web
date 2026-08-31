@@ -201,6 +201,7 @@ impl System80 {
         // came to have thirty-two. Which latch lends the bit — and whether a
         // command is sent at all when the enable is low — changed with the
         // 80B, whose sound card is a different card.
+        self.io.sound_port_seen |= data;
         let full = match self.generation {
             Generation::Bcd => {
                 let command = if data & 0x10 != 0 { data & 0x0F } else { 0 };

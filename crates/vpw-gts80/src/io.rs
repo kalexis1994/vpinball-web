@@ -93,6 +93,11 @@ pub struct Io {
 
     /// The last command written to the sound board, and whether it is new.
     pub sound_command: u8,
+    /// Every bit the game board has ever put on the port the sound command
+    /// shares, OR'd together. For asking whether firmware ever raises the
+    /// strobe at all: a machine that plays nothing and a machine that is never
+    /// asked look the same from the card.
+    pub sound_port_seen: u8,
     pub sound_pending: bool,
 }
 
@@ -113,6 +118,7 @@ impl Io {
             inverted: 0,
             dips: [0; 4],
             sound_command: 0,
+            sound_port_seen: 0,
             sound_pending: false,
         }
     }

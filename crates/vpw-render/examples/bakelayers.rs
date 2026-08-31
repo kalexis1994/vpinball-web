@@ -124,6 +124,20 @@ fn main() {
         }
         let mean = sum / count.max(1) as f32;
         println!(
+            "   atlas {} is {}x{}; uv {:.4}..{:.4} , {:.4}..{:.4} -> x {}..{} y {}..{}",
+            m.image,
+            img.width(),
+            img.height(),
+            lo[0],
+            hi[0],
+            lo[1],
+            hi[1],
+            x0,
+            x1,
+            y0,
+            y1
+        );
+        println!(
             "{:<38} {:>5}x{:<5} covered {:>5.1}%   adds {:.4}",
             m.name,
             x1 - x0 + 1,
