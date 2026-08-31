@@ -170,4 +170,31 @@ fn main() {
             );
         }
     }
+
+    // The base and three of its layers, side by side: same geometry, and the
+    // question is whether they read the same texels.
+    for m in &scene.meshes {
+        let want = m.name == "BM_Playfield"
+            || (m.name.starts_with("LM_") && m.name.ends_with("_Playfield"));
+        if !want {
+            continue;
+        }
+        let (mut ulo, mut uhi) = ([f32::MAX; 2], [f32::MIN; 2]);
+        for v in &m.vertices {
+            for c in 0..2 {
+                ulo[c] = ulo[c].min(v.uv[c]);
+                uhi[c] = uhi[c].max(v.uv[c]);
+            }
+        }
+        println!(
+            "{:<36} verts={:<6} image={:<14} uv {:.4}..{:.4} , {:.4}..{:.4}",
+            m.name,
+            m.vertices.len(),
+            m.image,
+            ulo[0],
+            uhi[0],
+            ulo[1],
+            uhi[1]
+        );
+    }
 }

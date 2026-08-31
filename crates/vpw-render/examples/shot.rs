@@ -298,6 +298,13 @@ fn main() {
                 if !vpw_table::geometry::is_lightmap(&p.name, &p.image) || !p.is_visible {
                     continue;
                 }
+                // VPW_LIGHTMAPS=active leaves out the layers belonging to the
+                // *solid* bake, which already has its light in it.
+                if std::env::var("VPW_LIGHTMAPS").as_deref() == Ok("active")
+                    && p.name.ends_with("_Parts")
+                {
+                    continue;
+                }
                 let Some(mesh) = vpw_table::geometry::primitive_part(p) else {
                     continue;
                 };
