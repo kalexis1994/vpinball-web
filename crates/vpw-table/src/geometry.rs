@@ -1295,6 +1295,30 @@ pub fn primitive_transform_from_fields(position: Vec3, size: Vec3, rot_and_tra: 
 /// Decoding it as well costs about a third of the light on a table. A base
 /// colour of 180 is a multiplier of 0.706 in the original and 0.456 with a
 /// decode, so a playfield the original draws at 70 out of 255 comes out at 54.
+/// Whether a picture is stored with **floating-point** channels.
+///
+/// Which decides whether its alpha counts for anything, and the original is
+/// explicit that it does not: `BaseTexture::UpdateOpaque` scans the alpha of
+/// an 8-bit image to find out whether it is really see-through, and skips the
+/// scan entirely for a float one, with the note that "the alpha channel is
+/// always opaque, only added for driver's texture format support"
+/// (`Texture.cpp:883`). So a float image is opaque, full stop.
+///
+/// It matters because of what carries float channels: a **baked** table's
+/// atlas, written as OpenEXR because a lightmap holds light and light does not
+/// fit in a byte. Counting its alpha puts the bake's meshes in the see-through
+/// pass, where they write no depth and paint over whatever is already
+/// there — on Circus that is the instruction cards on the apron, every "WHEN
+/// LIT" inside its insert, and the target numbers: thirty-nine thousand pixels
+/// of a table, gone under a sheet that should have been standing behind them.
+///
+/// Told by the magic number rather than by decoding: OpenEXR opens with
+/// `0x76 0x2f 0x31 0x01`, and Radiance's `.hdr` — the other float format a
+/// table might carry — with `#?RADIANCE`.
+fn floating_point(bytes: &[u8]) -> bool {
+    bytes.starts_with(&[0x76, 0x2F, 0x31, 0x01]) || bytes.starts_with(b"#?RADIANCE")
+}
+
 fn color(c: &Color) -> [f32; 3] {
     [c.r, c.g, c.b].map(|v| f32::from(v) / 255.0)
 }
@@ -1473,10 +1497,13 @@ fn images(vpx: &VPX) -> Vec<Image> {
                 .and_then(|b| bmp_to_rgba(b, i.width, i.height)),
             width: i.width,
             height: i.height,
-            // The `.vpx` BMPs always come with alpha 255; of the rest, the only
-            // format among those that show up in tables which cannot carry
-            // alpha is JPEG.
-            has_alpha: i.bits.is_none() && !i.ext().eq_ignore_ascii_case("jpg"),
+            // The `.vpx` BMPs always come with alpha 255; of the rest, the
+            // only format among those that show up in tables which cannot
+            // carry alpha is JPEG. And a float image never counts, whatever
+            // its alpha channel holds — see [`floating_point`].
+            has_alpha: i.bits.is_none()
+                && !i.ext().eq_ignore_ascii_case("jpg")
+                && !i.jpeg.as_ref().is_some_and(|j| floating_point(&j.data)),
             // `Texture.cpp:937`. A table that never set one leaves the field at
             // its own default, which is below zero and means "do not".
             alpha_test: i.alpha_test_value / 255.0,

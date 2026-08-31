@@ -171,6 +171,9 @@ impl DynamicParts {
         // One copy of each picture, however many parts name it. See
         // [`crate::scene::TextureCache`].
         let mut textures = crate::scene::TextureCache::new();
+        // Which pictures are really see-through, which decides the pass a
+        // piece is drawn in. See `crate::scene::really_has_alpha`.
+        let mut alpha_of = crate::scene::AlphaCache::new();
         let mut make_part = |device: &wgpu::Device,
                              first_index: u32,
                              index_count: u32,
@@ -193,7 +196,7 @@ impl DynamicParts {
                 disable_lighting,
                 &mut textures,
             );
-            let with_alpha = image.is_some_and(|i| i.has_alpha);
+            let with_alpha = crate::scene::has_alpha_cached(&mut alpha_of, image);
             let transparent = material.is_some_and(|m| m.is_transparent(with_alpha));
 
             let model_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {

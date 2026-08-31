@@ -320,6 +320,8 @@ impl GpuScene {
             .filter(|m| m.visible && m.additive.is_none())
             .collect();
         let mut redrawn: HashMap<String, wgpu::Texture> = HashMap::new();
+        // Which pictures are really see-through. See [`really_has_alpha`].
+        let mut alpha_of = AlphaCache::new();
         // One copy of each picture across every batch. See [`TextureCache`].
         let mut textures_on_card = TextureCache::new();
 
@@ -334,7 +336,7 @@ impl GpuScene {
             // — a channel in the texture, or an opacity that is not one
             // (`Shader.cpp:850`). Both halves: a material with opacity off is
             // opaque whatever its texture carries.
-            let with_alpha = scene.image(&m.image).is_some_and(|i| i.has_alpha);
+            let with_alpha = has_alpha_cached(&mut alpha_of, scene.image(&m.image));
             let transparent = material.is_some_and(|mat| mat.is_transparent(with_alpha));
             let key = BatchKey {
                 material: m.material.clone(),
@@ -776,6 +778,70 @@ pub fn additive_material(color: [f32; 3], alpha: f32) -> GpuMaterial {
     data.base_color = [color[0] * alpha, color[1] * alpha, color[2] * alpha, alpha];
     data.extra[3] = 4.0;
     data
+}
+
+/// What [`really_has_alpha`] answered, by image name.
+///
+/// Looking costs a decode, and a table names the same picture from hundreds of
+/// parts. Once each.
+pub type AlphaCache = std::collections::HashMap<String, bool>;
+
+/// [`really_has_alpha`], asked once per picture.
+pub fn has_alpha_cached(
+    cache: &mut AlphaCache,
+    image: Option<&vpw_table::geometry::Image>,
+) -> bool {
+    let Some(i) = image else { return false };
+    if let Some(known) = cache.get(&i.name) {
+        return *known;
+    }
+    let answer = really_has_alpha(i);
+    cache.insert(i.name.clone(), answer);
+    answer
+}
+
+/// Whether a picture really is see-through, by looking at it.
+///
+/// The original's `BaseTexture::UpdateOpaque` (`Texture.cpp:875`): an image is
+/// opaque unless some texel's alpha is not 255. **Not** whether the format has
+/// an alpha channel — nearly every format does, and nearly every picture fills
+/// it with 255.
+///
+/// The difference decides which pass a part is drawn in, and that decides
+/// whether it writes depth. A part wrongly called see-through writes none and
+/// paints over whatever is already there; on Circus that cost the instruction
+/// cards on the apron, every "WHEN LIT" inside its insert and the target
+/// numbers — thirty-nine thousand pixels under a sheet that should have stood
+/// behind them.
+///
+/// Float images are opaque without looking, which is the original's own
+/// exception and its own reason: "the alpha channel is always opaque, only
+/// added for driver's texture format support" (`Texture.cpp:883`).
+pub fn really_has_alpha(image: &vpw_table::geometry::Image) -> bool {
+    if !image.has_alpha {
+        return false;
+    }
+    match (&image.rgba, &image.encoded) {
+        (Some(rgba), _) => rgba.as_chunks::<4>().0.iter().any(|p| p[3] != 255),
+        (None, Some(bytes)) => decode(bytes)
+            .is_some_and(|img| img.as_raw().as_chunks::<4>().0.iter().any(|p| p[3] != 255)),
+        (None, None) => false,
+    }
+}
+
+/// Decodes a picture, with the guard rails down. See [`upload_texture`].
+fn decode(bytes: &[u8]) -> Option<image::RgbaImage> {
+    let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes))
+        .with_guessed_format()
+        .ok()?;
+    reader.limits(image::Limits::no_limits());
+    match reader.decode() {
+        Ok(d) => Some(d.to_rgba8()),
+        Err(e) => {
+            log::warn!("a texture would not decode and will be drawn white: {e}");
+            None
+        }
+    }
 }
 
 pub(crate) fn upload_texture(
