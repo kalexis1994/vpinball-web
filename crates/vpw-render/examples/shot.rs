@@ -281,7 +281,46 @@ fn main() {
         if std::env::var("VPW_NOADD").is_ok() {
             parts.retain(|p| p.mesh.additive.is_none());
         }
+        // VPW_DROP=name leaves out the moving pieces whose name contains that
+        // text. `VPW_HIDE` works on the static meshes; this is its opposite
+        // number for the pieces with a matrix, which on a baked table is
+        // nearly all of them. Rendering with and without one piece and
+        // comparing is how you find out whether it was ever being drawn.
+        // VPW_KEEP=name is the other way round: only the moving pieces whose
+        // name contains that text, which is how you look at one of them alone.
+        if let Ok(keep) = std::env::var("VPW_KEEP") {
+            parts.retain(|p| p.mesh.name.contains(&keep));
+            eprintln!("kept {} pieces matching '{keep}'", parts.len());
+        }
+        if let Ok(drop) = std::env::var("VPW_DROP") {
+            let before = parts.len();
+            parts.retain(|p| !p.mesh.name.contains(&drop));
+            eprintln!("dropped {} pieces matching '{drop}'", before - parts.len());
+        }
         eprintln!("parts uploaded: {}", parts.len());
+        // VPW_ORDER=1 lists the see-through pieces in the order they will be
+        // drawn — by depth bias, more negative last — which is the only way to
+        // see who ends up painting over whom.
+        if std::env::var("VPW_ORDER").is_ok() {
+            let mut blended: Vec<(&str, f32)> = parts
+                .iter()
+                .filter(|p| {
+                    let alpha = scene.image(&p.mesh.image).is_some_and(|i| i.has_alpha);
+                    scene
+                        .material(&p.mesh.material)
+                        .is_some_and(|m| m.is_transparent(alpha))
+                })
+                .map(|p| (p.mesh.name.as_str(), p.mesh.depth_bias))
+                .collect();
+            blended.sort_by(|a, b| b.1.total_cmp(&a.1));
+            eprintln!(
+                "see-through pieces, first drawn to last ({}):",
+                blended.len()
+            );
+            for (name, bias) in &blended {
+                eprintln!("   {bias:>8} {name}");
+            }
+        }
         gpu.upload_dynamic(&scene, &parts);
     }
     let gpu_scene = gpu.upload(&scene);

@@ -96,9 +96,29 @@ fn main() {
         let transparent = scene
             .material(&m.material)
             .is_some_and(|mat| mat.is_transparent(with_alpha));
+        let mut lo = [f32::MAX; 3];
+        let mut hi = [f32::MIN; 3];
+        let mut uv_lo = [f32::MAX; 2];
+        let mut uv_hi = [f32::MIN; 2];
+        for v in &m.vertices {
+            for c in 0..3 {
+                lo[c] = lo[c].min(v.pos[c]);
+                hi[c] = hi[c].max(v.pos[c]);
+            }
+            for c in 0..2 {
+                uv_lo[c] = uv_lo[c].min(v.uv[c]);
+                uv_hi[c] = uv_hi[c].max(v.uv[c]);
+            }
+        }
         println!(
-            "{:<24} bias={:>6} transparent={transparent} alpha_in_image={with_alpha} material={:?}",
-            m.name, m.depth_bias, m.material
+            "{:<24} bias={:>6} transparent={transparent} tris={:>6}",
+            m.name,
+            m.depth_bias,
+            m.indices.len() / 3
+        );
+        println!(
+            "     x {:.0}..{:.0}  y {:.0}..{:.0}  z {:.0}..{:.0}   uv {:.3}..{:.3} , {:.3}..{:.3}",
+            lo[0], hi[0], lo[1], hi[1], lo[2], hi[2], uv_lo[0], uv_hi[0], uv_lo[1], uv_hi[1]
         );
     }
 }
