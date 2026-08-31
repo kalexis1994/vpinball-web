@@ -286,6 +286,31 @@ fn main() {
         // number for the pieces with a matrix, which on a baked table is
         // nearly all of them. Rendering with and without one piece and
         // comparing is how you find out whether it was ever being drawn.
+        // VPW_LIGHTMAPS=1 puts a bake's `LM_*` layers back, which the real
+        // path leaves out. For asking again whether they compose now that the
+        // bake is drawn unlit and the coverage alpha is honoured.
+        if std::env::var("VPW_LIGHTMAPS").is_ok() {
+            let mut added = 0;
+            for (index, item) in vpx.gameitems.iter().enumerate() {
+                let vpin::vpx::gameitem::GameItemEnum::Primitive(p) = item else {
+                    continue;
+                };
+                if !vpw_table::geometry::is_lightmap(&p.name, &p.image) || !p.is_visible {
+                    continue;
+                }
+                let Some(mesh) = vpw_table::geometry::primitive_part(p) else {
+                    continue;
+                };
+                parts.push(vpw_table::animation::AnimatedPart {
+                    mesh,
+                    base: vpw_math::Mat4::IDENTITY,
+                    local: vpw_math::Mat4::IDENTITY,
+                    anim: vpw_table::animation::Animation::Primitive { index },
+                });
+                added += 1;
+            }
+            eprintln!("put back {added} lightmap layers");
+        }
         // VPW_KEEP=name is the other way round: only the moving pieces whose
         // name contains that text, which is how you look at one of them alone.
         if let Ok(keep) = std::env::var("VPW_KEEP") {

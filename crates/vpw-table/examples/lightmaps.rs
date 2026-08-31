@@ -37,6 +37,16 @@ fn main() {
             p.material,
         );
         println!("      light_map={:?} color={:?}", p.light_map, p.color);
+        println!(
+            "      position=({:.1},{:.1},{:.1}) size=({:.3},{:.3},{:.3}) rot_tra={:?}",
+            p.position.x,
+            p.position.y,
+            p.position.z,
+            p.size.x,
+            p.size.y,
+            p.size.z,
+            p.rot_and_tra.map(|v| (v * 100.0).round() / 100.0)
+        );
     }
 
     let mut gi = 0;
