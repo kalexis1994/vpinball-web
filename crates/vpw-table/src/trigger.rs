@@ -130,6 +130,7 @@ pub fn build(t: &Trigger, base_z: f32) -> Option<Mesh> {
         scenery: false,
         kind: MeshKind::Builtin,
         additive: None,
+        depth_bias: 0.0,
         disable_lighting: 0.0,
     })
 }

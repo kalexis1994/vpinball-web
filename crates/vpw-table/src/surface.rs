@@ -104,6 +104,7 @@ fn side(wall: &vpin::vpx::gameitem::wall::Wall, points: &[Point]) -> Mesh {
         scenery: false,
         kind: MeshKind::Wall,
         additive: None,
+        depth_bias: 0.0,
         disable_lighting: 0.0,
     }
 }
@@ -164,6 +165,7 @@ fn top(
         scenery: false,
         kind: MeshKind::Wall,
         additive: None,
+        depth_bias: 0.0,
         disable_lighting: 0.0,
     })
 }

@@ -230,6 +230,7 @@ impl Backbox {
             scenery: false,
             kind: MeshKind::Backbox,
             additive: None,
+            depth_bias: 0.0,
             disable_lighting: 0.0,
         }
     }
@@ -277,6 +278,7 @@ impl Backbox {
             scenery: false,
             kind: MeshKind::Backbox,
             additive: None,
+            depth_bias: 0.0,
             disable_lighting: 0.0,
         }
     }

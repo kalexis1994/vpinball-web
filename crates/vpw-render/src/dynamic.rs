@@ -95,6 +95,9 @@ struct Part {
     written: Mat4,
     /// Set when this piece is light rather than a thing. See [`Layer`].
     layer: Option<LightLayer>,
+    /// Which of two coplanar transparent pieces goes on top. See
+    /// [`vpw_table::geometry::Mesh::depth_bias`].
+    depth_bias: f32,
 }
 
 /// Everything that moves, ready to draw.
@@ -106,6 +109,11 @@ pub struct DynamicParts {
     /// first, so an index into `parts` is also an index into the
     /// `Vec<AnimatedPart>` it was built from.
     first_ball: usize,
+    /// The order the transparent pass walks `parts` in: by each piece's own
+    /// depth bias, more negative last, which is what puts a baked table's
+    /// overlay over its playfield. Pieces that set no bias keep the order they
+    /// were uploaded in. See [`vpw_table::geometry::Mesh::depth_bias`].
+    blended_order: Vec<usize>,
 }
 
 impl DynamicParts {
@@ -170,7 +178,8 @@ impl DynamicParts {
                              image: Option<&vpw_table::geometry::Image>,
                              transform: Mat4,
                              visible: bool,
-                             disable_lighting: f32|
+                             disable_lighting: f32,
+                             depth_bias: f32|
          -> (Part, wgpu::Buffer) {
             let slot = crate::scene::material_slot_cached(
                 device,
@@ -211,6 +220,7 @@ impl DynamicParts {
                     transparent,
                     visible,
                     layer: None,
+                    depth_bias,
                 },
                 slot.uniform,
             )
@@ -227,6 +237,7 @@ impl DynamicParts {
                 part.mesh.transform,
                 true,
                 part.mesh.disable_lighting,
+                part.mesh.depth_bias,
             );
             // A piece that is light rather than a thing: its material is not a
             // surface at all, and its brightness follows a lamp. The slot's
@@ -282,6 +293,7 @@ impl DynamicParts {
                     Mat4::IDENTITY,
                     false,
                     0.0,
+                    0.0,
                 )
                 .0,
             );
@@ -306,10 +318,21 @@ impl DynamicParts {
                     Mat4::IDENTITY,
                     false,
                     0.0,
+                    0.0,
                 )
                 .0,
             );
         }
+
+        // The order the transparent pass walks in, worked out once: by each
+        // piece's own depth bias, more negative last. Stable, so everything at
+        // the same bias — which is nearly every table — comes out exactly as
+        // it went in.
+        let blended_order = {
+            let mut order: Vec<usize> = (0..parts.len()).collect();
+            order.sort_by(|&a, &b| parts[b].depth_bias.total_cmp(&parts[a].depth_bias));
+            order
+        };
 
         Self {
             vertices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -324,6 +347,7 @@ impl DynamicParts {
             }),
             parts,
             first_ball,
+            blended_order,
         }
     }
 
@@ -470,7 +494,19 @@ impl DynamicParts {
         }
         pass.set_vertex_buffer(0, self.vertices.slice(..));
         pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
-        for p in &self.parts {
+        // The transparent pass has an order to keep; the opaque one has a
+        // depth buffer and does not care.
+        let order: &[usize] = if transparent {
+            &self.blended_order
+        } else {
+            &[]
+        };
+        let walk: Box<dyn Iterator<Item = &Part>> = if transparent {
+            Box::new(order.iter().map(|&i| &self.parts[i]))
+        } else {
+            Box::new(self.parts.iter())
+        };
+        for p in walk {
             // A layer of light is drawn by `draw_additive` and nowhere else.
             if !p.visible || p.layer.is_some() || p.transparent != transparent || p.index_count == 0
             {

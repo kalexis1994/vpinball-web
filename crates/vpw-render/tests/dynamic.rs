@@ -76,6 +76,7 @@ fn floor_scene() -> Scene {
         scenery: false,
         kind: MeshKind::Playfield,
         additive: None,
+        depth_bias: 0.0,
         disable_lighting: 0.0,
     };
 
@@ -380,6 +381,7 @@ fn light_layer(name: &str, lamp: Option<&str>) -> AnimatedPart {
             clamp: false,
             scenery: false,
             kind: MeshKind::Primitive,
+            depth_bias: 0.0,
             disable_lighting: 0.0,
             additive: Some(vpw_table::geometry::Additive {
                 color: [1.0, 1.0, 1.0],
@@ -572,5 +574,106 @@ fn a_part_that_refuses_the_light_ignores_the_scene() {
         px.is_empty(),
         "a part that refuses the light still moved with it: {} pixels",
         px.len()
+    );
+}
+
+/// Two see-through sheets in the very same place: the depth bias is the only
+/// thing that says which one is on top.
+///
+/// No measurement can answer it — they are coplanar, which is the whole
+/// situation the bias exists for. A baked table leans on it entirely: its
+/// overlay and its plastics lie on the playfield by construction, and
+/// `BM_Overlay` at −1 and `BM_plastics1` at −100 are what keep them in order.
+/// More negative is later, which is over.
+#[test]
+fn the_depth_bias_decides_which_coplanar_sheet_is_on_top() {
+    let Some(mut held) = gpu() else { return };
+    let gpu = &mut *held;
+    let camera = top_down();
+
+    // A sheet of one colour, see-through, at a given bias.
+    // The colour rides on the material, which is looked up by name.
+    let sheet = |name: &str, bias: f32| {
+        let half = 200.0;
+        let v = |x: f32, y: f32| Vertex {
+            pos: [x, y, 1.0],
+            normal: [0.0, 0.0, 1.0],
+            uv: [0.5, 0.5],
+        };
+        AnimatedPart {
+            mesh: Mesh {
+                name: name.into(),
+                vertices: vec![
+                    v(-half, -half),
+                    v(half, -half),
+                    v(half, half),
+                    v(-half, half),
+                ],
+                indices: vec![0, 1, 2, 0, 2, 3],
+                transform: Mat4::IDENTITY,
+                image: String::new(),
+                material: name.into(),
+                visible: true,
+                clamp: false,
+                scenery: false,
+                kind: MeshKind::Primitive,
+                depth_bias: bias,
+                disable_lighting: 1.0,
+                additive: None,
+            },
+            base: Mat4::IDENTITY,
+            local: Mat4::IDENTITY,
+            anim: Animation::Fixed,
+        }
+    };
+    // Opaque enough to hide what is under it, see-through enough to be a
+    // blended draw at all — which is the original's rule, and the reason a
+    // table author writes 0.99 rather than 1.
+    let paint = |name: &str, colour: [f32; 3]| vpw_table::geometry::Material {
+        name: name.into(),
+        base_color: colour,
+        glossy_color: [0.0; 3],
+        clearcoat_color: [0.0; 3],
+        is_metal: false,
+        roughness: 0.0,
+        wrap_lighting: 0.0,
+        glossy_image_lerp: 1.0,
+        edge: 1.0,
+        edge_alpha: 1.0,
+        thickness: 0.05,
+        opacity: 0.99,
+        opacity_active: true,
+    };
+
+    let middle = ((H / 2 * W) + W / 2) as usize * 4;
+    let read = |gpu: &mut vpw_render::offscreen::Offscreen, order: [(&str, [f32; 3], f32); 2]| {
+        let mut scene = floor_scene();
+        for (name, colour, _) in order {
+            scene.materials.push(paint(name, colour));
+        }
+        let parts: Vec<AnimatedPart> = order
+            .iter()
+            .map(|(name, _, bias)| sheet(name, *bias))
+            .collect();
+        let uploaded = gpu.upload(&scene);
+        gpu.upload_dynamic(&scene, &parts);
+        let img = gpu.render(&uploaded, &camera);
+        [img[middle], img[middle + 1], img[middle + 2]]
+    };
+
+    // Red at nothing, green at −100: green is over, whichever order they are
+    // handed over in.
+    let red = [1.0, 0.0, 0.0];
+    let green = [0.0, 1.0, 0.0];
+    let a = read(gpu, [("red", red, 0.0), ("green", green, -100.0)]);
+    let b = read(gpu, [("green", green, -100.0), ("red", red, 0.0)]);
+
+    assert!(
+        a[1] > a[0],
+        "the sheet with the lower bias did not end up on top: {a:?}"
+    );
+    assert_eq!(
+        a, b,
+        "the order they were handed over in changed the picture, so the bias          is not what decided it"
     );
 }

@@ -457,6 +457,7 @@ fn bumper_rings(vpx: &VPX, shapes: &[Shape], out: &mut Vec<AnimatedPart>) {
             scenery: false,
             kind: MeshKind::Builtin,
             additive: None,
+            depth_bias: 0.0,
             disable_lighting: 0.0,
         }) else {
             continue;

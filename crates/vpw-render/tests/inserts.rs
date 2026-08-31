@@ -85,6 +85,7 @@ fn scene(image: &str, image_mode: bool, surface_image: &str, state: f32) -> Scen
         scenery: false,
         kind: MeshKind::Playfield,
         additive: None,
+        depth_bias: 0.0,
         disable_lighting: 0.0,
     };
 

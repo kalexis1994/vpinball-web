@@ -84,4 +84,21 @@ fn main() {
     uniq.sort_unstable();
     uniq.dedup();
     println!("light_map values the lightmaps ask for: {uniq:?}");
+
+    // Which pass each bake mesh lands in, which is what decides whether its
+    // depth bias means anything at all.
+    let scene = vpw_table::geometry::extract(&vpx);
+    for m in &scene.meshes {
+        if !m.name.starts_with("BM_") {
+            continue;
+        }
+        let with_alpha = scene.image(&m.image).is_some_and(|i| i.has_alpha);
+        let transparent = scene
+            .material(&m.material)
+            .is_some_and(|mat| mat.is_transparent(with_alpha));
+        println!(
+            "{:<24} bias={:>6} transparent={transparent} alpha_in_image={with_alpha} material={:?}",
+            m.name, m.depth_bias, m.material
+        );
+    }
 }

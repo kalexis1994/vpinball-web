@@ -167,6 +167,7 @@ fn place(
         scenery: false,
         kind,
         additive: None,
+        depth_bias: 0.0,
         disable_lighting: 0.0,
     })
 }

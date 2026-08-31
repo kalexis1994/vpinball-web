@@ -211,6 +211,9 @@ pub struct Batch {
     pub transparent: bool,
     /// Representative depth, for sorting.
     pub depth: f32,
+    /// The part's own say in that order. See
+    /// [`vpw_table::geometry::Mesh::depth_bias`].
+    pub depth_bias: f32,
     /// How many meshes were merged into this batch.
     pub merged: usize,
     /// Material and image of the batch, so it can be inspected from outside.
@@ -294,6 +297,10 @@ struct BatchKey {
     /// insert and an unlit one are the same plastic — so two that disagree
     /// cannot share a draw either.
     disable_lighting: u32,
+    /// Which of two coplanar transparent parts goes on top, as bits. See
+    /// [`vpw_table::geometry::Mesh::depth_bias`]: it decides the *order* of
+    /// two draws, so two parts that disagree cannot be one draw.
+    depth_bias: u32,
 }
 
 impl GpuScene {
@@ -326,9 +333,11 @@ impl GpuScene {
         let mut groups: HashMap<BatchKey, Vec<&Mesh>> = HashMap::new();
         for m in &visible {
             let material = scene.material(&m.material);
-            // The original sends the part to the blended pass if the material
-            // asks for it **or** if the texture carries an alpha channel
-            // (`Shader.cpp:850`).
+            // The original sends the part to the blended pass when its
+            // material asks for opacity **and** there is some alpha to blend
+            // — a channel in the texture, or an opacity that is not one
+            // (`Shader.cpp:850`). Both halves: a material with opacity off is
+            // opaque whatever its texture carries.
             let with_alpha = scene.image(&m.image).is_some_and(|i| i.has_alpha);
             let transparent = material.is_some_and(|mat| mat.is_transparent(with_alpha));
             let key = BatchKey {
@@ -347,6 +356,7 @@ impl GpuScene {
                 // edge and the other wants it to tile.
                 clamp: m.clamp,
                 disable_lighting: m.disable_lighting.to_bits(),
+                depth_bias: m.depth_bias.to_bits(),
             };
             groups.entry(key).or_default().push(m);
         }
@@ -432,6 +442,7 @@ impl GpuScene {
                 binding: bind_groups.len() - 1,
                 transparent: key.transparent,
                 depth: if count > 0.0 { sum.y / count } else { 0.0 },
+                depth_bias: f32::from_bits(key.depth_bias),
                 merged: meshes.len(),
                 material: key.material.clone(),
                 image: key.image.clone(),
@@ -444,11 +455,21 @@ impl GpuScene {
 
         // Opaque first, front to back (big y = close to the player), and
         // transparent at the end, back to front.
+        //
+        // Among the transparent ones the part's own depth bias comes first,
+        // because that is what it is for: it is how a table says which of two
+        // surfaces at the same height goes on top, and no measurement of where
+        // they are can answer that — they are in the same place. More negative
+        // is later, which is over. Everything that sets no bias keeps exactly
+        // the order it had.
         batches.sort_by(|a, b| match (a.transparent, b.transparent) {
             (false, true) => std::cmp::Ordering::Less,
             (true, false) => std::cmp::Ordering::Greater,
             (false, false) => b.depth.total_cmp(&a.depth),
-            (true, true) => a.depth.total_cmp(&b.depth),
+            (true, true) => b
+                .depth_bias
+                .total_cmp(&a.depth_bias)
+                .then_with(|| a.depth.total_cmp(&b.depth)),
         });
 
         // Order the triangles for the GPU's caches — see `crate::meshopt`.

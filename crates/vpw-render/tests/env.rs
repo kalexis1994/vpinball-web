@@ -81,6 +81,7 @@ fn floor_under(env_image: &str, images: Vec<Image>) -> Scene {
             scenery: false,
             kind: MeshKind::Playfield,
             additive: None,
+            depth_bias: 0.0,
             disable_lighting: 0.0,
         }],
         materials: vec![Material {

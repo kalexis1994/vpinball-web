@@ -58,6 +58,7 @@ fn scene_with(state: f32, name: &str, wall: bool) -> Scene {
         scenery: false,
         kind: MeshKind::Playfield,
         additive: None,
+        depth_bias: 0.0,
         disable_lighting: 0.0,
     };
     let c = TABLE / 2.0;
@@ -123,6 +124,7 @@ fn scene_with(state: f32, name: &str, wall: bool) -> Scene {
             scenery: false,
             kind: MeshKind::Wall,
             additive: None,
+            depth_bias: 0.0,
             disable_lighting: 0.0,
         });
     }
@@ -280,6 +282,7 @@ fn one_bounce_carries_light_into_the_shadow() {
             scenery: false,
             kind: MeshKind::Wall,
             additive: None,
+            depth_bias: 0.0,
             disable_lighting: 0.0,
         }
     };
@@ -335,6 +338,7 @@ fn the_indirect_map_is_smooth_where_the_light_is() {
         scenery: false,
         kind: MeshKind::Wall,
         additive: None,
+        depth_bias: 0.0,
         disable_lighting: 0.0,
     });
     let groups = gi_groups(&scene);
@@ -455,6 +459,7 @@ fn a_metal_wall_mirrors_the_baked_field() {
         scenery: false,
         kind: MeshKind::Wall,
         additive: None,
+        depth_bias: 0.0,
         disable_lighting: 0.0,
     });
 

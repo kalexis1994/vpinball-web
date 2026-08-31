@@ -73,6 +73,19 @@ pub struct Mesh {
     /// Set when the part is drawn by **adding** it to what is already there
     /// rather than by lighting it. See [`Additive`].
     pub additive: Option<Additive>,
+    /// Which of two coplanar transparent parts is drawn **over** the other:
+    /// the primitive's **depth bias**.
+    ///
+    /// Not a depth-buffer offset, whatever the name suggests. The original
+    /// uses it as a *sort key* for the transparent pass — the draws are
+    /// ordered by `depthBias - center.z` (`RenderDevice.cpp:2708`) — and it is
+    /// how a table says "this goes on top" about two surfaces at the same
+    /// height. More negative means later, which means over.
+    ///
+    /// A baked table leans on it entirely: its overlay and its plastics are
+    /// coplanar with the playfield by construction, so `BM_Overlay` at −1 and
+    /// `BM_plastics1` at −100 are the only thing keeping them in order.
+    pub depth_bias: f32,
     /// How much of the scene's light this part refuses, 0..1 — the primitive's
     /// **BlendDisableLighting** (`m_disableLightingTop`).
     ///
@@ -1142,6 +1155,7 @@ fn playfield_quad(b: Bounds, image: &str, material: &str) -> Mesh {
         scenery: false,
         kind: MeshKind::Playfield,
         additive: None,
+        depth_bias: 0.0,
         disable_lighting: 0.0,
     }
 }
@@ -1209,6 +1223,7 @@ fn primitive_mesh(p: &Primitive) -> Option<Mesh> {
         scenery: false,
         kind: MeshKind::Primitive,
         additive: additive(p),
+        depth_bias: p.depth_bias,
         disable_lighting: p.disable_lighting_top.unwrap_or(0.0).clamp(0.0, 1.0),
     })
 }
