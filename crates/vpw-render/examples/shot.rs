@@ -294,10 +294,52 @@ fn main() {
         }
         if let Ok(drop) = std::env::var("VPW_DROP") {
             let before = parts.len();
-            parts.retain(|p| !p.mesh.name.contains(&drop));
+            let wanted: Vec<&str> = drop.split(',').filter(|s| !s.is_empty()).collect();
+            parts.retain(|p| !wanted.iter().any(|w| p.mesh.name.contains(w)));
             eprintln!("dropped {} pieces matching '{drop}'", before - parts.len());
         }
         eprintln!("parts uploaded: {}", parts.len());
+        // VPW_PARTLIST=1 lists every moving piece with the room it takes up
+        // and which pass it lands in — for finding the one that is standing
+        // over something else.
+        if std::env::var("VPW_PARTLIST").is_ok() {
+            let mut rows: Vec<(f32, String)> = Vec::new();
+            for pt in &parts {
+                let alpha = scene.image(&pt.mesh.image).is_some_and(|i| i.has_alpha);
+                let clear = scene
+                    .material(&pt.mesh.material)
+                    .is_some_and(|m| m.is_transparent(alpha));
+                let (mut lo, mut hi) = ([f32::MAX; 3], [f32::MIN; 3]);
+                for v in &pt.mesh.vertices {
+                    let w = pt
+                        .mesh
+                        .transform
+                        .transform_point3(vpw_math::Vec3::new(v.pos[0], v.pos[1], v.pos[2]));
+                    for (c, value) in [w.x, w.y, w.z].into_iter().enumerate() {
+                        lo[c] = lo[c].min(value);
+                        hi[c] = hi[c].max(value);
+                    }
+                }
+                let area = (hi[0] - lo[0]) * (hi[1] - lo[1]);
+                rows.push((
+                    area,
+                    format!(
+                        "{:<26} {:<11} bias={:>6} area={:>10.0}  z {:>7.1}..{:<7.1}",
+                        pt.mesh.name,
+                        if clear { "see-through" } else { "opaque" },
+                        pt.mesh.depth_bias,
+                        area,
+                        lo[2],
+                        hi[2]
+                    ),
+                ));
+            }
+            rows.sort_by(|a, b| b.0.total_cmp(&a.0));
+            eprintln!("the biggest pieces:");
+            for (_, line) in rows.iter().take(14) {
+                eprintln!("   {line}");
+            }
+        }
         // VPW_ORDER=1 lists the see-through pieces in the order they will be
         // drawn — by depth bias, more negative last — which is the only way to
         // see who ends up painting over whom.

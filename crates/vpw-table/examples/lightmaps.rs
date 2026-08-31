@@ -116,9 +116,48 @@ fn main() {
             m.depth_bias,
             m.indices.len() / 3
         );
+        // In world space, which is the only space in which two meshes can be
+        // said to be over or under one another.
+        let mut wlo = [f32::MAX; 3];
+        let mut whi = [f32::MIN; 3];
+        for v in &m.vertices {
+            let w = m
+                .transform
+                .transform_point3(vpw_math::Vec3::new(v.pos[0], v.pos[1], v.pos[2]));
+            for (c, value) in [w.x, w.y, w.z].into_iter().enumerate() {
+                wlo[c] = wlo[c].min(value);
+                whi[c] = whi[c].max(value);
+            }
+        }
+        println!(
+            "     world x {:.0}..{:.0}  y {:.0}..{:.0}  z {:.1}..{:.1}",
+            wlo[0], whi[0], wlo[1], whi[1], wlo[2], whi[2]
+        );
         println!(
             "     x {:.0}..{:.0}  y {:.0}..{:.0}  z {:.0}..{:.0}   uv {:.3}..{:.3} , {:.3}..{:.3}",
             lo[0], hi[0], lo[1], hi[1], lo[2], hi[2], uv_lo[0], uv_hi[0], uv_lo[1], uv_hi[1]
         );
+    }
+
+    for m in &scene.materials {
+        if !m.name.starts_with("VLM") {
+            continue;
+        }
+        println!(
+            "material {:<18} opacity={:.3} opacity_active={} base={:?} metal={}",
+            m.name, m.opacity, m.opacity_active, m.base_color, m.is_metal
+        );
+    }
+    // And what the file itself says, before we read it.
+    if let Some(mats) = &vpx.gamedata.materials {
+        for m in mats {
+            if !m.name.starts_with("VLM") {
+                continue;
+            }
+            println!(
+                "   file: {:<18} opacity={:.3} opacity_active={} type={:?}",
+                m.name, m.opacity, m.opacity_active, m.type_
+            );
+        }
     }
 }
