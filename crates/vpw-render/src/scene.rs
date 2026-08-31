@@ -317,11 +317,7 @@ impl GpuScene {
         let visible: Vec<&Mesh> = scene
             .meshes
             .iter()
-            .filter(|m| {
-                m.visible
-                    && m.additive.is_none()
-                    && !vpw_table::geometry::is_lightmap(&m.name, &m.image)
-            })
+            .filter(|m| m.visible && m.additive.is_none())
             .collect();
         let mut redrawn: HashMap<String, wgpu::Texture> = HashMap::new();
         // One copy of each picture across every batch. See [`TextureCache`].
@@ -796,7 +792,37 @@ pub(crate) fn upload_texture(
             std::borrow::Cow::Borrowed(rgba.as_slice()),
         ),
         (None, Some(bytes)) => {
-            let img = image::load_from_memory(bytes).ok()?.to_rgba8();
+            // Read with the guard rails down.
+            //
+            // `image` refuses anything it estimates will need more than half a
+            // gigabyte, which is a sensible default for a picture off the
+            // internet and the wrong one for a texture a table brought with
+            // it. A baked table's atlas is a four-thousand-pixel square of
+            // *float* — two hundred and sixty-eight megabytes decoded, more
+            // while decoding — and Circus carries one.
+            //
+            // The cost of the refusal is not a missing texture, it is a
+            // **white** one: the slot falls back to the white pixel, and a
+            // surface that should have been a lamp's soft light becomes an
+            // opaque sheet over the table. That is what turned Circus white.
+            let reader = image::ImageReader::new(std::io::Cursor::new(bytes.as_slice()));
+            let mut reader = match reader.with_guessed_format() {
+                Ok(r) => r,
+                Err(e) => {
+                    log::warn!("a texture could not be read at all: {e}");
+                    return None;
+                }
+            };
+            reader.limits(image::Limits::no_limits());
+            let img = match reader.decode() {
+                Ok(d) => d.to_rgba8(),
+                Err(e) => {
+                    // Loud, and once per texture. Silence here reads as a
+                    // rendering bug for as long as it takes to find it.
+                    log::warn!("a texture would not decode and will be drawn white: {e}");
+                    return None;
+                }
+            };
             let (w, h) = img.dimensions();
             (w, h, std::borrow::Cow::Owned(img.into_raw()))
         }
