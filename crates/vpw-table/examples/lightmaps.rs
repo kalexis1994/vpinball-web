@@ -12,7 +12,12 @@ fn main() {
     for i in &vpx.gameitems {
         let G::Primitive(p) = i else { continue };
         let lm = vpw_table::geometry::is_lightmap(&p.name, &p.image);
-        if !lm && !p.name.starts_with("BM_") {
+        let wanted = std::env::var("ONLY").unwrap_or_default();
+        if !wanted.is_empty() {
+            if !p.name.to_lowercase().contains(&wanted.to_lowercase()) {
+                continue;
+            }
+        } else if !lm && !p.name.starts_with("BM_") {
             continue;
         }
         if lm {
