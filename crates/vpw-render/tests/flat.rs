@@ -137,6 +137,8 @@ fn floor_with_lamp() -> Scene {
         playfield_material: "floor".into(),
         env_image: String::new(),
         ball_decal: String::new(),
+        backdrop_image: String::new(),
+        backdrop_color: [0.0; 3],
         lighting: Lighting {
             lights: [Vec3::new(0.0, 0.0, 800.0), Vec3::new(0.0, 0.0, 800.0)],
             emission: [0.4, 0.4, 0.4],

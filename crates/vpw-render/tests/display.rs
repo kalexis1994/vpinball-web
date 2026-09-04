@@ -130,6 +130,8 @@ fn scene() -> Scene {
         lights: Vec::new(),
         env_image: String::new(),
         ball_decal: String::new(),
+        backdrop_image: String::new(),
+        backdrop_color: [0.0; 3],
         flashers: Vec::new(),
     }
 }

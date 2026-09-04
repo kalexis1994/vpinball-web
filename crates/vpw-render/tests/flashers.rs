@@ -95,6 +95,8 @@ fn floor_scene() -> Scene {
         flashers: Vec::new(),
         env_image: String::new(),
         ball_decal: String::new(),
+        backdrop_image: String::new(),
+        backdrop_color: [0.0; 3],
         physics: vpw_table::geometry::TablePhysics {
             slope_deg: 6.0,
             gravity: 1.76,

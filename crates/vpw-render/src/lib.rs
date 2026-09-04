@@ -403,3 +403,40 @@ impl GpuContext {
         Ok(())
     }
 }
+
+/// The table's own backdrop picture, ready to bind. See `backdrop.wgsl`.
+///
+/// `None` when the table named none — or switched its decals off, or named a
+/// picture that will not decode — and the frame is then cleared to a colour
+/// instead, which is the original's own fallback (`Renderer.cpp:921`).
+pub fn backdrop_bind_group(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    pipeline: &pipeline::TablePipeline,
+    scene: &vpw_table::geometry::Scene,
+) -> Option<wgpu::BindGroup> {
+    let image = scene.image(&scene.backdrop_image)?;
+    let (_, view) = scene::upload_texture(device, queue, image)?;
+    let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+        label: Some("vpw-backdrop-sampler"),
+        address_mode_u: wgpu::AddressMode::ClampToEdge,
+        address_mode_v: wgpu::AddressMode::ClampToEdge,
+        mag_filter: wgpu::FilterMode::Linear,
+        min_filter: wgpu::FilterMode::Linear,
+        ..Default::default()
+    });
+    Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("vpw-backdrop-bg"),
+        layout: &pipeline.backdrop_layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(&view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::Sampler(&sampler),
+            },
+        ],
+    }))
+}

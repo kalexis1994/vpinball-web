@@ -175,6 +175,8 @@ fn scene(image: &str, image_mode: bool, surface_image: &str, state: f32) -> Scen
         lights: vec![light],
         env_image: String::new(),
         ball_decal: String::new(),
+        backdrop_image: String::new(),
+        backdrop_color: [0.0; 3],
         flashers: Vec::new(),
     }
 }

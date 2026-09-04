@@ -551,6 +551,21 @@ pub struct Scene {
     /// itself ([`crate::ball::scratches`]), the same way the original falls
     /// back to the scuffed ball in its `Assets/`.
     pub ball_decal: String,
+    /// The picture the table wants **behind** everything, and the colour to
+    /// use when it names none.
+    ///
+    /// The original draws the view mode's backdrop as a full-screen sprite
+    /// with the depth test off, before a single part, and only clears to
+    /// `m_colorbackdrop` when there is no image to draw
+    /// (`Renderer::DrawBackground`, `Renderer.cpp:921`). It is how a table
+    /// dresses everything around its playfield — on Circus, the whole apron
+    /// end of the cabinet, which has no geometry at all.
+    ///
+    /// Empty when the table names none, or when it has switched its decals
+    /// off, which is the same switch the original reads (`DECL`).
+    pub backdrop_image: String,
+    /// What to clear to when there is no backdrop picture. Linear, 0..1.
+    pub backdrop_color: [f32; 3],
     pub lighting: Lighting,
     /// Every lamp the table has, lit or not.
     ///
@@ -1041,6 +1056,14 @@ pub fn extract(vpx: &VPX) -> Scene {
         // missing one means the same as an empty one.
         env_image: g.env_image.clone().unwrap_or_default(),
         ball_decal: g.ball_image_front.clone(),
+        // The table's own switch, the same one the original reads before it
+        // looks the picture up at all.
+        backdrop_image: if g.render_decals {
+            g.backglass_image_full_desktop.clone()
+        } else {
+            String::new()
+        },
+        backdrop_color: color(&g.backdrop_color),
         lighting: lighting(vpx),
         physics: table_physics(vpx),
         lights,

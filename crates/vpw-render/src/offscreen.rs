@@ -27,6 +27,9 @@ pub struct Offscreen {
     /// The pieces that move. `None` draws only the baked geometry, which is
     /// what a plain photo of a table wants.
     pub dynamic: Option<DynamicParts>,
+    /// The table's own backdrop picture, if it named one. See
+    /// `crate::pass::draw_full`.
+    pub backdrop: Option<wgpu::BindGroup>,
     width: u32,
     height: u32,
     color: wgpu::Texture,
@@ -124,6 +127,7 @@ impl Offscreen {
         let flashers = Flashers::new(&device, &queue, &pipeline.light_frame_layout, hdr, samples);
 
         Ok(Self {
+            backdrop: None,
             device,
             queue,
             pipeline,
@@ -358,6 +362,8 @@ impl Offscreen {
     /// (`Renderer.cpp:208`), and a photograph under the wrong one is a
     /// photograph of a different table.
     pub fn upload(&mut self, scene: &Scene) -> GpuScene {
+        self.backdrop =
+            crate::backdrop_bind_group(&self.device, &self.queue, &self.pipeline, scene);
         self.pipeline.set_envmap(
             &self.device,
             crate::env::EnvMap::for_table(&self.device, &self.queue, scene),
@@ -476,6 +482,7 @@ impl Offscreen {
                 self.dynamic.as_ref(),
                 Some(&self.lights),
                 Some(&self.flashers),
+                self.backdrop.as_ref(),
                 &filter,
             );
         }

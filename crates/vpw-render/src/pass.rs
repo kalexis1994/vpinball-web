@@ -163,6 +163,7 @@ pub fn draw(
         dynamic,
         lights,
         None,
+        None,
         |_| true,
     );
 }
@@ -178,7 +179,7 @@ pub fn draw_filtered(
     filter: impl Fn(&crate::scene::Batch) -> bool,
 ) {
     draw_full(
-        encoder, color, None, depth, pipeline, scene, None, None, None, filter,
+        encoder, color, None, depth, pipeline, scene, None, None, None, None, filter,
     );
 }
 
@@ -211,6 +212,7 @@ pub fn draw_full(
     dynamic: Option<&DynamicParts>,
     lights: Option<&Lights>,
     flashers: Option<&Flashers>,
+    backdrop: Option<&wgpu::BindGroup>,
     filter: impl Fn(&crate::scene::Batch) -> bool,
 ) {
     let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -237,6 +239,16 @@ pub fn draw_full(
         }),
         ..Default::default()
     });
+
+    // The table's own backdrop, before a single part of it and with no depth
+    // at all — `Renderer::DrawBackground` (`Renderer.cpp:921`). It is what a
+    // table puts *around* its playfield, and on one that models no cabinet
+    // the alternative is a hole.
+    if let Some(bg) = backdrop {
+        pass.set_pipeline(&pipeline.backdrop);
+        pass.set_bind_group(0, bg, &[]);
+        pass.draw(0..3, 0..1);
+    }
 
     pass.set_bind_group(0, &pipeline.frame_bind_group, &[]);
 

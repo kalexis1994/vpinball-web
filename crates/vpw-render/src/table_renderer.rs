@@ -23,6 +23,11 @@ pub struct TableRenderer {
     /// depth buffer too, since both are sized to the window.
     post: Post,
     scene: Option<GpuScene>,
+    /// The table's own backdrop picture, ready to draw. `None` when the table
+    /// named none, or named one that would not decode — and then the frame is
+    /// cleared to a colour instead, the way the original falls back
+    /// (`Renderer.cpp:921`).
+    backdrop: Option<wgpu::BindGroup>,
     /// The environment the table asked for, kept aside while a room of the
     /// player's choosing stands in for it. See [`Self::set_environment`].
     table_env: Option<crate::env::EnvMap>,
@@ -116,6 +121,7 @@ impl TableRenderer {
             samples,
         );
         Ok(Self {
+            backdrop: None,
             gpu,
             pipeline,
             post,
@@ -477,6 +483,8 @@ impl TableRenderer {
             },
             vpw_table::backbox::Backbox::for_playfield(pf),
         ));
+        self.backdrop =
+            crate::backdrop_bind_group(&self.gpu.device, &self.gpu.queue, &self.pipeline, scene);
         self.built_head = scene.built_head;
         self.authored = Some(scene.view);
         self.cabinet = Some(scene.cabinet);
@@ -504,6 +512,7 @@ impl TableRenderer {
     pub fn unload(&mut self) {
         self.scene = None;
         self.dynamic = None;
+        self.backdrop = None;
         self.lights.lights.clear();
         self.flashers = Flashers::new(
             &self.gpu.device,
@@ -925,6 +934,11 @@ impl TableRenderer {
             self.dynamic.as_ref(),
             Some(&self.lights),
             Some(&self.flashers),
+            // The table's picture only where a flat one belongs: looking at
+            // the playfield. In the cabinet view you are standing in a room,
+            // and this port models one — a photograph pasted across the back
+            // of it would be a wall with no floor.
+            if room { None } else { self.backdrop.as_ref() },
             move |b| (head || !b.backbox) && (room || !b.scenery),
         );
         self.post.finish(&mut encoder, &view);

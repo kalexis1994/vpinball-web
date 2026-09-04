@@ -151,6 +151,8 @@ fn one_bright_light(intensity: f32, alpha: f32) -> Scene {
         playfield_material: "floor".into(),
         env_image: String::new(),
         ball_decal: String::new(),
+        backdrop_image: String::new(),
+        backdrop_color: [0.0; 3],
         // Nothing else lighting the scene: the lamp is the only source, so
         // every difference between two renders belongs to it.
         lighting: Lighting {

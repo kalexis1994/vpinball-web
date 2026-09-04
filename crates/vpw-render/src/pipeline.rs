@@ -65,6 +65,11 @@ pub struct TablePipeline {
     /// What the table pass clears to: the room's tint, kept dim. What is
     /// behind a machine is the room it stands in, out of the light.
     pub clear: wgpu::Color,
+    /// Draws the table's own backdrop picture over the cleared frame. See
+    /// `backdrop.wgsl`.
+    pub backdrop: wgpu::RenderPipeline,
+    /// What that pipeline binds: the picture and its sampler.
+    pub backdrop_layout: wgpu::BindGroupLayout,
 }
 
 impl TablePipeline {
@@ -85,6 +90,74 @@ impl TablePipeline {
                 ),
             })
         };
+        let backdrop_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("vpw-backdrop-layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+        let backdrop_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("vpw-backdrop-shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("backdrop.wgsl").into()),
+        });
+        let backdrop = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("vpw-backdrop"),
+            layout: Some(
+                &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: Some("vpw-backdrop-pipeline-layout"),
+                    bind_group_layouts: &[Some(&backdrop_layout)],
+                    immediate_size: 0,
+                }),
+            ),
+            vertex: wgpu::VertexState {
+                module: &backdrop_module,
+                entry_point: Some("vs_main"),
+                buffers: &[],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &backdrop_module,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: color_format,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::COLOR,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: Default::default(),
+            // No depth at all: it is behind everything by construction, and
+            // the original turns the test and the write off for it.
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: Some(false),
+                depth_compare: Some(wgpu::CompareFunction::Always),
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            multisample: wgpu::MultisampleState {
+                count: samples,
+                ..Default::default()
+            },
+            multiview_mask: None,
+            cache: None,
+        });
+
         let shader = make_module("vpw-table-shader", include_str!("table_vs.wgsl"));
         let dynamic_shader = make_module("vpw-dynamic-shader", include_str!("dynamic_vs.wgsl"));
 
@@ -441,6 +514,8 @@ impl TablePipeline {
                 false,
                 None,
             ),
+            backdrop,
+            backdrop_layout,
             frame_layout,
             material_layout,
             model_layout,
