@@ -127,6 +127,34 @@ fn main() {
         for i in &scene.images {
             println!("  {:<32} {}x{}", i.name, i.width, i.height);
         }
+        println!("every ramp and wall, and whether it is drawn:");
+        for it in &vpx.gameitems {
+            match it {
+                vpin::vpx::gameitem::GameItemEnum::Ramp(r) => println!(
+                    "  ramp {:<22} visible={} type={:?} image={:?} meshes={}",
+                    r.name,
+                    r.is_visible,
+                    r.ramp_type,
+                    r.image,
+                    scene
+                        .meshes
+                        .iter()
+                        .filter(|m| m.name.starts_with(&r.name))
+                        .count()
+                ),
+                vpin::vpx::gameitem::GameItemEnum::Wall(w) if w.is_top_bottom_visible => println!(
+                    "  wall {:<22} visible=true image={:?} meshes={}",
+                    w.name,
+                    w.image,
+                    scene
+                        .meshes
+                        .iter()
+                        .filter(|m| m.name.starts_with(&w.name))
+                        .count()
+                ),
+                _ => {}
+            }
+        }
         println!("raw items near the bottom:");
         for it in &vpx.gameitems {
             let (kind, name, y) = match it {
