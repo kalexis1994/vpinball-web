@@ -214,6 +214,10 @@ pub struct Batch {
     /// The part's own say in that order. See
     /// [`vpw_table::geometry::Mesh::depth_bias`].
     pub depth_bias: f32,
+    /// Where this batch sorts among the see-through ones:
+    /// `depthBias - center.z`, the original's key (`RenderDevice.cpp:2708`).
+    /// Larger is drawn first.
+    pub sort_key: f32,
     /// How many meshes were merged into this batch.
     pub merged: usize,
     /// Material and image of the batch, so it can be inspected from outside.
@@ -441,6 +445,8 @@ impl GpuScene {
                 transparent: key.transparent,
                 depth: if count > 0.0 { sum.y / count } else { 0.0 },
                 depth_bias: f32::from_bits(key.depth_bias),
+                sort_key: f32::from_bits(key.depth_bias)
+                    - if count > 0.0 { sum.z / count } else { 0.0 },
                 merged: meshes.len(),
                 material: key.material.clone(),
                 image: key.image.clone(),
@@ -464,9 +470,15 @@ impl GpuScene {
             (false, true) => std::cmp::Ordering::Less,
             (true, false) => std::cmp::Ordering::Greater,
             (false, false) => b.depth.total_cmp(&a.depth),
+            // The original's key for a see-through draw is `depthBias -
+            // center.z`, sorted largest first (`RenderDevice.cpp:2708`,
+            // `RenderPass.cpp:118`). The height carries as much of it as the
+            // bias: on a baked table the playfield and the flippers both set
+            // no bias at all, and it is only their heights that say the
+            // flippers go on top.
             (true, true) => b
-                .depth_bias
-                .total_cmp(&a.depth_bias)
+                .sort_key
+                .total_cmp(&a.sort_key)
                 .then_with(|| a.depth.total_cmp(&b.depth)),
         });
 

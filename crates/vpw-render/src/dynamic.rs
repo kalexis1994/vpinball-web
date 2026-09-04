@@ -55,6 +55,25 @@ impl GpuModel {
     }
 }
 
+/// The height a piece sorts by: the middle of it, in world space.
+///
+/// The original takes the mesh's own centre (`RenderDevice.cpp:2708` is handed
+/// `m_d.m_vPosition` for a primitive); the middle of its bounds is the same
+/// thing for anything symmetrical and closer to the truth for anything that is
+/// not.
+fn centre_z(mesh: &Mesh) -> f32 {
+    let (mut lo, mut hi) = (f32::MAX, f32::MIN);
+    for v in &mesh.vertices {
+        let z = mesh
+            .transform
+            .transform_point3(vpw_math::Vec3::new(v.pos[0], v.pos[1], v.pos[2]))
+            .z;
+        lo = lo.min(z);
+        hi = hi.max(z);
+    }
+    if lo > hi { 0.0 } else { (lo + hi) * 0.5 }
+}
+
 /// What a piece that is **light** needs remembering between frames.
 ///
 /// See [`vpw_table::geometry::Additive`]. The layer is added in proportion to
@@ -95,9 +114,17 @@ struct Part {
     written: Mat4,
     /// Set when this piece is light rather than a thing. See [`Layer`].
     layer: Option<LightLayer>,
-    /// Which of two coplanar transparent pieces goes on top. See
-    /// [`vpw_table::geometry::Mesh::depth_bias`].
-    depth_bias: f32,
+    /// Where this piece sorts among the see-through ones:
+    /// `depthBias - center.z`, which is the original's key
+    /// (`RenderDevice.cpp:2708`). Larger is drawn first.
+    ///
+    /// The height matters as much as the bias, and leaving it out is what put
+    /// Circus's baked playfield over its flippers: both carry no bias at all,
+    /// so with only the bias to go on the order fell back to whatever they
+    /// happened to be uploaded in. With the height in it the playfield sits at
+    /// −7 and the flippers at +15, so the field is drawn first and the
+    /// flippers over it, which is the way round they are built.
+    sort_key: f32,
 }
 
 /// Everything that moves, ready to draw.
@@ -182,7 +209,8 @@ impl DynamicParts {
                              transform: Mat4,
                              visible: bool,
                              disable_lighting: f32,
-                             depth_bias: f32|
+                             depth_bias: f32,
+                             centre_z: f32|
          -> (Part, wgpu::Buffer) {
             let slot = crate::scene::material_slot_cached(
                 device,
@@ -223,7 +251,7 @@ impl DynamicParts {
                     transparent,
                     visible,
                     layer: None,
-                    depth_bias,
+                    sort_key: depth_bias - centre_z,
                 },
                 slot.uniform,
             )
@@ -241,6 +269,7 @@ impl DynamicParts {
                 true,
                 part.mesh.disable_lighting,
                 part.mesh.depth_bias,
+                centre_z(&part.mesh),
             );
             // A piece that is light rather than a thing: its material is not a
             // surface at all, and its brightness follows a lamp. The slot's
@@ -297,6 +326,7 @@ impl DynamicParts {
                     false,
                     0.0,
                     0.0,
+                    0.0,
                 )
                 .0,
             );
@@ -322,6 +352,7 @@ impl DynamicParts {
                     false,
                     0.0,
                     0.0,
+                    0.0,
                 )
                 .0,
             );
@@ -333,7 +364,7 @@ impl DynamicParts {
         // it went in.
         let blended_order = {
             let mut order: Vec<usize> = (0..parts.len()).collect();
-            order.sort_by(|&a, &b| parts[b].depth_bias.total_cmp(&parts[a].depth_bias));
+            order.sort_by(|&a, &b| parts[b].sort_key.total_cmp(&parts[a].sort_key));
             order
         };
 
