@@ -111,9 +111,10 @@ fn main() {
             }
         }
         for it in &vpx.gameitems {
-            if let vpin::vpx::gameitem::GameItemEnum::Primitive(p) = it {
-                if p.image.to_lowercase().contains("dtcircus")
-                    || p.image.to_lowercase().contains("backdrop")
+            if let vpin::vpx::gameitem::GameItemEnum::Primitive(p) = it
+                && (p.image.to_lowercase().contains("dtcircus")
+                    || p.image.to_lowercase().contains("backdrop"))
+            {
                 {
                     println!(
                         "  raw primitive {:<24} image={:<20} visible={}",
