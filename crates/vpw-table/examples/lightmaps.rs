@@ -54,6 +54,119 @@ fn main() {
         );
     }
 
+    if std::env::var("ONLY").is_ok() {
+        // A different question: which meshes sit at the bottom edge of the
+        // table, where the apron is.
+        let scene = vpw_table::geometry::extract(&vpx);
+        let bottom = vpx.gamedata.bottom;
+        let mut rows: Vec<(f32, String)> = Vec::new();
+        for m in &scene.meshes {
+            let (mut ylo, mut yhi, mut zlo, mut zhi) = (f32::MAX, f32::MIN, f32::MAX, f32::MIN);
+            for v in &m.vertices {
+                let w = m
+                    .transform
+                    .transform_point3(vpw_math::Vec3::new(v.pos[0], v.pos[1], v.pos[2]));
+                ylo = ylo.min(w.y);
+                yhi = yhi.max(w.y);
+                zlo = zlo.min(w.z);
+                zhi = zhi.max(w.z);
+            }
+            let want = std::env::var("ONLY").unwrap_or_default();
+            let by_name = want != "bottom" && m.name.to_lowercase().contains(&want.to_lowercase());
+            if by_name || (want == "bottom" && yhi > bottom * 0.86) {
+                rows.push((
+                    ylo,
+                    format!(
+                        "{:<30} y {:>7.0}..{:<7.0} z {:>6.1}..{:<6.1} visible={} tris={}",
+                        m.name,
+                        ylo,
+                        yhi,
+                        zlo,
+                        zhi,
+                        m.visible,
+                        m.indices.len() / 3
+                    ),
+                ));
+            }
+        }
+        // And the raw items in that band, whether or not we built a mesh for
+        // one: a piece we drop entirely would never show up above.
+        use vpin::vpx::gameitem::GameItemEnum as G;
+        println!(
+            "backdrop: desktop={:?} fullscreen={:?} colour={:?} render_decals={:?}",
+            vpx.gamedata.backglass_image_full_desktop,
+            vpx.gamedata.backglass_image_full_fullscreen,
+            vpx.gamedata.backdrop_color,
+            vpx.gamedata.render_decals
+        );
+        println!("who uses the desktop images:");
+        for m in &scene.meshes {
+            if m.image.to_lowercase().contains("dtcircus")
+                || m.image.to_lowercase().contains("backdrop")
+            {
+                println!(
+                    "  {:<30} image={:<24} visible={}",
+                    m.name, m.image, m.visible
+                );
+            }
+        }
+        for it in &vpx.gameitems {
+            if let vpin::vpx::gameitem::GameItemEnum::Primitive(p) = it {
+                if p.image.to_lowercase().contains("dtcircus")
+                    || p.image.to_lowercase().contains("backdrop")
+                {
+                    println!(
+                        "  raw primitive {:<24} image={:<20} visible={}",
+                        p.name, p.image, p.is_visible
+                    );
+                }
+            }
+        }
+        println!("images the table carries:");
+        for i in &scene.images {
+            println!("  {:<32} {}x{}", i.name, i.width, i.height);
+        }
+        println!("raw items near the bottom:");
+        for it in &vpx.gameitems {
+            let (kind, name, y) = match it {
+                G::Wall(w) => (
+                    "wall",
+                    w.name.clone(),
+                    w.drag_points.iter().map(|d| d.y).fold(f32::MIN, f32::max),
+                ),
+                G::Ramp(r) => (
+                    "ramp",
+                    r.name.clone(),
+                    r.drag_points.iter().map(|d| d.y).fold(f32::MIN, f32::max),
+                ),
+                G::Rubber(r) => (
+                    "rubber",
+                    r.name.clone(),
+                    r.drag_points.iter().map(|d| d.y).fold(f32::MIN, f32::max),
+                ),
+                G::Primitive(p) => ("primitive", p.name.clone(), p.position.y),
+                G::Decal(d) => ("decal", d.name.clone(), d.center.y),
+                G::Flasher(f) => ("flasher", f.name.clone(), f.pos_y),
+                _ => continue,
+            };
+            if y > 1950.0 {
+                // Walls and ramps come out under derived names — "Wall3
+                // (top)", "instcard (floor)" — so match the stem.
+                let built = scene
+                    .meshes
+                    .iter()
+                    .filter(|m| m.name.starts_with(&name))
+                    .count();
+                println!("  {kind:<10} {name:<28} y~{y:.0}  meshes={built}");
+            }
+        }
+        rows.sort_by(|a, b| a.0.total_cmp(&b.0));
+        println!("the table's bottom edge is y = {bottom:.0}");
+        for (_, line) in &rows {
+            println!("  {line}");
+        }
+        return;
+    }
     let mut gi = 0;
     for i in &vpx.gameitems {
         let G::Light(l) = i else { continue };
