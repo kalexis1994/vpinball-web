@@ -634,6 +634,93 @@ fn framed(colour: [f32; 3], u: f32, v: f32) -> [f32; 3] {
     c
 }
 
+/// The table's own backglass picture, when it has one, sized for the head.
+///
+/// A `.vpx` usually has no backglass in it — see the module notes — but two
+/// kinds of table carry one after all:
+///
+/// 1. **A VR build** models the whole machine, glass included, as a primitive
+///    named for it wearing the picture (Circus: `VR_Backglass_Prim` in
+///    `VR_Backglass_Dark`, with a `_Lit` twin for the lamps behind it). The
+///    lit one is the glass with the machine switched on, which is the one to
+///    wear.
+/// 2. **A desktop backdrop** is sometimes the glass itself, painted twice
+///    side by side so its score windows flank the playfield (Spider-Man).
+///    One copy is the glass.
+///
+/// The picture comes back no wider than [`ART_WIDTH`], with whatever score
+/// windows are painted on it, by player. See [`crate::backdrop::painted`].
+pub struct GlassArt {
+    pub rgba: Vec<u8>,
+    pub width: u32,
+    pub height: u32,
+    /// The score windows painted on the glass, as fractions of it, by player:
+    /// `None` for a player whose corner has none. Empty when the glass has
+    /// no windows, in which case the score gets the head's own panel.
+    pub windows: Vec<Option<crate::backdrop::Rect>>,
+}
+
+/// How wide the head's picture is kept. A VR glass is three thousand pixels
+/// across and the head is a few hundred on screen.
+pub const ART_WIDTH: u32 = 1024;
+
+/// Finds the table's glass, if it has one. See [`GlassArt`].
+pub fn find(vpx: &vpin::vpx::VPX, images: &[crate::geometry::Image], backdrop: &str) -> Option<GlassArt> {
+    use vpin::vpx::gameitem::GameItemEnum;
+    let image_named = |name: &str| images.iter().find(|i| i.name.eq_ignore_ascii_case(name));
+
+    // 1. A backglass primitive's picture, lit if there is a lit one. The
+    // biggest of them: a VR build has a `VR_Backbox_Backglass` panel wearing
+    // a square of black behind the `VR_Backglass_Prim` that wears the art.
+    let worn = vpx
+        .gameitems
+        .iter()
+        .filter_map(|item| match item {
+            GameItemEnum::Primitive(p)
+                if p.name.to_lowercase().contains("backglass") && !p.image.is_empty() =>
+            {
+                let lit = p.image.to_lowercase().replace("dark", "lit");
+                image_named(&lit).or_else(|| image_named(&p.image))
+            }
+            _ => None,
+        })
+        .max_by_key(|i| u64::from(i.width) * u64::from(i.height));
+    if let Some(picture) = worn
+        && let Some((rgba, w, h)) = crate::backdrop::decoded(picture)
+    {
+        log::debug!("the head wears the table's own glass, \"{}\"", picture.name);
+        return Some(art_of(rgba, w, h));
+    }
+
+    // 2. The desktop backdrop, one copy of it.
+    if backdrop.is_empty() {
+        return None;
+    }
+    let (rgba, w, h) = image_named(backdrop).and_then(crate::backdrop::decoded)?;
+    let (rgba, w, h) = match crate::backdrop::repeat_width(&rgba, w, h) {
+        Some(copy) => {
+            log::debug!("the backdrop \"{backdrop}\" repeats every {copy} pixels; the head wears one copy");
+            crate::backdrop::crop_left(&rgba, w, h, copy)
+        }
+        None => {
+            log::debug!("the head wears the backdrop \"{backdrop}\"");
+            (rgba, w, h)
+        }
+    };
+    Some(art_of(rgba, w, h))
+}
+
+fn art_of(rgba: Vec<u8>, width: u32, height: u32) -> GlassArt {
+    let windows = crate::backdrop::by_corner(&crate::backdrop::painted(&rgba, width, height), None);
+    let (rgba, width, height) = crate::backdrop::downscale(&rgba, width, height, ART_WIDTH);
+    GlassArt {
+        rgba,
+        width,
+        height,
+        windows,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

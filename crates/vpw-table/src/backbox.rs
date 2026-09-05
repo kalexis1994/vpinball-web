@@ -65,6 +65,32 @@ pub const DISPLAY_PIXELS: (u32, u32) = (512, 128);
 /// room for the artwork when there is any.
 pub const DISPLAY_AREA: [f32; 4] = [0.12, 0.16, 0.76, 0.30];
 
+/// The pictures in the score windows of a head that wears its table's glass,
+/// one per player: `vpw:score0` to `vpw:score3`. See [`score_window_image`]
+/// and [`crate::backglass::GlassArt`].
+pub const SCORE_WINDOW_PREFIX: &str = "vpw:score";
+
+/// The name of player `i`'s window picture.
+pub fn score_window_image(i: usize) -> String {
+    format!("{SCORE_WINDOW_PREFIX}{i}")
+}
+
+/// Whether an image is one the machine's score is drawn into — the head's
+/// panel or one of its windows — and so a light rather than a lit thing, and
+/// redrawn as the machine speaks.
+pub fn is_score_image(name: &str) -> bool {
+    name == DISPLAY_IMAGE || name.starts_with(SCORE_WINDOW_PREFIX)
+}
+
+/// A score window on the head: where it is on the face and what picture it
+/// shows, at what size. See [`crate::geometry::Scene::head_windows`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct HeadWindow {
+    pub image: String,
+    pub rect: [f32; 4],
+    pub size: (u32, u32),
+}
+
 /// How much wider the head is than the playfield.
 ///
 /// A standard body is about 20 1/2 inches across the playfield and the head
@@ -184,18 +210,36 @@ impl Backbox {
         [at(-1.0, -1.0), at(1.0, -1.0), at(1.0, 1.0), at(-1.0, 1.0)]
     }
 
+    /// The same head shaped to a picture: as wide as before, as tall as the
+    /// picture's proportions make it, standing on the same rise.
+    pub fn with_aspect(mut self, width_over_height: f32) -> Self {
+        if width_over_height > 0.1 {
+            let height = self.width / width_over_height;
+            let rise = self.center.z - self.height * 0.5;
+            self.center.z = rise + height * 0.5;
+            self.height = height;
+        }
+        self
+    }
+
     /// The score display, as a mesh of its own on the face of the head.
     ///
     /// Separate from the head rather than textured onto it, because the two are
     /// different things: the head is a panel and the display is a window set
     /// into it. Keeping them apart also means the head can carry artwork later
     /// without the display having to share a texture with it.
+    pub fn display_mesh(&self) -> Mesh {
+        self.window_mesh(DISPLAY_AREA, DISPLAY_IMAGE)
+    }
+
+    /// A window on the face of the head, at `area` — `[left, top, width,
+    /// height]` as fractions of the face — showing `image`.
     ///
     /// Pushed a hair towards the player so it does not fight the panel behind
     /// it for the same depth — two coplanar surfaces come out as a stipple of
     /// whichever won each pixel.
-    pub fn display_mesh(&self) -> Mesh {
-        let [left, top, width, height] = DISPLAY_AREA;
+    pub fn window_mesh(&self, area: [f32; 4], image: &str) -> Mesh {
+        let [left, top, width, height] = area;
         let normal = self.normal();
         let (sin, cos) = self.lean.sin_cos();
         let up = Vec3::new(0.0, -sin, cos);
@@ -214,7 +258,7 @@ impl Backbox {
             uv: [u, v],
         };
         Mesh {
-            name: "backbox display".into(),
+            name: format!("backbox {image}"),
             vertices: vec![
                 corner(0.0, 1.0),
                 corner(1.0, 1.0),
@@ -223,7 +267,7 @@ impl Backbox {
             ],
             indices: vec![0, 1, 2, 0, 2, 3],
             transform: Mat4::IDENTITY,
-            image: DISPLAY_IMAGE.into(),
+            image: image.into(),
             material: String::new(),
             visible: true,
             clamp: false,

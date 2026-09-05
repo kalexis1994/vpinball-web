@@ -409,6 +409,8 @@ fn the_moving_pieces_leave_the_baked_scene() {
         ball_decal: String::new(),
         backdrop_image: String::new(),
         backdrop_color: [0.0; 3],
+        score_windows: Default::default(),
+        head_windows: Vec::new(),
         lighting: vpw_table::geometry::Lighting {
             lights: [Vec3::ZERO; 2],
             emission: [0.0; 3],

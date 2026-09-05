@@ -926,6 +926,19 @@ impl Machine {
         }
     }
 
+    /// One player's digits: where they are in [`Self::segments`] and what
+    /// shapes they are made of. See [`Self::score_groups`].
+    pub fn score_groups(&self) -> Vec<ScoreGroup> {
+        match &*self.board.borrow() {
+            Hardware::S11(_) => s11_score_groups(),
+            Hardware::Gts80(b) if b.mem.generation == vpw_gts80::Generation::Bcd => {
+                gts80_score_groups()
+            }
+            // A dot matrix, or two rows of words: one panel, no windows.
+            _ => Vec::new(),
+        }
+    }
+
     /// Every lamp that changed since the last time this was asked.
     ///
     /// Reading **clears** the record, which is the contract the script is
@@ -1478,9 +1491,62 @@ fn pick_like<'a>(images: &'a [(String, Vec<u8>)], marker: &str) -> Option<&'a [u
         .map(|(_, d)| d.as_slice())
 }
 
+/// One player's score on a backglass with a window per player: which of
+/// [`Machine::segments`] it is, and whether they are the fourteen-stroke
+/// alphanumeric kind or the seven-stroke numeric kind.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScoreGroup {
+    pub digits: std::ops::Range<usize>,
+    pub alphanumeric: bool,
+}
+
+/// A System 80 or 80A's four players, in PinMAME's own layout
+/// (`gts80games.c:26`): each bank of sixteen holds two players, at positions
+/// two and nine, seven digits apiece — a System 80 lights six of the seven,
+/// and the seventh cell stays dark. [`Machine::segments`] hands over bank
+/// zero then bank one, so players three and four are sixteen further on.
+pub fn gts80_score_groups() -> Vec<ScoreGroup> {
+    [2..9, 9..16, 18..25, 25..32]
+        .into_iter()
+        .map(|digits| ScoreGroup {
+            digits,
+            alphanumeric: false,
+        })
+        .collect()
+}
+
+/// A System 11's four players: seven digits each, two to a row, the top row
+/// alphanumeric and the bottom numeric. [`Machine::segments`] packs each row
+/// to its fourteen shown slots (`vpw_s11::display::visible_slots`), so the
+/// second row starts at fourteen.
+pub fn s11_score_groups() -> Vec<ScoreGroup> {
+    [(0..7, true), (7..14, true), (14..21, false), (21..28, false)]
+        .into_iter()
+        .map(|(digits, alphanumeric)| ScoreGroup {
+            digits,
+            alphanumeric,
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn four_players_fit_two_banks_of_sixteen() {
+        let g = gts80_score_groups();
+        assert_eq!(g.len(), 4);
+        assert!(g.iter().all(|s| s.digits.len() == 7 && s.digits.end <= 32));
+        assert_eq!(g[2].digits.start, 16 + g[0].digits.start);
+    }
+
+    #[test]
+    fn a_system_11_row_holds_two_players() {
+        let g = s11_score_groups();
+        assert_eq!(g[1].digits.end, 14, "the top row is fourteen slots");
+        assert!(g[0].alphanumeric && !g[3].alphanumeric);
+    }
 
     #[test]
     fn every_lamp_has_a_number_the_board_answers_for() {

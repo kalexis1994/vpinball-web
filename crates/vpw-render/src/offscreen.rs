@@ -30,6 +30,10 @@ pub struct Offscreen {
     /// The table's own backdrop picture, if it named one. See
     /// `crate::pass::draw_full`.
     pub backdrop: Option<wgpu::BindGroup>,
+    /// The score on the backdrop. See [`crate::overlay`].
+    pub overlay: Option<crate::overlay::ScoreOverlay>,
+    /// The playfield's corners, for working out where it lands on screen.
+    playfield: Option<(vpw_math::Vec3, vpw_math::Vec3)>,
     width: u32,
     height: u32,
     color: wgpu::Texture,
@@ -128,6 +132,8 @@ impl Offscreen {
 
         Ok(Self {
             backdrop: None,
+            overlay: None,
+            playfield: None,
             device,
             queue,
             pipeline,
@@ -178,6 +184,14 @@ impl Offscreen {
         ) {}
     }
 
+    /// Puts a picture in score window `i` on the backdrop. See
+    /// [`crate::overlay`].
+    pub fn set_score_window(&mut self, i: usize, raster: &crate::segments::Raster) {
+        if let Some(o) = &mut self.overlay {
+            o.set(&self.device, &self.queue, &self.pipeline.backdrop_layout, i, raster);
+        }
+    }
+
     pub fn flat_off(&mut self) {
         if let Some(flat) = &mut self.flat {
             flat.invalidate();
@@ -189,7 +203,17 @@ impl Offscreen {
     /// So a photograph taken from the terminal is a photograph of what a player
     /// would see, display and all.
     pub fn set_display(&mut self, scene: &GpuScene, raster: &crate::segments::Raster) {
-        let Some(tex) = scene.redrawn.get(vpw_table::backbox::DISPLAY_IMAGE) else {
+        self.set_redrawn(scene, vpw_table::backbox::DISPLAY_IMAGE, raster);
+    }
+
+    /// Redraws player `i`'s score into its window on the head, when the head
+    /// wears a glass with windows. See [`vpw_table::backbox::HeadWindow`].
+    pub fn set_head_window(&mut self, scene: &GpuScene, i: usize, raster: &crate::segments::Raster) {
+        self.set_redrawn(scene, &vpw_table::backbox::score_window_image(i), raster);
+    }
+
+    fn set_redrawn(&mut self, scene: &GpuScene, name: &str, raster: &crate::segments::Raster) {
+        let Some(tex) = scene.redrawn.get(name) else {
             return;
         };
         if tex.width() != raster.width || tex.height() != raster.height {
@@ -364,6 +388,15 @@ impl Offscreen {
     pub fn upload(&mut self, scene: &Scene) -> GpuScene {
         self.backdrop =
             crate::backdrop_bind_group(&self.device, &self.queue, &self.pipeline, scene);
+        self.overlay = self.backdrop.as_ref().map(|_| {
+            crate::overlay::ScoreOverlay::new(
+                &self.device,
+                &self.queue,
+                &self.pipeline.backdrop_layout,
+                &scene.score_windows,
+            )
+        });
+        self.playfield = Some((scene.playfield.min, scene.playfield.max));
         self.pipeline.set_envmap(
             &self.device,
             crate::env::EnvMap::for_table(&self.device, &self.queue, scene),
@@ -417,6 +450,12 @@ impl Offscreen {
         // buffers', which the render scale may have shrunk — exactly as
         // `TableRenderer::render` divides them.
         let aspect = self.width as f32 / self.height as f32;
+        // Which of the backdrop's windows the score can use, from where the
+        // playfield lands with this camera.
+        if let (Some(o), Some((lo, hi))) = (&mut self.overlay, self.playfield) {
+            let table = crate::camera::screen_quad(camera.view_projection(aspect), lo, hi);
+            o.choose(&self.queue, table);
+        }
         let gi = self.lights.gi_sources(crate::scene::MAX_GI_BULBS);
         self.pipeline.set_frame(
             &self.queue,
@@ -469,6 +508,7 @@ impl Offscreen {
                 &self.lights,
                 Some(&self.flashers),
                 true,
+                self.overlay.as_ref(),
             );
         } else {
             let (color, resolve) = self.post.scene_color();
@@ -483,6 +523,7 @@ impl Offscreen {
                 Some(&self.lights),
                 Some(&self.flashers),
                 self.backdrop.as_ref(),
+                self.overlay.as_ref(),
                 &filter,
             );
         }

@@ -12,4 +12,4 @@ vpw-math = { version = "0.1.0", path = "../vpw-math" }
 vpw-physics = { version = "0.1.0", path = "../vpw-physics" }
 # For the palette the head's artwork is painted from: a table's colours are in
 # its playfield texture, and reading them means decoding it once.
-image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }

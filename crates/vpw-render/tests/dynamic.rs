@@ -97,6 +97,8 @@ fn floor_scene() -> Scene {
         ball_decal: String::new(),
         backdrop_image: String::new(),
         backdrop_color: [0.0; 3],
+        score_windows: Default::default(),
+        head_windows: Vec::new(),
         lighting: Lighting {
             lights: [Vec3::new(0.0, 0.0, 800.0), Vec3::new(0.0, 0.0, 800.0)],
             emission: [1.0, 1.0, 1.0],

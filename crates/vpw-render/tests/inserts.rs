@@ -177,6 +177,8 @@ fn scene(image: &str, image_mode: bool, surface_image: &str, state: f32) -> Scen
         ball_decal: String::new(),
         backdrop_image: String::new(),
         backdrop_color: [0.0; 3],
+        score_windows: Default::default(),
+        head_windows: Vec::new(),
         flashers: Vec::new(),
     }
 }

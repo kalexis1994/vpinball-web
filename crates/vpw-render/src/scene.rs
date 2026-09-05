@@ -700,7 +700,7 @@ pub fn material_slot_cached(
     // The original never faces this because its desktop backglass is a
     // backdrop drawn outside the scene's lighting altogether; this port's head
     // is in the scene, so the panel carries an emissive flag instead.
-    if image.is_some_and(|i| i.name == vpw_table::backbox::DISPLAY_IMAGE) {
+    if image.is_some_and(|i| vpw_table::backbox::is_score_image(&i.name)) {
         data.extra[3] = 1.0;
     }
     // And the artwork around it is a light too, for the same reason and to a

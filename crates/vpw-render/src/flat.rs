@@ -107,7 +107,7 @@ pub struct Flat {
 /// The batches the photograph excludes and the live pass draws instead: the
 /// head's score display, whose texture changes every frame.
 fn is_live(b: &crate::scene::Batch) -> bool {
-    b.image == vpw_table::backbox::DISPLAY_IMAGE
+    vpw_table::backbox::is_score_image(&b.image)
 }
 
 impl Flat {
@@ -1041,6 +1041,7 @@ fn fs_keep_depth(in : VsOut) -> @location(0) vec4<f32> {
         lights: &Lights,
         flashers: Option<&Flashers>,
         head: bool,
+        overlay: Option<&crate::overlay::ScoreOverlay>,
     ) {
         let Some(baked) = &self.baked else { return };
 
@@ -1128,6 +1129,14 @@ fn fs_keep_depth(in : VsOut) -> @location(0) vec4<f32> {
         }
         if let Some(f) = flashers {
             f.draw(&mut pass, &pipeline.light_frame_bind_group);
+        }
+        // The score on the backdrop. Over the photograph whichever kind of
+        // window it is: the photograph already has the table in it, and a
+        // painted window the table stands on cannot go under it here. The
+        // windows are chosen from the corners, where the table is not.
+        if let Some(o) = overlay.filter(|o| !o.is_empty()) {
+            pass.set_pipeline(&pipeline.sprite);
+            o.draw(&mut pass);
         }
     }
 }

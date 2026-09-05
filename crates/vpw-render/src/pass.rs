@@ -164,6 +164,7 @@ pub fn draw(
         lights,
         None,
         None,
+        None,
         |_| true,
     );
 }
@@ -179,7 +180,7 @@ pub fn draw_filtered(
     filter: impl Fn(&crate::scene::Batch) -> bool,
 ) {
     draw_full(
-        encoder, color, None, depth, pipeline, scene, None, None, None, None, filter,
+        encoder, color, None, depth, pipeline, scene, None, None, None, None, None, filter,
     );
 }
 
@@ -213,6 +214,7 @@ pub fn draw_full(
     lights: Option<&Lights>,
     flashers: Option<&Flashers>,
     backdrop: Option<&wgpu::BindGroup>,
+    overlay: Option<&crate::overlay::ScoreOverlay>,
     filter: impl Fn(&crate::scene::Batch) -> bool,
 ) {
     let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -247,7 +249,14 @@ pub fn draw_full(
     if let Some(bg) = backdrop {
         pass.set_pipeline(&pipeline.backdrop);
         pass.set_bind_group(0, bg, &[]);
-        pass.draw(0..3, 0..1);
+        pass.draw(0..6, 0..1);
+    }
+    // The score in the windows the backdrop painted for it: part of the
+    // picture, so drawn with it and covered by the table the same way. See
+    // [`crate::overlay`].
+    if let Some(o) = overlay.filter(|o| !o.over && !o.is_empty()) {
+        pass.set_pipeline(&pipeline.sprite);
+        o.draw(&mut pass);
     }
 
     pass.set_bind_group(0, &pipeline.frame_bind_group, &[]);
@@ -291,5 +300,12 @@ pub fn draw_full(
     // And the flashers over the lot; see above for why not before the lights.
     if let Some(f) = flashers {
         f.draw(&mut pass, &pipeline.light_frame_bind_group);
+    }
+
+    // A display the table placed itself goes over everything, which is where
+    // the original puts it (`textbox.cpp:317`, depth −10000).
+    if let Some(o) = overlay.filter(|o| o.over && !o.is_empty()) {
+        pass.set_pipeline(&pipeline.sprite);
+        o.draw(&mut pass);
     }
 }

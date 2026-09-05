@@ -58,6 +58,20 @@ fn main() {
             }
         }
     }
+    // VPW_REVEAL=name shows a mesh the file hides: what a script turns on
+    // from `Init`, which this example does not run.
+    if let Ok(reveal) = std::env::var("VPW_REVEAL") {
+        let mut shown = 0;
+        for want in reveal.split(',').map(|s| s.trim().to_lowercase()) {
+            for m in &mut scene.meshes {
+                if !m.visible && m.name.to_lowercase().contains(&want) {
+                    m.visible = true;
+                    shown += 1;
+                }
+            }
+        }
+        println!("revealed {shown} hidden meshes matching '{reveal}'");
+    }
     if let Ok(hide) = std::env::var("VPW_HIDE") {
         let hide = hide.to_lowercase();
         let mut gone = 0;
@@ -482,6 +496,58 @@ fn main() {
             },
         );
         gpu.set_display(&gpu_scene, &raster);
+
+        // And the same score into the backdrop's windows, the way the player
+        // shares it out: the whole panel to one window, a row to each of
+        // two, seven digits to each of more.
+        let rects = gpu.overlay.as_ref().map(|o| o.rects()).unwrap_or_default();
+        let row = |segs: &[u16], glyph: Glyph, columns: usize| {
+            vpw_render::segments::draw(
+                &[Row {
+                    segments: segs,
+                    glyph,
+                }],
+                (columns as u32 * 48, 96),
+                Style {
+                    columns,
+                    blank_strokes: false,
+                    ..Default::default()
+                },
+            )
+        };
+        match rects.len() {
+            0 => {}
+            1 => gpu.set_score_window(0, &raster),
+            2 => {
+                gpu.set_score_window(0, &row(&top, Glyph::Alphanumeric, columns));
+                gpu.set_score_window(1, &row(&bottom, Glyph::Numeric, columns));
+            }
+            n => {
+                let all: Vec<u16> = top.iter().chain(bottom.iter()).copied().collect();
+                for (i, digits) in all.chunks(7).take(n).enumerate() {
+                    gpu.set_score_window(i, &row(digits, Glyph::Numeric, 7));
+                }
+            }
+        }
+        // And the head's windows, when it wears a glass that has them: seven
+        // digits apiece, at the size the scene fixed for each.
+        let all: Vec<u16> = top.iter().chain(bottom.iter()).copied().collect();
+        for (i, hw) in scene.head_windows.iter().enumerate() {
+            let digits = all.chunks(7).nth(i).unwrap_or(&[]);
+            let picture = vpw_render::segments::draw(
+                &[Row {
+                    segments: digits,
+                    glyph: Glyph::Numeric,
+                }],
+                hw.size,
+                Style {
+                    columns: 7,
+                    blank_strokes: false,
+                    ..Default::default()
+                },
+            );
+            gpu.set_head_window(&gpu_scene, i, &picture);
+        }
     }
 
     let aspect = width as f32 / height as f32;
@@ -496,8 +562,12 @@ fn main() {
             };
             let head = vpw_table::backbox::Backbox::for_playfield(scene.playfield).bounds();
             // A head the table built for itself is not ours to frame, the same
-            // way the player treats it.
-            let head = if scene.built_head {
+            // way the player treats it. Nor is ours, from the front, on a
+            // table that brings a backdrop: the picture is the backglass and
+            // the head stays out of it. See `vpw_table::backdrop`.
+            let front_with_backdrop = matches!(view, vpw_render::camera::View::Front)
+                && !scene.backdrop_image.is_empty();
+            let head = if scene.built_head && !front_with_backdrop {
                 (head.min, head.max)
             } else {
                 let pf = scene.playfield;
@@ -668,7 +738,15 @@ fn main() {
         std::env::var("VPW_VIEW").ok().as_deref(),
         Some("cabinet") | Some("gabinete")
     );
+    // And not from the front on a table with a backdrop: the picture is the
+    // backglass there, and the score goes in its windows.
+    let head = head && (room || scene.backdrop_image.is_empty());
     gpu.room = room;
+    // No picture behind a room: the player draws none there either.
+    if room {
+        gpu.backdrop = None;
+        gpu.overlay = None;
+    }
     let pixels = gpu.render_filtered(&gpu_scene, &camera, |b| {
         if !room && b.scenery {
             return false;
@@ -687,6 +765,9 @@ fn main() {
         }
         only.as_ref().is_none_or(matches)
     });
+    if let Some(o) = &gpu.overlay {
+        println!("score windows on the backdrop: {:?}", o.rects());
+    }
     let draw_time = t3.elapsed();
 
     let s = gpu_scene.stats;

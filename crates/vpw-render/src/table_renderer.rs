@@ -50,6 +50,11 @@ pub struct TableRenderer {
     /// front view has to keep in shot. A table that models its own is framed
     /// on its own parts, the way its author framed it.
     built_head: bool,
+    /// The score on the backdrop, for a table that brings one. See
+    /// [`crate::overlay`] and [`Self::backdrop_hides_head`].
+    overlay: Option<crate::overlay::ScoreOverlay>,
+    /// The score windows on the head. See [`Self::head_windows`].
+    head_windows: Vec<vpw_table::backbox::HeadWindow>,
     /// The camera the table's author set up, for the views that have one.
     authored: Option<vpw_table::geometry::AuthoredView>,
     /// What the original's own camera is fitted to. See
@@ -138,6 +143,8 @@ impl TableRenderer {
             pending_display: None,
             framing: None,
             built_head: true,
+            overlay: None,
+            head_windows: Vec::new(),
             authored: None,
             legacy: Vec::new(),
             cabinet: None,
@@ -199,7 +206,7 @@ impl TableRenderer {
     /// it does not, which is almost always: the number of digits is a fact
     /// about the machine and does not move.
     pub fn set_display(&mut self, raster: &crate::segments::Raster) {
-        let Some(scene) = &mut self.scene else { return };
+        let Some(scene) = &self.scene else { return };
         let Some(tex) = scene.redrawn.get(vpw_table::backbox::DISPLAY_IMAGE) else {
             return;
         };
@@ -209,6 +216,36 @@ impl TableRenderer {
             // again. Rebuilding means a new bind group, which the scene owns,
             // so this is left to the upload path rather than done behind it.
             self.pending_display = Some(raster.clone());
+            return;
+        }
+        self.write_redrawn(vpw_table::backbox::DISPLAY_IMAGE, raster);
+    }
+
+    /// The score windows on the head, when it wears a glass that has them:
+    /// each one's picture name and the size it is drawn at. Empty when the
+    /// score is on the head's own panel. See
+    /// [`vpw_table::backbox::HeadWindow`].
+    pub fn head_windows(&self) -> &[vpw_table::backbox::HeadWindow] {
+        &self.head_windows
+    }
+
+    /// Redraws player `i`'s score into its window on the head. The raster
+    /// has to be the window's own size; see [`Self::head_windows`].
+    pub fn set_head_window(&mut self, i: usize, raster: &crate::segments::Raster) {
+        let Some(hw) = self.head_windows.get(i) else { return };
+        if hw.size != (raster.width, raster.height) {
+            return;
+        }
+        let name = hw.image.clone();
+        self.write_redrawn(&name, raster);
+    }
+
+    /// Writes a raster over one of the scene's redrawn textures, which has
+    /// to be the same size.
+    fn write_redrawn(&self, name: &str, raster: &crate::segments::Raster) {
+        let Some(scene) = &self.scene else { return };
+        let Some(tex) = scene.redrawn.get(name) else { return };
+        if tex.width() != raster.width || tex.height() != raster.height {
             return;
         }
         self.gpu.queue.write_texture(
@@ -247,6 +284,15 @@ impl TableRenderer {
         if !self.view.shows_backbox() {
             return None;
         }
+        // With the head behind the backdrop the score is in the picture's
+        // own windows, and that is where it is on screen: the first window,
+        // which is player one's.
+        if self.backdrop_hides_head(self.view) {
+            return self
+                .overlay
+                .as_ref()
+                .and_then(|o| o.rects().into_iter().flatten().next());
+        }
         let (_, head) = self.framing?;
         let (w, h) = self.gpu.size();
         let vp = self.camera.view_projection(w as f32 / h as f32);
@@ -269,6 +315,41 @@ impl TableRenderer {
             max_y = max_y.max(y);
         }
         Some([min_x, min_y, max_x - min_x, max_y - min_y])
+    }
+
+    /// Whether the head stays out of this view because the table brought a
+    /// backdrop.
+    ///
+    /// The original's desktop mode draws the backdrop picture over the whole
+    /// window and no head at all: the picture *is* the backglass, composed by
+    /// the author with the playfield standing over its middle. Standing our
+    /// own head in front of it covers the art with a panel of noise. So a
+    /// table with a backdrop is drawn the original's way — picture, table,
+    /// and the score in the picture's own windows — and the head we built is
+    /// kept for the cabinet view, which stands you in a room and draws no
+    /// picture. See [`vpw_table::backdrop`].
+    fn backdrop_hides_head(&self, view: crate::camera::View) -> bool {
+        self.backdrop.is_some() && matches!(view, crate::camera::View::Front)
+    }
+
+    /// The score windows on the backdrop, by player, `None` for a player
+    /// without one. Empty when the score is on the head instead. See
+    /// [`vpw_table::backdrop`].
+    pub fn score_window_rects(&self) -> Vec<Option<[f32; 4]>> {
+        self.overlay.as_ref().map(|o| o.rects()).unwrap_or_default()
+    }
+
+    /// Puts a picture in score window `i`. See [`Self::score_window_rects`].
+    pub fn set_score_window(&mut self, i: usize, raster: &crate::segments::Raster) {
+        if let Some(o) = &mut self.overlay {
+            o.set(
+                &self.gpu.device,
+                &self.gpu.queue,
+                &self.pipeline.backdrop_layout,
+                i,
+                raster,
+            );
+        }
     }
 
     /// Where the playfield lands on screen, as `[left, top, width, height]`
@@ -338,6 +419,20 @@ impl TableRenderer {
         if let Some(camera) = self.camera_for(self.view) {
             self.camera = camera;
         }
+        // And moves the table on the screen, which is what decides which of
+        // the backdrop's windows the score can use. See
+        // [`crate::overlay::ScoreOverlay::choose`].
+        let table = self.framing.and_then(|(table, _)| {
+            let (w, h) = self.gpu.size();
+            crate::camera::screen_quad(
+                self.camera.view_projection(w as f32 / h as f32),
+                table.min,
+                table.max,
+            )
+        });
+        if let Some(o) = &mut self.overlay {
+            o.choose(&self.gpu.queue, table);
+        }
     }
 
     /// Where a given view's camera goes, without moving to it.
@@ -355,7 +450,7 @@ impl TableRenderer {
         // handing it over again as a box would push the machine away to make
         // room for a claim about its corners that is not true. Giving the
         // playfield's own box in its place adds nothing, which is right.
-        let head = if self.built_head {
+        let head = if self.built_head && !self.backdrop_hides_head(view) {
             (head.min, head.max)
         } else {
             (table.min, table.max)
@@ -485,7 +580,18 @@ impl TableRenderer {
         ));
         self.backdrop =
             crate::backdrop_bind_group(&self.gpu.device, &self.gpu.queue, &self.pipeline, scene);
+        // And the score on it, in the windows the scene worked out. Only with
+        // a backdrop: without one the score is on the head.
+        self.overlay = self.backdrop.as_ref().map(|_| {
+            crate::overlay::ScoreOverlay::new(
+                &self.gpu.device,
+                &self.gpu.queue,
+                &self.pipeline.backdrop_layout,
+                &scene.score_windows,
+            )
+        });
         self.built_head = scene.built_head;
+        self.head_windows = scene.head_windows.clone();
         self.authored = Some(scene.view);
         self.cabinet = Some(scene.cabinet);
         self.occupied = scene.occupied();
@@ -513,6 +619,7 @@ impl TableRenderer {
         self.scene = None;
         self.dynamic = None;
         self.backdrop = None;
+        self.overlay = None;
         self.lights.lights.clear();
         self.flashers = Flashers::new(
             &self.gpu.device,
@@ -797,6 +904,7 @@ impl TableRenderer {
         // The flat bake, a few photographs a frame, goes first: it writes
         // frame uniforms and lamp levels of its own, and the live
         // `set_frame` below takes the frame back afterwards.
+        let head_in_bake = self.view.shows_backbox() && !self.backdrop_hides_head(self.view);
         if self.flat_on
             && let Some(flat) = &mut self.flat
             && !flat.ready()
@@ -811,7 +919,7 @@ impl TableRenderer {
                 self.camera.view_projection(aspect),
                 self.camera.eye(),
                 &lighting,
-                self.view.shows_backbox(),
+                head_in_bake,
                 // Always with the playfield's mirror, whatever the governor
                 // decided for the live path: the probe's cost is per
                 // photograph here, not per frame, and the photographs are
@@ -860,7 +968,7 @@ impl TableRenderer {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("vpw-frame"),
             });
-        let head = self.view.shows_backbox();
+        let head = self.view.shows_backbox() && !self.backdrop_hides_head(self.view);
         // The room a table stands in is drawn from inside it and nowhere else.
         // Looking *at* the machine you are outside it, and all it can do is
         // hang its lid over the playfield and across the backglass. See
@@ -888,6 +996,7 @@ impl TableRenderer {
                 &self.lights,
                 Some(&self.flashers),
                 head,
+                if room { None } else { self.overlay.as_ref() },
             );
             self.post.finish(&mut encoder, &view);
             self.gpu.queue.submit(Some(encoder.finish()));
@@ -939,6 +1048,7 @@ impl TableRenderer {
             // and this port models one — a photograph pasted across the back
             // of it would be a wall with no floor.
             if room { None } else { self.backdrop.as_ref() },
+            if room { None } else { self.overlay.as_ref() },
             move |b| (head || !b.backbox) && (room || !b.scenery),
         );
         self.post.finish(&mut encoder, &view);

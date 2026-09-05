@@ -12,6 +12,7 @@ pub mod flashers;
 pub mod flat;
 pub mod lights;
 pub mod meshopt;
+pub mod overlay;
 pub mod pass;
 pub mod pipeline;
 pub mod post;
@@ -417,26 +418,16 @@ pub fn backdrop_bind_group(
 ) -> Option<wgpu::BindGroup> {
     let image = scene.image(&scene.backdrop_image)?;
     let (_, view) = scene::upload_texture(device, queue, image)?;
-    let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-        label: Some("vpw-backdrop-sampler"),
-        address_mode_u: wgpu::AddressMode::ClampToEdge,
-        address_mode_v: wgpu::AddressMode::ClampToEdge,
-        mag_filter: wgpu::FilterMode::Linear,
-        min_filter: wgpu::FilterMode::Linear,
-        ..Default::default()
-    });
-    Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("vpw-backdrop-bg"),
-        layout: &pipeline.backdrop_layout,
-        entries: &[
-            wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::TextureView(&view),
-            },
-            wgpu::BindGroupEntry {
-                binding: 1,
-                resource: wgpu::BindingResource::Sampler(&sampler),
-            },
-        ],
-    }))
+    let sampler = overlay::sprite_sampler(device);
+    // Stretched over the whole screen, which is what a sprite drawn from
+    // (0,0) to (1,1) does. Its own aspect is not kept, and the original does
+    // not keep it either.
+    let uniform = overlay::sprite_uniform(device, [0.0, 0.0, 1.0, 1.0]);
+    Some(overlay::sprite_bind_group(
+        device,
+        &pipeline.backdrop_layout,
+        &view,
+        &sampler,
+        &uniform,
+    ))
 }

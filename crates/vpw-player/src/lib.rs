@@ -565,12 +565,16 @@ fn draw_display(table: &Game, renderer: &mut TableRenderer, last: &mut Vec<u16>)
             return;
         }
         *last = digest;
-        renderer.set_display(&dot_raster(
-            &dots,
-            width,
-            height,
-            vpw_table::backbox::DISPLAY_PIXELS,
-        ));
+        let raster = dot_raster(&dots, width, height, vpw_table::backbox::DISPLAY_PIXELS);
+        renderer.set_display(&raster);
+        // And into the first window on the backdrop, and the first on the
+        // head, if the table has them: a dot matrix is one panel, whatever
+        // the picture painted.
+        renderer.set_score_window(0, &raster);
+        if let Some(hw) = renderer.head_windows().first() {
+            let size = hw.size;
+            renderer.set_head_window(0, &dot_raster(&dots, width, height, size));
+        }
         // And the same dots to any flasher the table uses as its display —
         // which is how a 10.8 table puts the DMD on the playfield. Those draw
         // the dots themselves, so they get the dots and not the picture.
@@ -587,6 +591,108 @@ fn draw_display(table: &Game, renderer: &mut TableRenderer, last: &mut Vec<u16>)
         &segments,
         vpw_table::backbox::DISPLAY_PIXELS,
     ));
+    draw_windows(table, renderer, &segments);
+}
+
+/// The score into the windows a picture has for it: the backdrop's, when
+/// the table brings one, and the head's, when it wears a glass with windows.
+///
+/// One window gets the whole panel; two get a row each, which on a System
+/// 80 is players one and two above three and four; more get a player
+/// apiece, in the machine's own layout (`Machine::score_groups`). Each
+/// window's picture is drawn at the window's own shape, so a six-digit
+/// score fills a wide window with digits the size the window allows rather
+/// than a stretched copy of the head's panel. See `vpw_table::backdrop`.
+fn draw_windows(table: &Game, renderer: &mut TableRenderer, segments: &[u16]) {
+    // The backdrop's windows, sized from where each lands on the screen.
+    let (sw, sh) = renderer.size();
+    let on_backdrop: Vec<Option<(u32, u32)>> = renderer
+        .score_window_rects()
+        .into_iter()
+        .map(|r| {
+            r.map(|rect| {
+                let aspect = (rect[2] * sw as f32) / (rect[3] * sh as f32).max(1.0);
+                (((96.0 * aspect).round() as u32).clamp(128, 1024), 96)
+            })
+        })
+        .collect();
+    for (i, raster) in window_rasters(table, segments, &on_backdrop) {
+        renderer.set_score_window(i, &raster);
+    }
+    // And the head's, at the sizes the scene fixed for them.
+    let on_head: Vec<Option<(u32, u32)>> = renderer
+        .head_windows()
+        .iter()
+        .map(|hw| Some(hw.size))
+        .collect();
+    for (i, raster) in window_rasters(table, segments, &on_head) {
+        renderer.set_head_window(i, &raster);
+    }
+}
+
+/// Shares the machine's segments out over a set of windows, drawing each
+/// window's share at the size asked for. `None` is a window that is not
+/// there — a player whose corner the picture has no window in.
+fn window_rasters(
+    table: &Game,
+    segments: &[u16],
+    sizes: &[Option<(u32, u32)>],
+) -> Vec<(usize, vpw_render::segments::Raster)> {
+    use vpw_render::segments::{Glyph, Row, Style};
+    let row = |segs: &[u16], alphanumeric: bool, size: (u32, u32)| {
+        vpw_render::segments::draw(
+            &[Row {
+                segments: segs,
+                glyph: if alphanumeric {
+                    Glyph::Alphanumeric
+                } else {
+                    Glyph::Numeric
+                },
+            }],
+            size,
+            Style {
+                columns: segs.len().max(1),
+                blank_strokes: false,
+                ..Default::default()
+            },
+        )
+    };
+    let whole = |size: (u32, u32)| segment_raster(segments, size);
+    let mut out = Vec::new();
+    match sizes.len() {
+        0 => {}
+        1 => {
+            if let Some(size) = sizes[0] {
+                out.push((0, whole(size)));
+            }
+        }
+        2 => {
+            let split = segments.len() / 2;
+            if let Some(size) = sizes[0] {
+                out.push((0, row(&segments[..split], true, size)));
+            }
+            if let Some(size) = sizes[1] {
+                out.push((1, row(&segments[split..], false, size)));
+            }
+        }
+        _ => {
+            let groups = table.machine().score_groups();
+            if groups.is_empty() {
+                // A machine with one panel and a picture with several
+                // windows: the panel in the first, and the rest stay paint.
+                if let Some(size) = sizes[0] {
+                    out.push((0, whole(size)));
+                }
+                return out;
+            }
+            for (i, g) in groups.iter().enumerate().take(sizes.len()) {
+                let Some(size) = sizes[i] else { continue };
+                let digits = g.digits.start.min(segments.len())..g.digits.end.min(segments.len());
+                out.push((i, row(&segments[digits], g.alphanumeric, size)));
+            }
+        }
+    }
+    out
 }
 
 /// Draws a dot matrix into the panel on the machine's head.
@@ -2170,6 +2276,10 @@ pub fn load_table(bytes: &[u8]) -> Result<SceneStats, JsValue> {
         // Whatever the script rewrote with `UpdateMaterial`, before any of it
         // goes to the GPU. See `vpw_game::Game::apply_material_changes`.
         table.apply_material_changes(&mut scene);
+        // And whatever `Init` showed or hid — the rails a desktop build turns
+        // on, the cabinet walls it turns off. See
+        // `vpw_game::Game::apply_visibility_changes`.
+        table.apply_visibility_changes(&mut scene);
         // No ball. On a ROM table the machine serves one when somebody puts a
         // coin in and presses start, and putting one in the lane before that
         // is a ball the game does not know about: it sits there through the

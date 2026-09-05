@@ -72,6 +72,13 @@ pub struct Style {
     /// How strongly a lit stroke bleeds into the glass around it, 0 for not
     /// at all. See [`bloom`].
     pub glow: f32,
+    /// Whether a cell with nothing lit still shows its unlit strokes.
+    ///
+    /// On the head's panel it does: the panel is the display and its dark
+    /// grid is what makes it one. In a window painted on a backglass it does
+    /// not — a six-digit machine drawn into a seven-cell window would show a
+    /// ghost of a digit it does not have.
+    pub blank_strokes: bool,
 }
 
 impl Default for Style {
@@ -86,6 +93,7 @@ impl Default for Style {
             // Enough to be seen and not enough to be noticed, which is the
             // amount a real one has.
             glow: 0.55,
+            blank_strokes: true,
         }
     }
 }
@@ -369,6 +377,9 @@ fn draw_digit(
     glyph: Glyph,
     style: Style,
 ) {
+    if mask == 0 && !style.blank_strokes {
+        return;
+    }
     let (cw, ch) = (cell.0 as f32, cell.1 as f32);
     let pad = cw * PADDING;
     // The glyph is one unit across and two down, and takes whichever of the two

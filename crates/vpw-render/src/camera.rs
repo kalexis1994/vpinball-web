@@ -179,6 +179,27 @@ impl View {
     }
 }
 
+/// Where the playfield's outline lands on the screen: its four corners in
+/// order round the rectangle, as screen fractions, y down. `None` when a
+/// corner is behind the eye. See [`vpw_table::backdrop::Quad`].
+pub fn screen_quad(vp: Mat4, min: Vec3, max: Vec3) -> Option<vpw_table::backdrop::Quad> {
+    let corners = [
+        Vec3::new(min.x, min.y, 0.0),
+        Vec3::new(max.x, min.y, 0.0),
+        Vec3::new(max.x, max.y, 0.0),
+        Vec3::new(min.x, max.y, 0.0),
+    ];
+    let mut out = [[0.0f32; 2]; 4];
+    for (o, c) in out.iter_mut().zip(corners) {
+        let clip = vp * c.extend(1.0);
+        if clip.w <= 0.0 {
+            return None;
+        }
+        *o = [(clip.x / clip.w + 1.0) * 0.5, (1.0 - clip.y / clip.w) * 0.5];
+    }
+    Some(out)
+}
+
 /// How much sky the front view leaves over the machine's crown, as a fraction
 /// of the head's own height.
 ///

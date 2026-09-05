@@ -66,8 +66,12 @@ pub struct TablePipeline {
     /// behind a machine is the room it stands in, out of the light.
     pub clear: wgpu::Color,
     /// Draws the table's own backdrop picture over the cleared frame. See
-    /// `backdrop.wgsl`.
+    /// `sprite.wgsl`.
     pub backdrop: wgpu::RenderPipeline,
+    /// The same with alpha blending: a picture *on* the frame rather than
+    /// under it, which is how the score goes onto the backdrop. See
+    /// [`crate::overlay`].
+    pub sprite: wgpu::RenderPipeline,
     /// What that pipeline binds: the picture and its sampler.
     pub backdrop_layout: wgpu::BindGroupLayout,
 }
@@ -109,14 +113,26 @@ impl TablePipeline {
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
+                // Where on the screen, and which part of the picture. See
+                // `crate::overlay::SpriteUniform`.
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         });
         let backdrop_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("vpw-backdrop-shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("backdrop.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(include_str!("sprite.wgsl").into()),
         });
-        let backdrop = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("vpw-backdrop"),
+        let sprite_pipeline = |label: &str, blend: Option<wgpu::BlendState>| device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some(label),
             layout: Some(
                 &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                     label: Some("vpw-backdrop-pipeline-layout"),
@@ -135,7 +151,7 @@ impl TablePipeline {
                 entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: color_format,
-                    blend: None,
+                    blend,
                     write_mask: wgpu::ColorWrites::COLOR,
                 })],
                 compilation_options: Default::default(),
@@ -157,6 +173,8 @@ impl TablePipeline {
             multiview_mask: None,
             cache: None,
         });
+        let backdrop = sprite_pipeline("vpw-backdrop", None);
+        let sprite = sprite_pipeline("vpw-sprite", Some(wgpu::BlendState::ALPHA_BLENDING));
 
         let shader = make_module("vpw-table-shader", include_str!("table_vs.wgsl"));
         let dynamic_shader = make_module("vpw-dynamic-shader", include_str!("dynamic_vs.wgsl"));
@@ -515,6 +533,7 @@ impl TablePipeline {
                 None,
             ),
             backdrop,
+            sprite,
             backdrop_layout,
             frame_layout,
             material_layout,

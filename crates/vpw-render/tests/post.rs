@@ -153,6 +153,8 @@ fn one_bright_light(intensity: f32, alpha: f32) -> Scene {
         ball_decal: String::new(),
         backdrop_image: String::new(),
         backdrop_color: [0.0; 3],
+        score_windows: Default::default(),
+        head_windows: Vec::new(),
         // Nothing else lighting the scene: the lamp is the only source, so
         // every difference between two renders belongs to it.
         lighting: Lighting {

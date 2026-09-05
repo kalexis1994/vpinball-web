@@ -110,6 +110,8 @@ fn floor_under(env_image: &str, images: Vec<Image>) -> Scene {
         ball_decal: String::new(),
         backdrop_image: String::new(),
         backdrop_color: [0.0; 3],
+        score_windows: Default::default(),
+        head_windows: Vec::new(),
         // Ambient and the two scene lights black, as on F-14: whatever the
         // floor shows came from the environment.
         lighting: Lighting {

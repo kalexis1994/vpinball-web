@@ -566,6 +566,13 @@ pub struct Scene {
     pub backdrop_image: String,
     /// What to clear to when there is no backdrop picture. Linear, 0..1.
     pub backdrop_color: [f32; 3],
+    /// Where the score is drawn on the backdrop, in player order. Empty
+    /// without a backdrop. See [`crate::backdrop`].
+    pub score_windows: crate::backdrop::ScoreWindows,
+    /// The score windows on the head, when it wears a glass that has them;
+    /// empty when the score is on the head's own panel. See
+    /// [`crate::backbox::HeadWindow`].
+    pub head_windows: Vec<crate::backbox::HeadWindow>,
     pub lighting: Lighting,
     /// Every lamp the table has, lit or not.
     ///
@@ -945,6 +952,26 @@ pub fn extract(vpx: &VPX) -> Scene {
     // Usually, and not always — which is the whole of the check below.
     let head = crate::backbox::Backbox::for_playfield(playfield);
     let build_head = !brings_its_own_head(&meshes, playfield, &head);
+    let mut images = images(vpx);
+    // The table's own switch, the same one the original reads before it
+    // looks the picture up at all.
+    let backdrop_image = if g.render_decals {
+        g.backglass_image_full_desktop.clone()
+    } else {
+        String::new()
+    };
+    // The glass the head wears, if the table has one, and the head shaped
+    // to it. See [`crate::backglass::find`].
+    let glass = build_head
+        .then(|| crate::backglass::find(vpx, &images, &backdrop_image))
+        .flatten();
+    let head = match &glass {
+        Some(art) => head.with_aspect(art.width as f32 / art.height.max(1) as f32),
+        None => head,
+    };
+    // Where the score goes on the head: the glass's own windows, one per
+    // player, or the panel the port builds when the glass has none.
+    let mut head_windows: Vec<crate::backbox::HeadWindow> = Vec::new();
     if build_head {
         // The table brought no head, so anything of its own standing up at
         // head height is the room it is standing in rather than the machine.
@@ -977,48 +1004,87 @@ pub fn extract(vpx: &VPX) -> Scene {
         const BACKBOX_LAMP_HEIGHT: f32 = 100.0;
         flashers.retain(|f| !(f.center.y <= far_end && f.state.height >= BACKBOX_LAMP_HEIGHT));
         meshes.push(head.mesh());
-        meshes.push(head.display_mesh());
+        let windows = glass.as_ref().map_or(&[][..], |a| a.windows.as_slice());
+        if windows.iter().any(Option::is_some) {
+            for (i, rect) in windows.iter().enumerate() {
+                let Some(rect) = rect else { continue };
+                let image = crate::backbox::score_window_image(i);
+                meshes.push(head.window_mesh(*rect, &image));
+                // Drawn at the window's shape on the face, a fixed height
+                // tall: the raster is what the player paints the digits into.
+                let aspect = (rect[2] * head.width) / (rect[3] * head.height).max(1e-3);
+                let size = (((96.0 * aspect).round() as u32).clamp(128, 1024), 96);
+                head_windows.push(crate::backbox::HeadWindow {
+                    image,
+                    rect: *rect,
+                    size,
+                });
+            }
+        } else {
+            meshes.push(head.display_mesh());
+        }
     }
 
-    // And the surface its face is textured with. Empty to start, because what
-    // goes on it is what the machine is saying and the machine has not been
-    // switched on yet; the renderer redraws it as the segments change.
-    let mut images = images(vpx);
+    // The artwork the head wears. The table's own glass when it carries one
+    // — see [`crate::backglass::find`] — and otherwise painted from the
+    // table's own colours: a `.vpx` usually has no backglass in it, and the
+    // alternative is the blank white panel this port used to stand behind
+    // every machine. See [`crate::backglass`].
+    if build_head {
+        match glass {
+            Some(art) => images.push(Image {
+                name: crate::backglass::BACKGLASS_IMAGE.into(),
+                encoded: None,
+                rgba: Some(art.rgba),
+                width: art.width,
+                height: art.height,
+                alpha_test: -1.0,
+                has_alpha: false,
+                redrawn: false,
+            }),
+            None => {
+                let palette = palette_of(&images, &g.image);
+                images.push(Image {
+                    name: crate::backglass::BACKGLASS_IMAGE.into(),
+                    encoded: None,
+                    rgba: Some(crate::backglass::paint(&palette)),
+                    width: crate::backglass::BACKGLASS_PIXELS.0,
+                    height: crate::backglass::BACKGLASS_PIXELS.1,
+                    // Opaque artwork on an opaque sheet: nothing to test,
+                    // nothing to see through.
+                    alpha_test: -1.0,
+                    has_alpha: false,
+                    redrawn: false,
+                });
+            }
+        }
+    }
 
-    // The artwork the head wears, painted rather than loaded: a `.vpx` has no
-    // backglass in it, so the alternative is the blank white panel this port
-    // used to stand behind every machine. See [`crate::backglass`] for what is
-    // painted, and why it is painted from the table's own colours.
-    let palette = palette_of(&images, &g.image);
-    images.push(Image {
-        name: crate::backglass::BACKGLASS_IMAGE.into(),
+    // And the surfaces the score is drawn on. Empty to start, because what
+    // goes on them is what the machine is saying and the machine has not been
+    // switched on yet; the renderer redraws them as the segments change. The
+    // score is drawn on, not cut out of, so they carry alpha.
+    let score_surface = |name: String, (width, height): (u32, u32)| Image {
+        name,
         encoded: None,
-        rgba: Some(crate::backglass::paint(&palette)),
-        width: crate::backglass::BACKGLASS_PIXELS.0,
-        height: crate::backglass::BACKGLASS_PIXELS.1,
-        // Opaque artwork on an opaque sheet: nothing to test, nothing to see
-        // through.
-        alpha_test: -1.0,
-        has_alpha: false,
-        redrawn: false,
-    });
-
-    images.push(Image {
-        name: crate::backbox::DISPLAY_IMAGE.into(),
-        encoded: None,
-        rgba: Some(vec![
-            0;
-            (crate::backbox::DISPLAY_PIXELS.0 * crate::backbox::DISPLAY_PIXELS.1 * 4)
-                as usize
-        ]),
-        width: crate::backbox::DISPLAY_PIXELS.0,
-        height: crate::backbox::DISPLAY_PIXELS.1,
-        // The score is drawn on it, not cut out of it.
+        rgba: Some(vec![0; (width * height * 4) as usize]),
+        width,
+        height,
         alpha_test: -1.0,
         has_alpha: true,
         redrawn: true,
-    });
+    };
+    images.push(score_surface(
+        crate::backbox::DISPLAY_IMAGE.into(),
+        crate::backbox::DISPLAY_PIXELS,
+    ));
+    for hw in &head_windows {
+        images.push(score_surface(hw.image.clone(), hw.size));
+    }
 
+    // Where the score goes on the backdrop, from the picture itself. See
+    // [`crate::backdrop`].
+    let score_windows = crate::backdrop::score_windows(vpx, &images, &backdrop_image);
     Scene {
         view: AuthoredView {
             // A file that never wrote a field leaves a zero there, and zero is
@@ -1058,12 +1124,10 @@ pub fn extract(vpx: &VPX) -> Scene {
         ball_decal: g.ball_image_front.clone(),
         // The table's own switch, the same one the original reads before it
         // looks the picture up at all.
-        backdrop_image: if g.render_decals {
-            g.backglass_image_full_desktop.clone()
-        } else {
-            String::new()
-        },
+        backdrop_image: backdrop_image.clone(),
         backdrop_color: color(&g.backdrop_color),
+        score_windows,
+        head_windows,
         lighting: lighting(vpx),
         physics: table_physics(vpx),
         lights,

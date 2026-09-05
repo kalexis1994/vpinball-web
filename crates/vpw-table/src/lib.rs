@@ -5,6 +5,7 @@
 
 pub mod animation;
 pub mod backbox;
+pub mod backdrop;
 pub mod backglass;
 pub mod ball;
 pub mod builtin;
