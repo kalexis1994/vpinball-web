@@ -24,13 +24,12 @@ pub fn build(wall: &vpin::vpx::gameitem::wall::Wall, playfield: Bounds) -> Vec<M
         return Vec::new();
     }
 
-    let mut meshes = Vec::new();
-    if wall.is_side_visible {
-        meshes.push(side(wall, &points));
-    }
-    if wall.is_top_bottom_visible
-        && let Some(m) = top(wall, &points, playfield)
-    {
+    // Both halves are built whatever the file says, and each carries its
+    // own flag: a wall has two, `Visible` for the top and `SideVisible` for
+    // the side (`surface.cpp:1594`, `:1638`), and the script may set either
+    // at `Init`, after which the original decides what to draw.
+    let mut meshes = vec![side(wall, &points)];
+    if let Some(m) = top(wall, &points, playfield) {
         meshes.push(m);
     }
     meshes
@@ -99,7 +98,7 @@ fn side(wall: &vpin::vpx::gameitem::wall::Wall, points: &[Point]) -> Mesh {
         transform: Mat4::IDENTITY,
         image: wall.side_image.clone(),
         material: wall.side_material.clone(),
-        visible: true,
+        visible: wall.is_side_visible,
         clamp: false,
         scenery: false,
         kind: MeshKind::Wall,
@@ -160,7 +159,7 @@ fn top(
         transform: Mat4::IDENTITY,
         image: wall.image.clone(),
         material: wall.top_material.clone(),
-        visible: true,
+        visible: wall.is_top_bottom_visible,
         clamp: false,
         scenery: false,
         kind: MeshKind::Wall,

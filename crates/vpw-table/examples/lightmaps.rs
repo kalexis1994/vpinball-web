@@ -127,6 +127,53 @@ fn main() {
         for i in &scene.images {
             println!("  {:<32} {}x{}", i.name, i.width, i.height);
         }
+        // A visible primitive whose mesh will not read is dropped without a
+        // word. Name every one.
+        // The collections a script shows and hides wholesale, and what each
+        // member is: a file-hidden *static* primitive is one no pass of ours
+        // can ever bring back.
+        println!("collections and their members:");
+        for c in &vpx.collections {
+            let wanted = c.name.to_lowercase();
+            if !(wanted.contains("dt") || wanted.contains("rail") || wanted.contains("vrstuff") || wanted.contains("blade")) {
+                continue;
+            }
+            println!("  {} ({} items):", c.name, c.items.len());
+            for item in &c.items {
+                let found = vpx.gameitems.iter().find_map(|g| match g {
+                    vpin::vpx::gameitem::GameItemEnum::Primitive(p) if &p.name == item => Some(format!(
+                        "primitive visible={} static={} tris={}",
+                        p.is_visible,
+                        p.static_rendering,
+                        p.read_mesh().ok().flatten().map_or(0, |m| m.indices.len())
+                    )),
+                    vpin::vpx::gameitem::GameItemEnum::Wall(w) if &w.name == item => Some(format!("wall visible={}", w.is_top_bottom_visible)),
+                    vpin::vpx::gameitem::GameItemEnum::Ramp(r) if &r.name == item => Some(format!("ramp visible={}", r.is_visible)),
+                    vpin::vpx::gameitem::GameItemEnum::Light(l) if &l.name == item => Some("light".to_string()),
+                    vpin::vpx::gameitem::GameItemEnum::Flasher(f) if &f.name == item => Some(format!("flasher visible={}", f.is_visible)),
+                    _ => None,
+                });
+                println!("     {:<28} {}", item, found.unwrap_or_else(|| "(not a part we know)".into()));
+            }
+        }
+        println!("visible primitives that produced no mesh:");
+        let mut dropped = 0;
+        for it in &vpx.gameitems {
+            if let vpin::vpx::gameitem::GameItemEnum::Primitive(p) = it
+                && p.is_visible
+                && !scene.meshes.iter().any(|m| m.name == p.name)
+            {
+                dropped += 1;
+                println!(
+                    "  {:<30} mesh read: {:?}  image={:?} material={:?}",
+                    p.name,
+                    p.read_mesh().map(|m| m.map(|m| m.vertices.len())),
+                    p.image,
+                    p.material
+                );
+            }
+        }
+        println!("  ({dropped} in all)");
         println!("every ramp and wall, and whether it is drawn:");
         for it in &vpx.gameitems {
             match it {

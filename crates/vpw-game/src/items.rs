@@ -108,6 +108,11 @@ pub const DROP_DEPTH: f32 = 52.0;
 #[derive(Debug)]
 struct Visual {
     visible: Cell<bool>,
+    /// A wall's other flag. `Visible` is its top (`surface.cpp:1594`) and
+    /// `SideVisible` its side (`:1638`); a script that shows a wall from
+    /// `Init` sets whichever half it means, and the port has to tell them
+    /// apart to put the right mesh on the table.
+    side_visible: Cell<bool>,
     /// A light's `State`: 0 off, 1 on, 2 blinking.
     state: Cell<i32>,
     intensity_scale: Cell<f64>,
@@ -255,6 +260,7 @@ impl Default for Visual {
         Self {
             flasher: FlasherProps::default(),
             visible: Cell::new(true),
+            side_visible: Cell::new(true),
             state: Cell::new(0),
             intensity_scale: Cell::new(1.0),
             image: RefCell::new(Rc::from("")),
@@ -370,6 +376,11 @@ impl Item {
     /// Whether the script changed anything the renderer has to notice.
     pub fn visible(&self) -> bool {
         self.visual.visible.get()
+    }
+
+    /// A wall's `SideVisible`. True for everything else, which has no side.
+    pub fn side_visible(&self) -> bool {
+        self.visual.side_visible.get()
     }
 
     /// The part's nine placement numbers as they stand, which is how a script
@@ -635,6 +646,7 @@ impl Item {
         Ok(Some(match name {
             "name" => Value::Str(self.name.clone()),
             "visible" => Value::Bool(v.visible.get()),
+            "sidevisible" => Value::Bool(v.side_visible.get()),
             "image" => Value::Str(v.image.borrow().clone()),
             "text" => Value::Str(v.text.borrow().clone()),
             "state" => Value::Long(v.state.get()),
@@ -671,6 +683,7 @@ impl Item {
         let v = &self.visual;
         match name {
             "visible" => v.visible.set(value.to_bool()?),
+            "sidevisible" => v.side_visible.set(value.to_bool()?),
             "image" => *v.image.borrow_mut() = value.to_str()?,
             "text" => *v.text.borrow_mut() = value.to_str()?,
             "state" => v.state.set(value.to_int()?),
@@ -1514,6 +1527,9 @@ impl Items {
 
             let visual = Visual::default();
             visual.visible.set(item_visible(item));
+            if let vpin::vpx::gameitem::GameItemEnum::Wall(w) = item {
+                visual.side_visible.set(w.is_side_visible);
+            }
             visual.rot_and_tra.set(item_placement(item));
             if let vpin::vpx::gameitem::GameItemEnum::Light(l) = item {
                 // A light that the file says starts on.

@@ -22,6 +22,11 @@ use vpw_game::{Game, NoLibraries, Resources, ScriptLibrary};
 /// the file — four corners is a mesh — where a primitive without stored
 /// vertices is not drawn at all and would prove nothing.
 fn table(script: &str) -> (vpw_table::geometry::Scene, Game) {
+    table_with(true, script)
+}
+
+/// The same table, with the wall shown or hidden in the file.
+fn table_with(visible: bool, script: &str) -> (vpw_table::geometry::Scene, Game) {
     let corner = |x: f32, y: f32| DragPoint {
         x,
         y,
@@ -30,8 +35,8 @@ fn table(script: &str) -> (vpw_table::geometry::Scene, Game) {
     let mut vpx = vpin::vpx::VPX::default();
     vpx.gameitems.push(GameItemEnum::Wall(Wall {
         name: "Wallsprim".into(),
-        is_top_bottom_visible: true,
-        is_side_visible: true,
+        is_top_bottom_visible: visible,
+        is_side_visible: visible,
         drag_points: vec![
             corner(100.0, 100.0),
             corner(400.0, 100.0),
@@ -82,10 +87,55 @@ fn a_part_the_script_hides_at_load_is_not_drawn() {
          \tWallsprim.visible = false\n\
          End If\n",
     );
+    // `Visible` is the top of a wall (`surface.cpp:1594`); the side has its
+    // own flag and the file's one still stands.
     assert!(
-        !drawn(&scene, "Wallsprim"),
+        !drawn(&scene, "Wallsprim (top)"),
         "the script switched it off before the scene was uploaded"
     );
+    assert!(drawn(&scene, "Wallsprim (side)"), "the side was never hidden");
+}
+
+/// The other direction: a part the file hides and the script shows.
+///
+/// Circus keeps its desktop rails as two ramps the file hides, and its `Init`
+/// turns them on for a desktop — which is the original's order too: the
+/// static picture is taken after `Init` has run (`player.cpp:739`) from each
+/// part's live flag (`ramp.cpp:862`). Without this the whole bottom of the
+/// table was missing.
+#[test]
+fn a_part_the_script_shows_at_init_is_drawn() {
+    let (mut scene, mut game) = table_with(
+        false,
+        "Sub Table1_Init\n\
+         \tWallsprim.visible = true\n\
+         \tWallsprim.sidevisible = true\n\
+         End Sub\n",
+    );
+    assert!(!drawn(&scene, "Wallsprim"), "the file hides it");
+    game.start().expect("Init should run");
+    game.apply_visibility_changes(&mut scene);
+    assert!(drawn(&scene, "Wallsprim"), "Init showed it");
+}
+
+/// A wall has two flags, and showing the top must not show the side.
+#[test]
+fn a_walls_side_has_its_own_flag() {
+    let (mut scene, mut game) = table_with(
+        false,
+        "Sub Table1_Init\n\
+         \tWallsprim.visible = true\n\
+         End Sub\n",
+    );
+    game.start().expect("Init should run");
+    game.apply_visibility_changes(&mut scene);
+    let shown: Vec<&str> = scene
+        .meshes
+        .iter()
+        .filter(|m| m.visible && m.name.starts_with("Wallsprim"))
+        .map(|m| m.name.as_str())
+        .collect();
+    assert_eq!(shown, ["Wallsprim (top)"]);
 }
 
 #[test]

@@ -92,9 +92,11 @@ fn edge_width(ramp: &Ramp) -> f32 {
 }
 
 pub fn build(ramp: &Ramp, playfield: Bounds) -> Vec<Mesh> {
-    if !ramp.is_visible {
-        return Vec::new();
-    }
+    // A ramp the file hides is still built, marked hidden. The file is what
+    // the script edits, and the original decides what to draw from the live
+    // flag after the script's `Init` has run (`player.cpp:739`,
+    // `ramp.cpp:862`) — Circus keeps its desktop rails as two hidden ramps
+    // and shows them from `Init`.
     let Some(c) = path(ramp, dragpoint::ACCURACY) else {
         return Vec::new();
     };
@@ -321,7 +323,7 @@ fn strip(
         transform: Mat4::IDENTITY,
         image: ramp.image.clone(),
         material: ramp.material.clone(),
-        visible: true,
+        visible: ramp.is_visible,
         // The original picks the sampler from the ramp's own image alignment
         // (`ramp.cpp:895`): an image wrapped *along* the ramp is clamped, and
         // one tiled by world coordinates repeats. Getting it wrong is not
@@ -384,7 +386,7 @@ fn wires(ramp: &Ramp, c: &Outline) -> Vec<Mesh> {
                 transform: Mat4::IDENTITY,
                 image: ramp.image.clone(),
                 material: ramp.material.clone(),
-                visible: true,
+                visible: ramp.is_visible,
                 clamp: false,
                 scenery: false,
                 kind: MeshKind::Ramp,

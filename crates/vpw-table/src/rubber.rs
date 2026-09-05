@@ -28,9 +28,8 @@ use vpw_math::{Mat4, Quat, Vec3};
 const SEGMENTS: usize = 13;
 
 pub fn build(rubber: &vpin::vpx::gameitem::rubber::Rubber) -> Option<Mesh> {
-    if !rubber.is_visible {
-        return None;
-    }
+    // Built even when the file hides it, and marked so: the script may show
+    // it at `Init`, and the original reads the flag after that has run.
     mesh(rubber)
 }
 
@@ -71,7 +70,7 @@ pub fn mesh(rubber: &vpin::vpx::gameitem::rubber::Rubber) -> Option<Mesh> {
         transform: transform(rubber, &curve, radius, height),
         image: rubber.image.clone(),
         material: rubber.material.clone(),
-        visible: true,
+        visible: rubber.is_visible,
         clamp: false,
         scenery: false,
         kind: MeshKind::Rubber,

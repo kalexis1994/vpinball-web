@@ -518,12 +518,11 @@ impl Game {
         };
         game.load_script(&vpx.gamedata.code.string)?;
         game.arm_hit_reporting();
-        game.hide_what_the_script_hid(scene);
+        game.apply_visibility_changes(scene);
         Ok(game)
     }
 
-    /// Takes out of the static scene whatever the script switched off while it
-    /// ran.
+    /// Puts what the script has done to `Visible` into the static scene.
     ///
     /// A table's first lines are very often a fork on `Table.ShowDT` — one set
     /// of parts for a desktop and another for a cabinet — and the set that
@@ -532,31 +531,44 @@ impl Game {
     /// playfield as a black slab: the file stores them visible, because the
     /// file is what the script edits.
     ///
-    /// The moving parts were already covered. Their visibility is asked for
-    /// every frame ([`Self::part_visible`]) because the script changes it
-    /// *while playing* — hiding the built-in flipper bat under a primitive one
-    /// is the usual reason. This is the other half: the parts that never move,
-    /// whose meshes are baked into one buffer when the scene is uploaded, and
-    /// for which the decision taken here is the only decision there is.
+    /// It goes the other way too. Circus stores its desktop rails as two
+    /// ramps the file *hides*, and its `Init` shows them — so the whole
+    /// bottom of the table was missing. That is why the builders keep a
+    /// hidden part's mesh rather than dropping it: the file's flag is where
+    /// the part starts, not where it ends up. And it is why this runs twice,
+    /// which is the original's order: once as the script loads, and again
+    /// after `Init` (`player.cpp:739`), which is when the original takes its
+    /// static picture and reads each part's live flag (`ramp.cpp:862`).
     ///
-    /// One-way, and that is the limitation: a table that hides a static part
-    /// at load and shows it again mid-game keeps it hidden. Doing better means
-    /// moving that part onto the dynamic path, which costs it a draw call —
-    /// worth paying for the dozen parts that move, not for the three thousand
-    /// that do not.
-    fn hide_what_the_script_hid(&self, scene: &mut Scene) {
-        let mut hidden = 0;
+    /// The moving parts are asked every frame ([`Self::part_visible`])
+    /// because the script changes them *while playing* — hiding the built-in
+    /// flipper bat under a primitive one is the usual reason. These are the
+    /// parts that never move, whose meshes are baked into one buffer when the
+    /// scene is uploaded. A table that hides one of those mid-game keeps it;
+    /// the original rebuilds its static picture then, and this port does not
+    /// yet.
+    pub fn apply_visibility_changes(&self, scene: &mut Scene) {
+        let mut changed = 0;
         for mesh in &mut scene.meshes {
-            if mesh.visible
-                && let Some(item) = self.state.items.get(owner_of(&mesh.name))
-                && !item.visible()
-            {
-                mesh.visible = false;
-                hidden += 1;
+            let Some(item) = self.state.items.get(owner_of(&mesh.name)) else {
+                continue;
+            };
+            // A wall's side follows its own flag. Everything else — a wall's
+            // top included — follows `Visible`.
+            let shown = if mesh.name.ends_with(" (side)") {
+                item.side_visible()
+            } else {
+                item.visible()
+            };
+            if mesh.visible != shown {
+                mesh.visible = shown;
+                changed += 1;
             }
         }
-        if hidden > 0 {
-            log::debug!("the script hid {hidden} static meshes before the table was drawn");
+        if changed > 0 {
+            log::debug!(
+                "the script changed what {changed} static meshes show before the table was drawn"
+            );
         }
     }
 
