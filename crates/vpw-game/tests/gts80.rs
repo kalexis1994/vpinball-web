@@ -122,6 +122,60 @@ fn a_coin_and_the_start_button_begin_a_game() {
     );
 }
 
+/// A System 80's flippers never go through the CPU: the cabinet buttons
+/// drive the coils through the game-on relay. PinMAME invents solenoids 45
+/// to 48 for them (`core.c:1747`) and a table written against `sys80.vbs`
+/// moves and sounds its flippers from those alone — Spider-Man's flippers
+/// were silent because this port did not.
+#[test]
+fn the_flipper_buttons_raise_the_invented_flipper_solenoids() {
+    let Some(machine) = booted() else { return };
+    // Buttons with the game off: nothing, the relay is out.
+    machine.set_switch(114, true);
+    run(&machine, 0.2);
+    let _ = machine.changed_solenoids();
+    assert!(!machine.solenoid_fired(48), "no game on, no flipper");
+    machine.set_switch(114, false);
+
+    // Start a game the same way as above.
+    machine.set_switch(SW_OUTHOLE, true);
+    run(&machine, 0.5);
+    for _ in 0..3 {
+        machine.set_switch(SW_COIN3, true);
+        run(&machine, 0.2);
+        machine.set_switch(SW_COIN3, false);
+        run(&machine, 0.4);
+    }
+    machine.set_switch(SW_START, true);
+    run(&machine, 0.3);
+    machine.set_switch(SW_START, false);
+    // The moment the relay comes in. With the outhole switch held closed the
+    // machine drains ball after ball and the game does not last, so the
+    // flipper is tried as soon as the relay is seen rather than later.
+    let mut on = false;
+    for _ in 0..100 {
+        run(&machine, 0.1);
+        if machine.solenoid_fired(GAME_ON) {
+            on = true;
+            break;
+        }
+    }
+    assert!(on, "the game-on relay should be in");
+    let _ = machine.changed_solenoids();
+
+    // The left button: solenoids 47 and 48 come up, as a change the script
+    // is told about, and go down with the button.
+    machine.set_switch(114, true);
+    run(&machine, 0.02);
+    let changed = machine.changed_solenoids();
+    assert!(changed.contains(&(47, true)) && changed.contains(&(48, true)), "{changed:?}");
+    assert!(!changed.iter().any(|(n, _)| *n == 45 || *n == 46), "not the right one");
+    machine.set_switch(114, false);
+    run(&machine, 0.02);
+    let changed = machine.changed_solenoids();
+    assert!(changed.contains(&(48, false)), "{changed:?}");
+}
+
 /// The sound card is a second processor on a card of its own, and its audio
 /// has to arrive here at the rate the mixer runs at.
 #[test]

@@ -37,6 +37,13 @@ pub const LAMP_COLUMNS: usize = 12;
 /// Where the slam switch sits in the matrix: `swSlamTilt = -1`.
 const SLAM: u8 = 0x80;
 
+/// The flipper buttons, by the numbers `sys80.vbs` gives them (`swLRFlip =
+/// 112`, `swLLFlip = 114`): PinMAME's column of cabinet buttons, which the
+/// script closes on the flipper keys and the ROM never reads. See
+/// [`Io::solenoid_on`].
+pub const RIGHT_FLIPPER_BUTTON: i32 = 112;
+pub const LEFT_FLIPPER_BUTTON: i32 = 114;
+
 /// The state of everything the board drives and everything it reads.
 ///
 /// Kept apart from the board so a host can look at it, change a switch and put
@@ -260,13 +267,53 @@ impl Io {
     /// Whether a coil was driven during the last sweep, numbered from 1.
     ///
     /// Nine coils and the two relays above them, which a table reads as
-    /// solenoids 10 and 11.
+    /// solenoids 10 and 11. And the four flipper solenoids, 45 to 48, which
+    /// no System 80 has: its flippers are wired straight from the cabinet
+    /// buttons through the game-on relay and the CPU never sees them. PinMAME
+    /// invents them for exactly such games (`core.c:1747`): the right button
+    /// raises 45 and 46, the left one 47 and 48, while the relay is up — and a
+    /// table written against `sys80.vbs` moves and sounds its flippers from
+    /// nothing else. Spider-Man's `SolCallback(sLLFlipper)` is the only place
+    /// its flippers make a sound.
+    ///
+    /// The buttons are the switches the script closes on the flipper keys,
+    /// [`LEFT_FLIPPER_BUTTON`] and [`RIGHT_FLIPPER_BUTTON`], read live: a
+    /// button is a level, not a pulse.
     pub fn solenoid_on(&self, number: u8) -> bool {
-        (1..=11).contains(&number) && self.reported & (1 << (number - 1)) != 0
+        match number {
+            1..=11 => self.reported & (1 << (number - 1)) != 0,
+            45 | 46 => self.game_on() && self.switch_closed(RIGHT_FLIPPER_BUTTON),
+            47 | 48 => self.game_on() && self.switch_closed(LEFT_FLIPPER_BUTTON),
+            _ => false,
+        }
     }
 
     /// Every coil the last sweep saw, as a bit set.
     pub fn solenoids(&self) -> u16 {
         self.reported
+    }
+}
+
+#[cfg(test)]
+mod flipper_tests {
+    use super::*;
+
+    /// The flipper solenoids follow the buttons, but only with the game on.
+    #[test]
+    fn the_flipper_solenoids_are_the_buttons_through_the_relay() {
+        let mut io = Io::default();
+        io.set_switch(LEFT_FLIPPER_BUTTON, true);
+        assert!(!io.solenoid_on(47), "no game on, no power to the flippers");
+        // The game-on relay is bit 0 of lamp latch 0.
+        io.lamps[0] |= 0x01;
+        assert!(io.solenoid_on(47) && io.solenoid_on(48), "left button, left pair");
+        assert!(!io.solenoid_on(45) && !io.solenoid_on(46), "and not the right");
+        io.set_switch(LEFT_FLIPPER_BUTTON, false);
+        io.set_switch(RIGHT_FLIPPER_BUTTON, true);
+        assert!(io.solenoid_on(45) && io.solenoid_on(46));
+        assert!(!io.solenoid_on(48));
+        // The tilt relay takes the flippers with it.
+        io.lamps[0] |= 0x02;
+        assert!(!io.solenoid_on(45), "tilted");
     }
 }
